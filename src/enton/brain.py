@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections import deque
 from typing import TYPE_CHECKING
 
@@ -43,10 +44,16 @@ class Brain:
             return name, provider
         raise RuntimeError("No LLM provider available")
 
+    @staticmethod
+    def _clean_response(text: str) -> str:
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+        return text.strip()
+
     async def think(self, prompt: str, *, system: str = "") -> str:
         name, provider = self._get_provider()
         try:
-            response = await provider.generate(prompt, system=system, history=list(self._history))
+            raw = await provider.generate(prompt, system=system, history=list(self._history))
+            response = self._clean_response(raw)
             self._history.append({"role": "user", "content": prompt})
             self._history.append({"role": "assistant", "content": response})
             logger.info("Brain [%s]: %s", name, response[:80])

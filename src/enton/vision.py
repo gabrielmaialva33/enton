@@ -39,7 +39,10 @@ class Vision:
 
     def _ensure_camera(self) -> cv2.VideoCapture:
         if self._cap is None or not self._cap.isOpened():
-            self._cap = cv2.VideoCapture(self._settings.rtsp_url, cv2.CAP_FFMPEG)
+            url = self._settings.rtsp_url
+            self._cap = cv2.VideoCapture(
+                url, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000]
+            )
             self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             if self._cap.isOpened():
                 logger.info("Camera connected: %s", self._settings.rtsp_url)
@@ -66,7 +69,6 @@ class Vision:
         return buf.tobytes()
 
     async def run(self) -> None:
-        model = self._ensure_model()
         loop = asyncio.get_running_loop()
         frame_count = 0
         t_start = time.monotonic()
@@ -75,8 +77,17 @@ class Vision:
             cap = self._ensure_camera()
             if not cap.isOpened():
                 self._bus.emit_nowait(SystemEvent(kind="camera_lost"))
-                await asyncio.sleep(5.0)
+                await asyncio.sleep(10.0)
                 self._cap = None
+                continue
+
+            self._bus.emit_nowait(SystemEvent(kind="camera_connected"))
+
+            try:
+                model = self._ensure_model()
+            except Exception:
+                logger.exception("YOLO model load failed, retrying in 30s")
+                await asyncio.sleep(30.0)
                 continue
 
             ret, frame = await loop.run_in_executor(None, cap.read)
@@ -90,10 +101,11 @@ class Vision:
             frame_count += 1
 
             conf = self._settings.yolo_confidence
-            results = await loop.run_in_executor(
-                None,
-                lambda f=frame, c=conf: model.predict(f, conf=c, verbose=False),
-            )
+
+            def _predict(f=frame, c=conf, m=model):
+                return m.predict(f, conf=c, verbose=False)
+
+            results = await loop.run_in_executor(None, _predict)
 
             detections = []
             for r in results:

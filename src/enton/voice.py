@@ -89,19 +89,16 @@ class Voice:
             else:
                 raise
 
-    async def _play(self, audio: np.ndarray) -> None:
+    async def _play(self, audio: np.ndarray, sample_rate: int = 24000) -> None:
         if audio.size == 0:
             return
         loop = asyncio.get_running_loop()
-        sample_rate = self._settings.sample_rate
         if audio.dtype != np.float32:
             audio = audio.astype(np.float32)
 
-        # Kokoro outputs at 24000 Hz
-        if sample_rate != 24000 and audio.size > 0:
-            pass  # let sounddevice handle it
+        rate = sample_rate
 
         def _play_sync():
-            sd.play(audio, samplerate=24000, blocking=True)
+            sd.play(audio, samplerate=rate, blocking=True)
 
         await loop.run_in_executor(None, _play_sync)

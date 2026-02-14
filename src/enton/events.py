@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass, field
+from time import time
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+type EventHandler = Callable[[Event], Coroutine[Any, Any, None]]
+
+
+@dataclass(frozen=True, slots=True)
+class Event:
+    timestamp: float = field(default_factory=time)
+
+
+@dataclass(frozen=True, slots=True)
+class DetectionEvent(Event):
+    label: str = ""
+    confidence: float = 0.0
+    bbox: tuple[int, int, int, int] = (0, 0, 0, 0)
+    frame_shape: tuple[int, int] = (0, 0)
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptionEvent(Event):
+    text: str = ""
+    is_final: bool = True
+    language: str = "pt-BR"
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechRequest(Event):
+    text: str = ""
+    priority: int = 0  # higher = more important
+
+
+@dataclass(frozen=True, slots=True)
+class BrainResponse(Event):
+    text: str = ""
+    source: str = ""  # provider that generated it
+
+
+@dataclass(frozen=True, slots=True)
+class SystemEvent(Event):
+    kind: str = ""  # startup, shutdown, error, camera_lost, etc.
+    detail: str = ""
+
+
+class EventBus:
+    def __init__(self) -> None:
+        self._handlers: dict[type[Event], list[EventHandler]] = {}
+        self._queue: asyncio.Queue[Event] = asyncio.Queue()
+
+    def on(self, event_type: type[Event], handler: EventHandler) -> None:
+        self._handlers.setdefault(event_type, []).append(handler)
+
+    async def emit(self, event: Event) -> None:
+        await self._queue.put(event)
+
+    def emit_nowait(self, event: Event) -> None:
+        self._queue.put_nowait(event)
+
+    async def run(self) -> None:
+        while True:
+            event = await self._queue.get()
+            handlers = self._handlers.get(type(event), [])
+            for handler in handlers:
+                try:
+                    await handler(event)
+                except Exception:
+                    logger.exception("Handler error for %s", type(event).__name__)

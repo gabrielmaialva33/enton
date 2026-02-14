@@ -21,7 +21,16 @@ class Ears:
         self._bus = bus
         self._providers: dict[Provider, STTProvider] = {}
         self._primary = settings.stt_provider
+        self._muted = False
         self._init_providers(settings)
+
+    @property
+    def muted(self) -> bool:
+        return self._muted
+
+    @muted.setter
+    def muted(self, value: bool) -> None:
+        self._muted = value
 
     def _init_providers(self, s: Settings) -> None:
         if s.nvidia_api_key:
@@ -94,8 +103,8 @@ class Ears:
             audio = await loop.run_in_executor(None, _record)
             audio = audio.squeeze()
 
-            # Skip silence
-            if np.abs(audio).max() < 0.01:
+            # Skip silence or when muted (echo cancellation)
+            if np.abs(audio).max() < 0.01 or self._muted:
                 continue
 
             await self.transcribe(audio)

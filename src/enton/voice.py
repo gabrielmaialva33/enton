@@ -17,12 +17,13 @@ logger = logging.getLogger(__name__)
 
 
 class Voice:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, ears=None) -> None:
         self._settings = settings
         self._providers: dict[Provider, TTSProvider] = {}
         self._primary = settings.tts_provider
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._speaking = False
+        self._ears = ears
         self._init_providers(settings)
 
     def _init_providers(self, s: Settings) -> None:
@@ -68,12 +69,16 @@ class Voice:
             if not text.strip():
                 continue
             self._speaking = True
+            if self._ears:
+                self._ears.muted = True
             try:
                 await self._speak(text)
             except Exception:
                 logger.exception("TTS failed")
             finally:
                 self._speaking = False
+                if self._ears:
+                    self._ears.muted = False
 
     async def _speak(self, text: str) -> None:
         name, provider = self._get_provider()

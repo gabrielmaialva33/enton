@@ -15,7 +15,8 @@ class Provider(StrEnum):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # Camera
+    # Camera — use "0" for /dev/video0, or full RTSP URL
+    camera_source: str = "0"
     camera_ip: str = "192.168.1.23"
     camera_rtsp_port: int = 554
     camera_rtsp_path: str = "/onvif1"
@@ -64,7 +65,11 @@ class Settings(BaseSettings):
     memory_size: int = 20
 
     @property
-    def rtsp_url(self) -> str:
+    def camera_url(self) -> str | int:
+        if self.camera_source.isdigit():
+            return int(self.camera_source)
+        if self.camera_source.startswith("rtsp://"):
+            return self.camera_source
         return f"rtsp://{self.camera_ip}:{self.camera_rtsp_port}{self.camera_rtsp_path}"
 
     @property

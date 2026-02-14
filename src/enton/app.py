@@ -26,7 +26,7 @@ class App:
         self.vision = Vision(settings, self.bus)
         self.ears = Ears(settings, self.bus)
         self.brain = Brain(settings)
-        self.voice = Voice(settings)
+        self.voice = Voice(settings, ears=self.ears)
         self._last_reaction: float = 0
         self._person_present: bool = False
         self._register_handlers()

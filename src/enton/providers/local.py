@@ -74,8 +74,8 @@ class LocalSTT:
 
             self._model = WhisperModel(
                 self._model_name,
-                device="cuda",
-                compute_type="float16",
+                device="cpu",
+                compute_type="int8",
             )
         return self._model
 
@@ -105,9 +105,12 @@ class LocalTTS:
 
     def _ensure_pipeline(self):
         if self._pipeline is None:
+            import torch
             from kokoro import KPipeline
 
             self._pipeline = KPipeline(lang_code=self._lang)
+            if hasattr(self._pipeline, "model") and self._pipeline.model is not None:
+                self._pipeline.model = self._pipeline.model.to(torch.device("cpu"))
         return self._pipeline
 
     async def synthesize(self, text: str) -> np.ndarray:

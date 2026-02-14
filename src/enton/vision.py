@@ -39,15 +39,18 @@ class Vision:
 
     def _ensure_camera(self) -> cv2.VideoCapture:
         if self._cap is None or not self._cap.isOpened():
-            url = self._settings.rtsp_url
-            self._cap = cv2.VideoCapture(
-                url, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000]
-            )
+            source = self._settings.camera_url
+            if isinstance(source, int):
+                self._cap = cv2.VideoCapture(source)
+            else:
+                self._cap = cv2.VideoCapture(
+                    source, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000]
+                )
             self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             if self._cap.isOpened():
-                logger.info("Camera connected: %s", self._settings.rtsp_url)
+                logger.info("Camera connected: %s", source)
             else:
-                logger.error("Camera failed: %s", self._settings.rtsp_url)
+                logger.error("Camera failed: %s", source)
         return self._cap
 
     @property
@@ -72,16 +75,21 @@ class Vision:
         loop = asyncio.get_running_loop()
         frame_count = 0
         t_start = time.monotonic()
+        was_connected = False
 
         while True:
             cap = self._ensure_camera()
             if not cap.isOpened():
-                self._bus.emit_nowait(SystemEvent(kind="camera_lost"))
+                if was_connected:
+                    self._bus.emit_nowait(SystemEvent(kind="camera_lost"))
+                    was_connected = False
                 await asyncio.sleep(10.0)
                 self._cap = None
                 continue
 
-            self._bus.emit_nowait(SystemEvent(kind="camera_connected"))
+            if not was_connected:
+                self._bus.emit_nowait(SystemEvent(kind="camera_connected"))
+                was_connected = True
 
             try:
                 model = self._ensure_model()

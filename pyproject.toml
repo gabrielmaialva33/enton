@@ -22,6 +22,22 @@ dependencies = [
     "ollama>=0.4",
     "kokoro>=0.9",
     "faster-whisper>=1.1",
+    "silero-vad>=5.1",
+    "insightface>=0.7",
+    "onnxruntime-gpu>=1.19",
+    "duckduckgo-search>=7.0",
+    "psutil>=6.0",
+    "mcp>=1.0",
+    "mem0ai>=0.1",
+    "qdrant-client>=1.12",
+    "redis>=5.0",
+    "aio-pika>=9.4",
+    "asyncpg>=0.30",
+    "transformers>=4.47",
+    "accelerate>=1.2",
+    "torch>=2.5",
+    "qwen-vl-utils>=0.0.8",
+    "openai>=1.50",
 ]
 
 [dependency-groups]

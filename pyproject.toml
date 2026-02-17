@@ -44,6 +44,9 @@ dependencies = [
     "redis>=5.0",
     "aio-pika>=9.4",
     "asyncpg>=0.30",
+    # Channels (v0.9.0)
+    "aiogram>=3.15",  # Telegram
+    "py-cord>=2.6",   # Discord
     # API & dashboard
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
@@ -76,7 +79,7 @@ line-length = 100
 select = [
     "E", "F", "I", "N", "UP", "B", "SIM", "TCH", "PL", "RUF", "A", "C4", "ISC", "LOG"
 ]
-ignore = ["PLR0913", "PLR2004", "RUF012"]  # Ignore too many args, magic numbers, mutable class defaults (for now)
+ignore = ["PLR0913", "PLR2004", "RUF012", "PLC0415", "RUF006", "TC002", "PLW1510"]  # too many args, magic numbers, mutable class defaults, conditional imports, fire-and-forget tasks, conditional 3rd-party imports, subprocess check
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

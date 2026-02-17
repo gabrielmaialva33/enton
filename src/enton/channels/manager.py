@@ -12,7 +12,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from enton.channels.base import BaseChannel, ChannelMessage
-from enton.core.events import ChannelMessageEvent, Event
+from enton.core.events import ChannelMessageEvent
 
 if TYPE_CHECKING:
     from enton.cognition.brain import EntonBrain

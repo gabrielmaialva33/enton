@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from enton.channels.base import BaseChannel, ChannelMessage, MessageType
+from enton.channels.base import BaseChannel, ChannelMessage
 
 if TYPE_CHECKING:
     from enton.action.voice import Voice as VoiceEngine

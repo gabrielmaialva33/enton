@@ -7,11 +7,12 @@ Config: WEB_CHANNEL_PORT (default: 8765)
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from typing import TYPE_CHECKING
 
-from enton.channels.base import BaseChannel, ChannelMessage, MessageType
+from enton.channels.base import BaseChannel, ChannelMessage
 from enton.core.events import ChannelMessageEvent
 
 if TYPE_CHECKING:
@@ -36,12 +37,13 @@ class WebChannel(BaseChannel):
         self._port = port
         self._app = None
         self._server = None
-        self._connections: dict[str, object] = {}  # ws_id → websocket
+        self._task: asyncio.Task | None = None
+        self._connections: dict[str, object] = {}  # ws_id -> websocket
 
     async def start(self) -> None:
         try:
-            from fastapi import FastAPI, WebSocket, WebSocketDisconnect
             import uvicorn
+            from fastapi import FastAPI, WebSocket, WebSocketDisconnect
         except ImportError:
             logger.warning("fastapi/uvicorn not installed — Web channel disabled")
             return
@@ -91,19 +93,18 @@ class WebChannel(BaseChannel):
         self._server = uvicorn.Server(config)
         self._running = True
         logger.info("Web channel starting on ws://%s:%d/ws", self._host, self._port)
-        asyncio.create_task(self._server.serve())
+        self._task = asyncio.create_task(self._server.serve())
 
     async def stop(self) -> None:
         self._running = False
         if self._server:
             self._server.should_exit = True
-        # Close all WebSocket connections
-        for ws_id, ws in list(self._connections.items()):
-            try:
+        for _ws_id, ws in list(self._connections.items()):
+            with contextlib.suppress(Exception):
                 await ws.close()
-            except Exception:
-                pass
         self._connections.clear()
+        if self._task:
+            self._task.cancel()
         logger.info("Web channel stopped")
 
     async def send(self, message: ChannelMessage) -> None:
@@ -117,13 +118,11 @@ class WebChannel(BaseChannel):
         })
 
         if ws_id and ws_id in self._connections:
-            # Send to specific client
             try:
                 await self._connections[ws_id].send_text(payload)
             except Exception:
                 self._connections.pop(ws_id, None)
         else:
-            # Broadcast to all
             dead = []
             for wid, ws in self._connections.items():
                 try:

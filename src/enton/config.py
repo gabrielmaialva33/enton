@@ -47,9 +47,12 @@ class Settings(BaseSettings):
     kokoro_voice: str = "af_heart"
 
     # Vision
-    yolo_model: str = "yolo11s.pt"
-    yolo_confidence: float = 0.5
+    yolo_model: str = "yolo11x.pt"
+    yolo_confidence: float = 0.15
     yolo_device: str = "cuda:0"
+    yolo_pose_model: str = "yolo11x-pose.pt"
+    yolo_pose_confidence: float = 0.2
+    yolo_pose_device: str = "cuda:0"  # separate GPU for pose if available
 
     # Audio
     sample_rate: int = 16000

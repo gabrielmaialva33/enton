@@ -12,5 +12,10 @@ wheels/
 # Environment
 .env
 
+# Model weights (download on first run)
+*.pt
+*.onnx
+*.engine
+
 # Enton memory (local data)
 # episodes.jsonl and profile.json live in ~/.enton/

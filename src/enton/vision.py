@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np  # noqa: TC002 — used at runtime
 
-from enton.events import DetectionEvent, EventBus, SystemEvent
+from enton.activity import classify as classify_activity
+from enton.events import ActivityEvent, DetectionEvent, EventBus, SystemEvent
 
 if TYPE_CHECKING:
     from enton.config import Settings
@@ -20,22 +21,31 @@ class Vision:
     def __init__(self, settings: Settings, bus: EventBus) -> None:
         self._settings = settings
         self._bus = bus
-        self._model = None
+        self._det_model = None
+        self._pose_model = None
         self._cap: cv2.VideoCapture | None = None
         self._last_frame: np.ndarray | None = None
         self._last_detections: list[DetectionEvent] = []
+        self._last_activities: list[ActivityEvent] = []
         self._fps: float = 0.0
 
-    def _ensure_model(self):
-        if self._model is None:
+    def _ensure_det_model(self):
+        if self._det_model is None:
             from ultralytics import YOLO
 
-            self._model = YOLO(str(self._settings.yolo_model_path))
-            self._model.to(self._settings.yolo_device)
-            logger.info(
-                "YOLO loaded: %s on %s", self._settings.yolo_model, self._settings.yolo_device
-            )
-        return self._model
+            self._det_model = YOLO(str(self._settings.yolo_model_path))
+            self._det_model.to(self._settings.yolo_device)
+            logger.info("YOLO detect loaded: %s on %s", self._settings.yolo_model, self._settings.yolo_device)
+        return self._det_model
+
+    def _ensure_pose_model(self):
+        if self._pose_model is None:
+            from ultralytics import YOLO
+
+            self._pose_model = YOLO(self._settings.yolo_pose_model)
+            self._pose_model.to(self._settings.yolo_pose_device)
+            logger.info("YOLO pose loaded: %s on %s", self._settings.yolo_pose_model, self._settings.yolo_device)
+        return self._pose_model
 
     def _ensure_camera(self) -> cv2.VideoCapture:
         if self._cap is None or not self._cap.isOpened():
@@ -60,6 +70,10 @@ class Vision:
     @property
     def last_detections(self) -> list[DetectionEvent]:
         return self._last_detections
+
+    @property
+    def last_activities(self) -> list[ActivityEvent]:
+        return self._last_activities
 
     @property
     def fps(self) -> float:
@@ -92,7 +106,8 @@ class Vision:
                 was_connected = True
 
             try:
-                model = self._ensure_model()
+                det_model = self._ensure_det_model()
+                pose_model = self._ensure_pose_model()
             except Exception:
                 logger.exception("YOLO model load failed, retrying in 30s")
                 await asyncio.sleep(30.0)
@@ -108,15 +123,19 @@ class Vision:
             self._last_frame = frame
             frame_count += 1
 
-            conf = self._settings.yolo_confidence
+            det_conf = self._settings.yolo_confidence
+            pose_conf = self._settings.yolo_pose_confidence
 
-            def _predict(f=frame, c=conf, m=model):
-                return m.predict(f, conf=c, verbose=False)
+            def _predict(f=frame, dc=det_conf, pc=pose_conf, dm=det_model, pm=pose_model):
+                det_r = dm.predict(f, conf=dc, half=True, verbose=False)
+                pose_r = pm.predict(f, conf=pc, half=True, verbose=False)
+                return det_r, pose_r
 
-            results = await loop.run_in_executor(None, _predict)
+            det_results, pose_results = await loop.run_in_executor(None, _predict)
 
+            # --- object detections ---
             detections = []
-            for r in results:
+            for r in det_results:
                 for box in r.boxes:
                     cls_id = int(box.cls[0])
                     label = r.names[cls_id]
@@ -129,11 +148,27 @@ class Vision:
                         frame_shape=(frame.shape[0], frame.shape[1]),
                     )
                     detections.append(det)
-
             self._last_detections = detections
 
+            # --- activity recognition ---
+            activities = []
+            for r in pose_results:
+                if r.keypoints is not None and len(r.keypoints) > 0:
+                    for i, kpts in enumerate(r.keypoints.data):
+                        activity_label, color = classify_activity(kpts)
+                        act = ActivityEvent(
+                            person_index=i,
+                            activity=activity_label,
+                            color=color,
+                        )
+                        activities.append(act)
+            self._last_activities = activities
+
+            # --- emit events ---
             for det in detections:
                 self._bus.emit_nowait(det)
+            for act in activities:
+                self._bus.emit_nowait(act)
 
             elapsed = time.monotonic() - t_start
             if elapsed >= 1.0:

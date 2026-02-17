@@ -111,6 +111,9 @@ class SelfModel:
         self._detections_count += 1
         self.mood.on_detection(label)
 
+    def record_activity(self, activity: str) -> None:
+        self._last_activity = activity
+
     def record_error(self) -> None:
         self._errors_count += 1
         self.mood.on_error()

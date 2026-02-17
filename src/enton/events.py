@@ -26,6 +26,13 @@ class DetectionEvent(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class ActivityEvent(Event):
+    person_index: int = 0
+    activity: str = ""
+    color: tuple[int, int, int] = (200, 200, 200)
+
+
+@dataclass(frozen=True, slots=True)
 class TranscriptionEvent(Event):
     text: str = ""
     is_final: bool = True

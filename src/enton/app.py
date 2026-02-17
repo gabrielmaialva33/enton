@@ -8,7 +8,7 @@ import time
 from enton.brain import Brain
 from enton.config import settings
 from enton.ears import Ears
-from enton.events import DetectionEvent, EventBus, SpeechRequest, SystemEvent, TranscriptionEvent
+from enton.events import ActivityEvent, DetectionEvent, EventBus, SpeechRequest, SystemEvent, TranscriptionEvent
 from enton.memory import Episode, Memory
 from enton.persona import REACTION_TEMPLATES, build_system_prompt
 from enton.self_model import SelfModel
@@ -46,6 +46,7 @@ class App:
 
     def _register_handlers(self) -> None:
         self.bus.on(DetectionEvent, self._on_detection)
+        self.bus.on(ActivityEvent, self._on_activity)
         self.bus.on(TranscriptionEvent, self._on_transcription)
         self.bus.on(SpeechRequest, self._on_speech_request)
         self.bus.on(SystemEvent, self._on_system_event)
@@ -81,6 +82,9 @@ class App:
                     tags=["cat"],
                 )
             )
+
+    async def _on_activity(self, event: ActivityEvent) -> None:
+        self.self_model.record_activity(event.activity)
 
     async def _on_transcription(self, event: TranscriptionEvent) -> None:
         if not event.text.strip():

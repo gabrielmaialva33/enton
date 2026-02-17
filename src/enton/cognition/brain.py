@@ -1,175 +1,273 @@
+"""EntonBrain — Agno Agent with multi-provider fallback chain.
+
+Wraps an Agno Agent that handles tool calling, memory, and knowledge
+natively. Provider fallback is implemented by swapping agent.model
+on failure (Agno doesn't have built-in fallback).
+
+Fallback order: LOCAL → NVIDIA(×4) → HuggingFace → Groq → OpenRouter → AIMLAPI → Google
+"""
 from __future__ import annotations
 
+import base64
 import logging
 import re
-from collections import deque
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from enton.core.config import Provider
+from agno.agent import Agent
+from agno.models.ollama import Ollama
+from agno.storage.sqlite import SqliteStorage
 
 if TYPE_CHECKING:
+    from agno.knowledge import AgentKnowledge
+    from agno.models.base import Model
+    from agno.tools import Toolkit
+
     from enton.core.config import Settings
-    from enton.providers.base import LLMProvider
 
 logger = logging.getLogger(__name__)
 
+_DB_PATH = str(Path.home() / ".enton" / "sessions.db")
 
-class Brain:
-    def __init__(self, settings: Settings) -> None:
+
+class EntonBrain:
+    """Enton's cognitive center — Agno Agent with cascading fallback."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        toolkits: list[Toolkit],
+        instructions: str | list[str] | None = None,
+        knowledge: AgentKnowledge | None = None,
+    ) -> None:
         self._settings = settings
-        self._providers: dict[Provider, LLMProvider] = {}
-        self._primary = settings.brain_provider
-        self._history: deque[dict] = deque(maxlen=settings.memory_size)
-        self._vlm = None  # QwenVL on-demand
-        self._init_providers(settings)
+        self._models = self._init_models(settings)
+        self._vision_models = self._init_vision_models(settings)
+        self._vlm = None  # QwenVL transformers (last resort)
 
-    # Ordered fallback chain (7 providers!)
-    _FALLBACK_ORDER = [
-        Provider.LOCAL, Provider.NVIDIA, Provider.HUGGINGFACE,
-        Provider.GROQ, Provider.OPENROUTER, Provider.AIMLAPI,
-        Provider.GOOGLE,
-    ]
+        Path.home().joinpath(".enton").mkdir(parents=True, exist_ok=True)
 
-    def _init_providers(self, s: Settings) -> None:
-        # Local (Ollama) — always try
-        try:
-            from enton.providers.local import LocalLLM
+        self._agent = Agent(
+            name="Enton",
+            model=self._models[0] if self._models else Ollama(id="qwen2.5:14b"),
+            tools=toolkits,
+            instructions=instructions,
+            storage=SqliteStorage(
+                table_name="agent_sessions",
+                db_file=_DB_PATH,
+            ),
+            knowledge=knowledge,
+            search_knowledge=knowledge is not None,
+            add_history_to_context=True,
+            num_history_runs=settings.memory_size,
+            tool_call_limit=settings.brain_max_turns,
+            retries=2,
+            stream=False,
+            telemetry=False,
+            markdown=False,
+        )
 
-            self._providers[Provider.LOCAL] = LocalLLM(s)
-        except Exception:
-            logger.warning("Local LLM unavailable")
+        names = [getattr(m, "id", str(m)) for m in self._models]
+        logger.info("Brain models: [%s]", ", ".join(names))
 
-        # NVIDIA NIM — round-robin multi-key
+    # ------------------------------------------------------------------
+    # Model initialization
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _init_models(s: Settings) -> list[Model]:
+        """Build ordered list of Agno models for fallback chain."""
+        models: list[Model] = []
+
+        # 1. LOCAL (Ollama) — always primary
+        models.append(Ollama(id=s.ollama_model))
+
+        # 2. NVIDIA NIM — one instance per key (natural rate-limit fallback)
         nvidia_keys = [k.strip() for k in s.nvidia_api_keys.split(",") if k.strip()]
         if not nvidia_keys and s.nvidia_api_key:
             nvidia_keys = [s.nvidia_api_key]
         if nvidia_keys:
             try:
-                from enton.providers.openai_compat import OpenAICompatLLM
+                from agno.models.nvidia import Nvidia
 
-                self._providers[Provider.NVIDIA] = OpenAICompatLLM(
-                    base_url="https://integrate.api.nvidia.com/v1",
-                    api_keys=nvidia_keys,
-                    model=s.nvidia_nim_model,
-                    vision_model=s.nvidia_nim_vision_model,
-                    name="nvidia-nim",
-                )
-                rpm = len(nvidia_keys) * 40
-                logger.info("NVIDIA NIM: %d keys, %d RPM", len(nvidia_keys), rpm)
-            except Exception:
-                logger.warning("NVIDIA NIM unavailable")
+                for key in nvidia_keys:
+                    models.append(Nvidia(id=s.nvidia_nim_model, api_key=key))
+            except ImportError:
+                logger.debug("agno.models.nvidia not available")
 
-        # HuggingFace Inference API (Pro account)
+        # 3. HuggingFace Inference API
         if s.huggingface_token:
-            try:
-                from enton.providers.openai_compat import OpenAICompatLLM
+            from agno.models.openai.like import OpenAILike
 
-                self._providers[Provider.HUGGINGFACE] = OpenAICompatLLM(
-                    base_url="https://api-inference.huggingface.co/v1",
-                    api_keys=[s.huggingface_token],
-                    model=s.huggingface_model,
-                    vision_model=s.huggingface_vision_model,
-                    name="huggingface",
-                )
-            except Exception:
-                logger.warning("HuggingFace Inference unavailable")
+            models.append(OpenAILike(
+                id=s.huggingface_model,
+                api_key=s.huggingface_token,
+                base_url="https://api-inference.huggingface.co/v1",
+            ))
 
-        # Groq — free tier
+        # 4. Groq
         if s.groq_api_key:
-            try:
-                from enton.providers.openai_compat import OpenAICompatLLM
+            from agno.models.groq import Groq
 
-                self._providers[Provider.GROQ] = OpenAICompatLLM(
-                    base_url="https://api.groq.com/openai/v1",
-                    api_keys=[s.groq_api_key],
-                    model=s.groq_model,
-                    name="groq",
-                )
-            except Exception:
-                logger.warning("Groq LLM unavailable")
+            models.append(Groq(id=s.groq_model, api_key=s.groq_api_key))
 
-        # OpenRouter — free multi-provider router
+        # 5. OpenRouter
         if s.openrouter_api_key:
             try:
-                from enton.providers.openai_compat import OpenAICompatLLM
+                from agno.models.openrouter import OpenRouter
 
-                self._providers[Provider.OPENROUTER] = OpenAICompatLLM(
+                models.append(OpenRouter(
+                    id=s.openrouter_model,
+                    api_key=s.openrouter_api_key,
+                ))
+            except ImportError:
+                from agno.models.openai.like import OpenAILike
+
+                models.append(OpenAILike(
+                    id=s.openrouter_model,
+                    api_key=s.openrouter_api_key,
                     base_url="https://openrouter.ai/api/v1",
-                    api_keys=[s.openrouter_api_key],
-                    model=s.openrouter_model,
-                    vision_model=s.openrouter_vision_model,
-                    name="openrouter",
-                )
-            except Exception:
-                logger.warning("OpenRouter unavailable")
+                ))
 
-        # AIML API
+        # 6. AIML API
         if s.aimlapi_api_key:
+            from agno.models.openai.like import OpenAILike
+
+            models.append(OpenAILike(
+                id=s.aimlapi_model,
+                api_key=s.aimlapi_api_key,
+                base_url="https://api.aimlapi.com/v1",
+            ))
+
+        # 7. Google Gemini
+        if s.google_project:
             try:
-                from enton.providers.openai_compat import OpenAICompatLLM
+                from agno.models.google import Gemini
 
-                self._providers[Provider.AIMLAPI] = OpenAICompatLLM(
-                    base_url="https://api.aimlapi.com/v1",
-                    api_keys=[s.aimlapi_api_key],
-                    model=s.aimlapi_model,
-                    name="aimlapi",
-                )
-            except Exception:
-                logger.warning("AIML API unavailable")
+                models.append(Gemini(id=s.google_brain_model))
+            except ImportError:
+                logger.debug("agno.models.google not available")
 
-        # Google Gemini — cloud
-        try:
-            from enton.providers.google import GoogleLLM
-
-            self._providers[Provider.GOOGLE] = GoogleLLM(s)
-        except Exception:
-            logger.warning("Google LLM unavailable")
-
-        available = ", ".join(str(p) for p in self._providers)
-        logger.info("Brain providers: [%s] (primary: %s)", available, self._primary)
-
-    def _get_provider(self) -> tuple[Provider, LLMProvider]:
-        if self._primary in self._providers:
-            return self._primary, self._providers[self._primary]
-        # Fall through the chain
-        for p in self._FALLBACK_ORDER:
-            if p in self._providers:
-                return p, self._providers[p]
-        raise RuntimeError("No LLM provider available")
+        return models
 
     @staticmethod
-    def _clean_response(text: str) -> str:
+    def _init_vision_models(s: Settings) -> list[Model]:
+        """Models that support vision (image input)."""
+        models: list[Model] = []
+
+        # Ollama VLM
+        models.append(Ollama(id=s.ollama_vlm_model))
+
+        # NVIDIA NIM vision
+        nvidia_keys = [k.strip() for k in s.nvidia_api_keys.split(",") if k.strip()]
+        if nvidia_keys:
+            try:
+                from agno.models.nvidia import Nvidia
+
+                models.append(Nvidia(
+                    id=s.nvidia_nim_vision_model,
+                    api_key=nvidia_keys[0],
+                ))
+            except ImportError:
+                pass
+
+        # HuggingFace vision
+        if s.huggingface_token and s.huggingface_vision_model:
+            from agno.models.openai.like import OpenAILike
+
+            models.append(OpenAILike(
+                id=s.huggingface_vision_model,
+                api_key=s.huggingface_token,
+                base_url="https://api-inference.huggingface.co/v1",
+            ))
+
+        # OpenRouter vision
+        if s.openrouter_api_key and s.openrouter_vision_model:
+            from agno.models.openai.like import OpenAILike
+
+            models.append(OpenAILike(
+                id=s.openrouter_vision_model,
+                api_key=s.openrouter_api_key,
+                base_url="https://openrouter.ai/api/v1",
+            ))
+
+        # Google Gemini vision
+        if s.google_project:
+            try:
+                from agno.models.google import Gemini
+
+                models.append(Gemini(id=s.google_vision_model))
+            except ImportError:
+                pass
+
+        return models
+
+    # ------------------------------------------------------------------
+    # Core methods
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clean(text: str) -> str:
+        """Strip <think> reasoning tags from response."""
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
         return text.strip()
 
-    def _get_fallback_chain(
-        self, exclude: Provider | None = None,
-    ) -> list[tuple[Provider, LLMProvider]]:
-        """Get all available providers in fallback order, excluding one."""
-        return [
-            (p, self._providers[p])
-            for p in self._FALLBACK_ORDER
-            if p != exclude and p in self._providers
-        ]
-
     async def think(self, prompt: str, *, system: str = "") -> str:
-        name, provider = self._get_provider()
-        chain = [(name, provider), *self._get_fallback_chain(exclude=name)]
+        """Run prompt through agent with full tool calling + fallback."""
+        # Update instructions if system override provided
+        original_instructions = self._agent.instructions
+        if system:
+            self._agent.instructions = [system]
 
-        for pname, prov in chain:
+        try:
+            for model in self._models:
+                try:
+                    self._agent.model = model
+                    response = await self._agent.arun(prompt)
+                    content = response.content or ""
+                    content = self._clean(content)
+                    mid = getattr(model, "id", "?")
+                    logger.info("Brain [%s]: %s", mid, content[:80])
+                    return content
+                except Exception:
+                    mid = getattr(model, "id", "?")
+                    logger.warning("Brain [%s] failed, trying next", mid)
+        finally:
+            if system:
+                self._agent.instructions = original_instructions
+
+        return "Erro: todos os providers falharam."
+
+    async def think_agent(self, prompt: str, *, system: str = "") -> str:
+        """Alias for think() — Agno handles tool calling natively."""
+        return await self.think(prompt, system=system)
+
+    async def describe_scene(self, image: bytes, *, system: str = "") -> str:
+        """Describe scene via VLM with fallback chain."""
+        prompt = system or "Descreva brevemente o que você vê em português."
+        b64 = base64.b64encode(image).decode()
+
+        for model in self._vision_models:
             try:
-                raw = await prov.generate(
-                    prompt, system=system, history=list(self._history),
-                )
-                response = self._clean_response(raw)
-                self._history.append({"role": "user", "content": prompt})
-                self._history.append({"role": "assistant", "content": response})
-                logger.info("Brain [%s]: %s", pname, response[:80])
-                return response
+                self._agent.model = model
+                response = await self._agent.arun(prompt, images=[b64])
+                content = response.content or ""
+                mid = getattr(model, "id", "?")
+                logger.info("VLM [%s]: %s", mid, content[:80])
+                return self._clean(content)
             except Exception:
-                logger.warning("Brain [%s] failed, trying next", pname)
+                mid = getattr(model, "id", "?")
+                logger.warning("VLM [%s] failed, trying next", mid)
 
-        raise RuntimeError("All LLM providers failed")
+        # Last resort: local transformers VLM
+        vlm = self._get_vlm()
+        if vlm is not None:
+            try:
+                return await vlm.describe(prompt, image)
+            except Exception:
+                logger.warning("Transformers VLM failed")
+
+        return ""
 
     def _get_vlm(self):
         """Lazy-load QwenVL transformers provider."""
@@ -185,125 +283,11 @@ class Brain:
                 logger.debug("QwenVL transformers provider unavailable")
         return self._vlm
 
-    async def describe_scene(self, image: bytes, *, system: str = "") -> str:
-        """Describe scene via VLM. Chain: Ollama → NVIDIA → Transformers → Google."""
-        prompt = "Descreva brevemente o que você vê em português."
-        if system:
-            prompt = f"{system}\n\n{prompt}"
-
-        # 1) Try all providers with vision support in order
-        vision_order = [
-            Provider.LOCAL, Provider.NVIDIA, Provider.HUGGINGFACE,
-            Provider.OPENROUTER, Provider.GOOGLE,
-        ]
-        for p in vision_order:
-            if p in self._providers:
-                try:
-                    return await self._providers[p].generate_with_image(prompt, image)
-                except Exception:
-                    logger.warning("VLM [%s] failed, trying next", p)
-
-        # 2) Try transformers VLM (on-demand, last resort local)
-        vlm = self._get_vlm()
-        if vlm is not None:
-            try:
-                return await vlm.describe(prompt, image)
-            except Exception:
-                logger.warning("Transformers VLM failed")
-
-        return ""
-
-    async def _try_generate_with_tools(
-        self, prompt: str, tools: list[dict], *, system: str = "",
-    ) -> dict | None:
-        """Try all providers in fallback order for tool calling."""
-        name, provider = self._get_provider()
-        chain = [(name, provider), *self._get_fallback_chain(exclude=name)]
-
-        for pname, prov in chain:
-            try:
-                return await prov.generate_with_tools(
-                    prompt, tools=tools, system=system,
-                    history=list(self._history),
-                )
-            except Exception:
-                logger.warning("Brain [%s] tools failed, trying next", pname)
-        return None
-
-    async def think_with_tools(
-        self,
-        prompt: str,
-        tools: list[dict],
-        tool_functions: dict[str, callable],
-        *,
-        system: str = "",
-    ) -> str:
-        # Multi-turn: prompt → generate → tool_call → execute → result → ...
-        current_prompt = prompt
-        content = ""
-
-        for i in range(self._settings.brain_max_turns):
-            response = await self._try_generate_with_tools(
-                current_prompt, tools, system=system,
-            )
-            if response is None:
-                return "Erro: todos os providers falharam."
-
-            content = response.get("content", "")
-            tool_calls = response.get("tool_calls", [])
-
-            self._history.append({"role": "user", "content": current_prompt})
-
-            if content:
-                content = self._clean_response(content)
-                self._history.append({"role": "assistant", "content": content})
-                logger.info("Brain: %s", content[:80])
-
-            if not tool_calls:
-                return content or ""
-
-            # Execute tools
-            tool_results = []
-            for tc in tool_calls:
-                func_name = tc["name"]
-                args = tc["arguments"]
-                logger.info("Tool Call: %s(%s)", func_name, args)
-
-                result = f"Error: Tool {func_name} not found"
-                if func_name in tool_functions:
-                    try:
-                        import asyncio
-
-                        func = tool_functions[func_name]
-                        if asyncio.iscoroutinefunction(func):
-                            result = await func(**args)
-                        else:
-                            result = func(**args)
-                    except Exception as e:
-                        result = f"Error executing {func_name}: {e}"
-                        logger.error(result)
-
-                tool_results.append(f"Tool '{func_name}' returned: {result}")
-
-            current_prompt = "\n".join(tool_results)
-
-            if i == self._settings.brain_max_turns - 1:
-                logger.warning("Brain reached max turns")
-                return content or current_prompt
-
-        return content
-
-    async def think_agent(self, prompt: str, *, system: str = "") -> str:
-        """Thinks using all registered tools."""
-        from enton.core.tools import registry
-
-        return await self.think_with_tools(
-            prompt,
-            tools=registry.schemas,
-            tool_functions=registry.get_all_tools(),
-            system=system,
-        )
-
     def clear_history(self) -> None:
-        self._history.clear()
+        """Clear conversation history."""
+        self._agent.memory.clear()
 
+    @property
+    def agent(self) -> Agent:
+        """Direct access to Agno Agent (for session_state, etc.)."""
+        return self._agent

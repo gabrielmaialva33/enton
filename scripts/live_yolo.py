@@ -19,12 +19,13 @@ import cv2
 from ultralytics import YOLO
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from enton.activity import NOSE, classify as classify_activity, _visible as visible
-from enton.overlay import Overlay
+from enton.perception.activity import NOSE, classify as classify_activity, _visible as visible
+from enton.perception.emotion import EmotionRecognizer
+from enton.perception.overlay import Overlay
 
 RTSP_URL = "rtsp://192.168.18.23:554/video0_unicast"
-DET_MODEL = "yolo11x.pt"
-POSE_MODEL = "yolo11x-pose.pt"
+DET_MODEL = "models/yolo11x.pt"
+POSE_MODEL = "models/yolo11x-pose.pt"
 DET_CONF = 0.15
 POSE_CONF = 0.2
 IMGSZ = 640
@@ -63,6 +64,7 @@ cv2.resizeWindow("Enton Vision", w, h)
 print(f"Enton Vision Cyberpunk | {w}x{h} FP16 CUDA | 'q'=sair 'f'=fullscreen")
 
 hud = Overlay(font_size=18)
+emo = EmotionRecognizer(device="cuda:0", interval_frames=5)
 
 fps_t = time.time()
 fps_count = 0
@@ -128,6 +130,14 @@ while True:
             if visible(kpts, NOSE):
                 nx, ny = int(kpts[NOSE][0]), int(kpts[NOSE][1])
                 annotated = hud.draw_activity_label(annotated, activity, (nx, ny), color)
+
+    # Emotion recognition on detected faces
+    kpts_list = []
+    if pose_r[0].keypoints is not None and len(pose_r[0].keypoints) > 0:
+        kpts_list = list(pose_r[0].keypoints.data)
+    face_emotions = emo.classify(frame, kpts_list)
+    for fe in face_emotions:
+        annotated = hud.draw_emotion_label(annotated, fe.label, fe.score, fe.bbox, fe.color)
 
     # FPS
     fps_count += 1

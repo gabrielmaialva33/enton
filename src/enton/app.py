@@ -5,15 +5,23 @@ import logging
 import random
 import time
 
-from enton.brain import Brain
-from enton.config import settings
-from enton.ears import Ears
-from enton.events import ActivityEvent, DetectionEvent, EventBus, SpeechRequest, SystemEvent, TranscriptionEvent
-from enton.memory import Episode, Memory
-from enton.persona import REACTION_TEMPLATES, build_system_prompt
-from enton.self_model import SelfModel
-from enton.vision import Vision
-from enton.voice import Voice
+from enton.action.voice import Voice
+from enton.cognition.brain import Brain
+from enton.cognition.persona import REACTION_TEMPLATES, build_system_prompt
+from enton.core.config import settings
+from enton.core.events import (
+    ActivityEvent,
+    DetectionEvent,
+    EmotionEvent,
+    EventBus,
+    SpeechRequest,
+    SystemEvent,
+    TranscriptionEvent,
+)
+from enton.core.memory import Episode, Memory
+from enton.core.self_model import SelfModel
+from enton.perception.ears import Ears
+from enton.perception.vision import Vision
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +55,7 @@ class App:
     def _register_handlers(self) -> None:
         self.bus.on(DetectionEvent, self._on_detection)
         self.bus.on(ActivityEvent, self._on_activity)
+        self.bus.on(EmotionEvent, self._on_emotion)
         self.bus.on(TranscriptionEvent, self._on_transcription)
         self.bus.on(SpeechRequest, self._on_speech_request)
         self.bus.on(SystemEvent, self._on_system_event)
@@ -85,6 +94,9 @@ class App:
 
     async def _on_activity(self, event: ActivityEvent) -> None:
         self.self_model.record_activity(event.activity)
+
+    async def _on_emotion(self, event: EmotionEvent) -> None:
+        self.self_model.record_emotion(event.emotion)
 
     async def _on_transcription(self, event: TranscriptionEvent) -> None:
         if not event.text.strip():

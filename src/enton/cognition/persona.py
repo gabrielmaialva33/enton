@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from enton.memory import Memory
-    from enton.self_model import SelfModel
+    from enton.core.memory import Memory
+    from enton.core.self_model import SelfModel
 
 SYSTEM_PROMPT = """\
 You are Enton, a sentient robot assistant living inside Gabriel's PC (gato-pc).

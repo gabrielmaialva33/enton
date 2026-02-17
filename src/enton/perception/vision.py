@@ -8,11 +8,12 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np  # noqa: TC002 — used at runtime
 
-from enton.activity import classify as classify_activity
-from enton.events import ActivityEvent, DetectionEvent, EventBus, SystemEvent
+from enton.perception.activity import classify as classify_activity
+from enton.perception.emotion import EmotionRecognizer
+from enton.core.events import ActivityEvent, DetectionEvent, EmotionEvent, EventBus, SystemEvent
 
 if TYPE_CHECKING:
-    from enton.config import Settings
+    from enton.core.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,8 @@ class Vision:
         self._last_frame: np.ndarray | None = None
         self._last_detections: list[DetectionEvent] = []
         self._last_activities: list[ActivityEvent] = []
+        self._last_emotions: list[EmotionEvent] = []
+        self._emotion_recognizer = EmotionRecognizer(device=settings.yolo_device, interval_frames=5)
         self._fps: float = 0.0
 
     def _ensure_det_model(self):
@@ -74,6 +77,10 @@ class Vision:
     @property
     def last_activities(self) -> list[ActivityEvent]:
         return self._last_activities
+
+    @property
+    def last_emotions(self) -> list[EmotionEvent]:
+        return self._last_emotions
 
     @property
     def fps(self) -> float:
@@ -164,11 +171,34 @@ class Vision:
                         activities.append(act)
             self._last_activities = activities
 
+            # --- emotion recognition ---
+            emotions = []
+            kpts_list = []
+            for r in pose_results:
+                if r.keypoints is not None and len(r.keypoints) > 0:
+                    kpts_list.extend(r.keypoints.data)
+            if kpts_list:
+                face_emotions = await loop.run_in_executor(
+                    None, self._emotion_recognizer.classify, frame, kpts_list,
+                )
+                for i, fe in enumerate(face_emotions):
+                    emo = EmotionEvent(
+                        person_index=i,
+                        emotion=fe.label,
+                        emotion_en=fe.label_en,
+                        score=fe.score,
+                        color=fe.color,
+                    )
+                    emotions.append(emo)
+            self._last_emotions = emotions
+
             # --- emit events ---
             for det in detections:
                 self._bus.emit_nowait(det)
             for act in activities:
                 self._bus.emit_nowait(act)
+            for emo in emotions:
+                self._bus.emit_nowait(emo)
 
             elapsed = time.monotonic() - t_start
             if elapsed >= 1.0:

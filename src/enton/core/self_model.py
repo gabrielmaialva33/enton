@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from enton.config import Settings
+    from enton.core.config import Settings
 
 
 @dataclass(slots=True)
@@ -113,6 +113,9 @@ class SelfModel:
 
     def record_activity(self, activity: str) -> None:
         self._last_activity = activity
+
+    def record_emotion(self, emotion: str) -> None:
+        self._last_emotion = emotion
 
     def record_error(self) -> None:
         self._errors_count += 1

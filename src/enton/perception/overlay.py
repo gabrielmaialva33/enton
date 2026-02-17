@@ -269,6 +269,47 @@ class Overlay:
         frame = _composite(frame, label_np, lx, ly)
         return frame
 
+    # ---- emotion label near face ----
+
+    def draw_emotion_label(
+        self,
+        frame: np.ndarray,
+        text: str,
+        score: float,
+        bbox: tuple[int, int, int, int],
+        color: tuple[int, int, int],
+    ) -> np.ndarray:
+        """Draw a small emotion tag below a face region."""
+        x1, y1, x2, y2 = bbox
+        cx = (x1 + x2) // 2
+        label = f"{text} {score:.0%}"
+
+        tbbox = self._font_medium.getbbox(label)
+        tw = tbbox[2] - tbbox[0]
+        th = tbbox[3] - tbbox[1]
+        pad = 6
+        tag_w = tw + pad * 2
+        tag_h = th + pad * 2
+
+        tx = max(0, cx - tag_w // 2)
+        ty = y2 + 4
+
+        r, g, b = color
+        tag = Image.new("RGBA", (tag_w, tag_h), (0, 0, 0, 0))
+        td = ImageDraw.Draw(tag)
+        td.rounded_rectangle(
+            [(0, 0), (tag_w - 1, tag_h - 1)],
+            radius=6,
+            fill=(r // 8, g // 8, b // 8, 190),
+            outline=(r, g, b, 180),
+            width=1,
+        )
+        td.text((pad, pad // 2), label, font=self._font_medium, fill=(r, g, b, 240))
+
+        tag_np = np.array(tag)
+        frame = _composite(frame, tag_np, tx, ty)
+        return frame
+
     # ---- confidence badge on objects ----
 
     def draw_confidence_badge(

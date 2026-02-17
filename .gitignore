@@ -13,7 +13,7 @@ wheels/
 .env
 
 # Model weights (download on first run)
-*.pt
+models/
 *.onnx
 *.engine
 

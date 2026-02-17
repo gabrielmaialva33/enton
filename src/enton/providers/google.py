@@ -8,7 +8,7 @@ import numpy as np
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from enton.config import Settings
+    from enton.core.config import Settings
 
 logger = logging.getLogger(__name__)
 

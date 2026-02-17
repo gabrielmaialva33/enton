@@ -33,6 +33,15 @@ class ActivityEvent(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class EmotionEvent(Event):
+    person_index: int = 0
+    emotion: str = ""
+    emotion_en: str = ""
+    score: float = 0.0
+    color: tuple[int, int, int] = (180, 180, 180)
+
+
+@dataclass(frozen=True, slots=True)
 class TranscriptionEvent(Event):
     text: str = ""
     is_final: bool = True

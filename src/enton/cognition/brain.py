@@ -5,10 +5,10 @@ import re
 from collections import deque
 from typing import TYPE_CHECKING
 
-from enton.config import Provider
+from enton.core.config import Provider
 
 if TYPE_CHECKING:
-    from enton.config import Settings
+    from enton.core.config import Settings
     from enton.providers.base import LLMProvider
 
 logger = logging.getLogger(__name__)

@@ -5,11 +5,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from enton.config import Provider
-from enton.events import EventBus, TranscriptionEvent
+from enton.core.config import Provider
+from enton.core.events import EventBus, TranscriptionEvent
 
 if TYPE_CHECKING:
-    from enton.config import Settings
+    from enton.core.config import Settings
     from enton.providers.base import STTProvider
 
 logger = logging.getLogger(__name__)

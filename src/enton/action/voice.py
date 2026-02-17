@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 import sounddevice as sd
 
-from enton.config import Provider
+from enton.core.config import Provider
 
 if TYPE_CHECKING:
-    from enton.config import Settings
+    from enton.core.config import Settings
     from enton.providers.base import TTSProvider
 
 logger = logging.getLogger(__name__)

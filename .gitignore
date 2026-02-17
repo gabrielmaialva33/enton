@@ -1,8 +1,7 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
-build/
-dist/
+build/dist/
 wheels/
 *.egg-info
 
@@ -33,5 +32,12 @@ Thumbs.db
 # Backups
 *.bak
 
+# Secrets / wallets
+paper_wallet.json
+*.wallet
+*.keystore
+
 # MCP
 .playwright-mcp
+
+enton.log

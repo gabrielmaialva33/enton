@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # e.g. "main:0,hack:rtsp://192.168.18.23:554/video0_unicast"
     cameras: str = ""
 
+    # i18n — locale e dialeto regional
+    locale: str = "pt-BR"  # pt-BR | en | zh-CN
+    locale_dialect: str = "sp"  # sp|rj|mg|ba|rs|pe|ce|pa|go|pr|ma
+
     # Provider routing (local-first)
     brain_provider: Provider = Provider.LOCAL
     tts_provider: Provider = Provider.QWEN3

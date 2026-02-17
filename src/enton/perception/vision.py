@@ -88,13 +88,74 @@ class Vision:
         self._target_fps = 30.0  # Default target FPS
         self._det_model = None
         self._pose_model = None
-        # ... (rest of init)
+
+        # Components
+        from enton.perception.emotion import EmotionRecognizer
+        from enton.perception.faces import FaceRecognizer
+
+        self.face_recognizer = FaceRecognizer(device=settings.yolo_device)
+        self._emotion_recognizer = EmotionRecognizer(device=settings.yolo_device)
+        self._face_interval = 30
+
+        # Cameras
+        self.cameras: dict[str, CameraFeed] = {}
+        for cam_id, source in settings.camera_sources.items():
+            self.cameras[cam_id] = CameraFeed(cam_id, source)
+
+        self.fps = 0.0
 
     def set_target_fps(self, fps: float) -> None:
         """Dynamically adjust target FPS for all cameras."""
         self._target_fps = max(0.1, min(60.0, fps))
 
-    # ... (existing methods) ...
+    def _ensure_det_model(self):
+        if self._det_model is None:
+            from ultralytics import YOLO
+            self._det_model = YOLO(self._settings.yolo_model_path)
+        return self._det_model
+
+    def _ensure_pose_model(self):
+        if self._pose_model is None:
+            from ultralytics import YOLO
+            self._pose_model = YOLO(self._settings.yolo_pose_model_path)
+        return self._pose_model
+
+    def get_frame_jpeg(self) -> bytes | None:
+        """Get the latest frame from the main camera as JPEG."""
+        cam = self.cameras.get("main")
+        if cam and cam.last_frame is not None:
+            ret, buf = cv2.imencode(".jpg", cam.last_frame)
+            if ret:
+                return buf.tobytes()
+        return None
+
+    @property
+    def last_detections(self) -> list[DetectionEvent]:
+        """Aggregate detections from all cameras."""
+        all_dets = []
+        for cam in self.cameras.values():
+            all_dets.extend(cam.last_detections)
+        return all_dets
+
+    @property
+    def last_activities(self) -> list[ActivityEvent]:
+        all_acts = []
+        for cam in self.cameras.values():
+            all_acts.extend(cam.last_activities)
+        return all_acts
+
+    @property
+    def last_emotions(self) -> list[EmotionEvent]:
+        all_emos = []
+        for cam in self.cameras.values():
+            all_emos.extend(cam.last_emotions)
+        return all_emos
+
+    async def run(self) -> None:
+        logger.info("Vision system starting (%d cameras)", len(self.cameras))
+        async with asyncio.TaskGroup() as tg:
+            for cam in self.cameras.values():
+                tg.create_task(self._camera_loop(cam))
 
     async def _camera_loop(self, cam: CameraFeed) -> None:
         """Process frames from a single camera."""

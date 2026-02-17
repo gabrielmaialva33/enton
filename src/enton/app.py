@@ -33,6 +33,7 @@ from enton.core.events import (
     SystemEvent,
     TranscriptionEvent,
 )
+from enton.core.hardware import detect_hardware
 from enton.core.knowledge_crawler import KnowledgeCrawler
 from enton.core.lifecycle import Lifecycle
 from enton.core.memory import Episode, Memory
@@ -53,6 +54,7 @@ from enton.skills.face_toolkit import FaceTools
 from enton.skills.file_toolkit import FileTools
 from enton.skills.forge_engine import ForgeEngine
 from enton.skills.forge_toolkit import ForgeTools
+from enton.skills.github_learner import GitHubLearner
 from enton.skills.greet import GreetSkill
 from enton.skills.knowledge_toolkit import KnowledgeTools
 from enton.skills.memory_toolkit import MemoryTools
@@ -66,6 +68,7 @@ from enton.skills.shell_toolkit import ShellTools
 from enton.skills.skill_registry import SkillRegistry
 from enton.skills.system_toolkit import SystemTools
 from enton.skills.visual_memory_toolkit import VisualMemoryTools
+from enton.skills.workspace_toolkit import WorkspaceTools
 
 logger = logging.getLogger(__name__)
 
@@ -132,13 +135,19 @@ class App:
             logger.warning("HD not mounted, workspace fallback: %s", self._workspace)
         for subdir in ("code", "projects", "downloads", "tmp"):
             (self._workspace / subdir).mkdir(parents=True, exist_ok=True)
+        # Hardware awareness — Enton knows his power
+        self.hardware = detect_hardware(str(self._workspace))
         logger.info("Workspace: %s (%s free)", self._workspace, self._disk_free())
+        logger.info("Hardware: %s", self.hardware.summary())
 
         # Agno Toolkits
         shell_state = ShellState(cwd=self._workspace)
         describe_tools = DescribeTools(self.vision)
+        self.github_learner = GitHubLearner()
+        
         toolkits = [
             describe_tools,
+            self.github_learner,
             FaceTools(self.vision, self.vision.face_recognizer),
             FileTools(shell_state),
             MemoryTools(self.memory),
@@ -151,6 +160,7 @@ class App:
             KnowledgeTools(self.knowledge_crawler),
             BlobTools(self.blob_store),
             CodingTools(workspace=self._workspace),
+            WorkspaceTools(self._workspace, self.hardware),
             ScreenpipeTools(),
             N8nTools(),
         ]
@@ -816,7 +826,22 @@ class App:
                 
             self.vision.set_target_fps(target_fps)
             
-            # 4. Trigger Investigations (placeholder)
+            # 4. Metacognition & Autodidactism (Fase 2)
+            action = self.metacognition.tick(surprise)
+            if action == "study_github":
+                # Only if we are not already busy/talking
+                if not self.voice.is_speaking and not self.ears.is_listening:
+                    topic = self.metacognition.get_next_topic()
+                    logger.info("Boredom threshold reached. Auto-triggering study on: %s", topic)
+                    self._push_thought(f"[autodidata] Tédio... Vou estudar sobre {topic}.")
+                    
+                    # Fire-and-forget task to learn
+                    asyncio.create_task(
+                        self.brain.think(
+                            f"Estou com tédio e decidi estudar. Use a skill github_learner para pesquisar e aprender sobre '{topic}'. Resuma o que aprendeu.",
+                            voice_mode=False  # Internal thought/log, maybe speak summary later
+                        )
+                    )
 
     # ------------------------------------------------------------------
     # Phone Monitor (OpenClaw-inspired — Enton lives on the phone)

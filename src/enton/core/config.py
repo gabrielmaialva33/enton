@@ -7,9 +7,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Provider(StrEnum):
-    GOOGLE = "google"
-    NVIDIA = "nvidia"
     LOCAL = "local"
+    NVIDIA = "nvidia"
+    HUGGINGFACE = "huggingface"
+    GROQ = "groq"
+    OPENROUTER = "openrouter"
+    AIMLAPI = "aimlapi"
+    GOOGLE = "google"
 
 
 class Settings(BaseSettings):
@@ -21,10 +25,10 @@ class Settings(BaseSettings):
     camera_rtsp_port: int = 554
     camera_rtsp_path: str = "/onvif1"
 
-    # Provider routing
-    brain_provider: Provider = Provider.GOOGLE
-    tts_provider: Provider = Provider.GOOGLE
-    stt_provider: Provider = Provider.GOOGLE
+    # Provider routing (local-first)
+    brain_provider: Provider = Provider.LOCAL
+    tts_provider: Provider = Provider.LOCAL
+    stt_provider: Provider = Provider.LOCAL
 
     # Google Cloud
     google_project: str = ""
@@ -32,26 +36,48 @@ class Settings(BaseSettings):
     google_brain_model: str = "gemini-2.0-flash"
     google_vision_model: str = "gemini-2.0-flash"
 
-    # NVIDIA
-    nvidia_api_key: str = ""
+    # NVIDIA NIM (round-robin: comma-separated keys, 40 RPM each)
+    nvidia_api_keys: str = ""  # comma-separated for round-robin
+    nvidia_api_key: str = ""  # legacy single key (STT/TTS)
+    nvidia_nim_model: str = "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+    nvidia_nim_vision_model: str = "meta/llama-3.2-90b-vision-instruct"
     nvidia_tts_voice: str = "English-US.Male-1"
     nvidia_stt_model: str = "parakeet-1.1b-rnnt-multilingual-asr"
 
-    # HuggingFace
+    # Groq (free tier, fast inference)
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.3-70b-versatile"
+
+    # OpenRouter (free tier, multi-provider router)
+    openrouter_api_key: str = ""
+    openrouter_model: str = "qwen/qwen3-235b-a22b:free"
+    openrouter_vision_model: str = "meta-llama/llama-4-scout-17b-16e-instruct:free"
+
+    # AIML API
+    aimlapi_api_key: str = ""
+    aimlapi_model: str = "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
+
+    # HuggingFace (Pro account — serverless inference API)
     huggingface_token: str = ""
+    huggingface_model: str = "Qwen/Qwen2.5-72B-Instruct"
+    huggingface_vision_model: str = "meta-llama/Llama-3.2-11B-Vision-Instruct"
 
     # Local fallback
-    ollama_model: str = "qwen3:4b"
+    ollama_model: str = "qwen2.5:14b"
     whisper_model: str = "large-v3-turbo"
     kokoro_lang: str = "p"  # pt-BR
     kokoro_voice: str = "af_heart"
+    
+    # Brain
+    brain_timeout: float = 30.0
+    brain_max_turns: int = 5
 
     # Vision
-    yolo_model: str = "models/yolo11x.pt"
-    yolo_confidence: float = 0.15
+    yolo_model: str = "models/yolo11s.pt"
+    yolo_confidence: float = 0.35
     yolo_device: str = "cuda:0"
-    yolo_pose_model: str = "models/yolo11x-pose.pt"
-    yolo_pose_confidence: float = 0.2
+    yolo_pose_model: str = "models/yolo11s-pose.pt"
+    yolo_pose_confidence: float = 0.35
     yolo_pose_device: str = "cuda:0"  # separate GPU for pose if available
 
     # Audio
@@ -66,6 +92,20 @@ class Settings(BaseSettings):
     reaction_cooldown: float = 5.0
     idle_timeout: float = 30.0
     memory_size: int = 20
+    scene_describe_interval: float = 30.0
+
+    # Local VLM
+    ollama_vlm_model: str = "qwen2.5-vl:7b"
+    vlm_transformers_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
+
+    # Infrastructure
+    qdrant_url: str = "http://localhost:6333"
+    redis_url: str = "redis://localhost:6379"
+    timescale_dsn: str = "postgresql://enton:enton@localhost:5432/enton"
+    mem0_enabled: bool = True
+
+    # Metrics
+    metrics_interval: float = 10.0
 
     @property
     def camera_url(self) -> str | int:

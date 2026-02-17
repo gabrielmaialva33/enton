@@ -61,6 +61,19 @@ class BrainResponse(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class FaceEvent(Event):
+    identity: str = "unknown"
+    confidence: float = 0.0
+    bbox: tuple[int, int, int, int] = (0, 0, 0, 0)
+
+
+@dataclass(frozen=True, slots=True)
+class SoundEvent(Event):
+    label: str = ""
+    confidence: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
 class SystemEvent(Event):
     kind: str = ""  # startup, shutdown, error, camera_lost, etc.
     detail: str = ""

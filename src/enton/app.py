@@ -3,25 +3,42 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 import time
 
+import enton.skills.describe_skill as describe_skill  # noqa: F401
+import enton.skills.face_skill as face_skill  # noqa: F401
+import enton.skills.memory_skill as memory_skill  # noqa: F401
+import enton.skills.planner_skill as planner_skill  # noqa: F401
+import enton.skills.ptz_skill  # noqa: F401
+import enton.skills.search_skill  # noqa: F401
+import enton.skills.shell_skill  # noqa: F401
+import enton.skills.system_skill  # noqa: F401
 from enton.action.voice import Voice
 from enton.cognition.brain import Brain
+from enton.cognition.desires import DesireEngine
+from enton.cognition.fuser import Fuser
 from enton.cognition.persona import REACTION_TEMPLATES, build_system_prompt
+from enton.cognition.planner import Planner
 from enton.core.config import settings
 from enton.core.events import (
     ActivityEvent,
     DetectionEvent,
     EmotionEvent,
     EventBus,
+    FaceEvent,
+    SoundEvent,
     SpeechRequest,
     SystemEvent,
     TranscriptionEvent,
 )
+from enton.core.lifecycle import Lifecycle
 from enton.core.memory import Episode, Memory
 from enton.core.self_model import SelfModel
 from enton.perception.ears import Ears
 from enton.perception.vision import Vision
+from enton.skills.greet import GreetSkill
+from enton.skills.react import ReactSkill
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +52,54 @@ class App:
         self.ears = Ears(settings, self.bus)
         self.brain = Brain(settings)
         self.voice = Voice(settings, ears=self.ears)
-        self._last_reaction: float = 0
+        self.fuser = Fuser()
+        
+        # Phase 10 — Living Entity
+        self.desires = DesireEngine()
+        self.planner = Planner()
+        self.lifecycle = Lifecycle()
+
+        # Skills
+        self.greet_skill = GreetSkill(self.voice, self.memory)
+        self.react_skill = ReactSkill(self.voice, self.memory)
+        describe_skill.init(self.vision, self.brain)
+        face_skill.init(self.vision, self.vision.face_recognizer)
+        memory_skill.init(self.memory)
+        planner_skill.init(self.planner)
+
         self._person_present: bool = False
+        self._last_person_seen: float = 0
+        self._sound_detector = None
+        self._metrics = None
+        self._init_sound_detector()
+        self._init_metrics()
         self._register_handlers()
+        self._attach_skills()
         self._probe_capabilities()
+
+    def _init_metrics(self) -> None:
+        try:
+            from enton.core.metrics import MetricsCollector
+
+            self._metrics = MetricsCollector(
+                dsn=settings.timescale_dsn,
+                interval=settings.metrics_interval,
+            )
+            self._metrics.register("engagement", lambda: self.self_model.mood.engagement)
+            self._metrics.register("social", lambda: self.self_model.mood.social)
+            self._metrics.register("vision_fps", lambda: self.vision.fps)
+            logger.info("MetricsCollector initialized")
+        except Exception:
+            logger.warning("MetricsCollector unavailable")
+
+    def _init_sound_detector(self) -> None:
+        try:
+            from enton.perception.sounds import SoundDetector
+
+            self._sound_detector = SoundDetector(threshold=0.3)
+            logger.info("SoundDetector initialized")
+        except Exception:
+            logger.warning("SoundDetector unavailable")
 
     def _probe_capabilities(self) -> None:
         sm = self.self_model.senses
@@ -57,40 +118,20 @@ class App:
         self.bus.on(ActivityEvent, self._on_activity)
         self.bus.on(EmotionEvent, self._on_emotion)
         self.bus.on(TranscriptionEvent, self._on_transcription)
+        self.bus.on(FaceEvent, self._on_face)
+        self.bus.on(SoundEvent, self._on_sound)
         self.bus.on(SpeechRequest, self._on_speech_request)
         self.bus.on(SystemEvent, self._on_system_event)
 
+    def _attach_skills(self) -> None:
+        self.greet_skill.attach(self.bus)
+        self.react_skill.attach(self.bus)
+
     async def _on_detection(self, event: DetectionEvent) -> None:
-        now = time.time()
         self.self_model.record_detection(event.label)
-
-        if now - self._last_reaction < settings.reaction_cooldown:
-            return
-
-        if event.label == "person" and not self._person_present:
+        if event.label == "person":
             self._person_present = True
-            self._last_reaction = now
-            text = random.choice(REACTION_TEMPLATES["person_appeared"])
-            await self.voice.say(text)
-            self.memory.remember(
-                Episode(
-                    kind="detection",
-                    summary="Person appeared in camera",
-                    tags=["person", "arrival"],
-                )
-            )
-
-        elif event.label == "cat":
-            self._last_reaction = now
-            text = random.choice(REACTION_TEMPLATES["cat_detected"])
-            await self.voice.say(text)
-            self.memory.remember(
-                Episode(
-                    kind="detection",
-                    summary="Cat detected!",
-                    tags=["cat"],
-                )
-            )
+            self._last_person_seen = time.time()
 
     async def _on_activity(self, event: ActivityEvent) -> None:
         self.self_model.record_activity(event.activity)
@@ -98,32 +139,87 @@ class App:
     async def _on_emotion(self, event: EmotionEvent) -> None:
         self.self_model.record_emotion(event.emotion)
 
+    async def _on_face(self, event: FaceEvent) -> None:
+        if event.identity != "unknown":
+            logger.info(
+                "Face recognized: %s (%.0f%%)",
+                event.identity, event.confidence * 100,
+            )
+            self.memory.learn_about_user(
+                f"Rosto reconhecido: {event.identity}",
+            )
+            # Greet recognized person (with cooldown via react_skill)
+            if not self.voice.is_speaking:
+                template = random.choice(REACTION_TEMPLATES["face_recognized"])
+                await self.voice.say(template.format(name=event.identity))
+
+    async def _on_sound(self, event: SoundEvent) -> None:
+        logger.info("Sound: %s (%.0f%%)", event.label, event.confidence * 100)
+        sound_reactions = {
+            "Campainha": "Opa, alguém na porta!",
+            "Alarme": "Eita, alarme! Tá tudo bem?",
+            "Sirene": "Sirene! Algo aconteceu?",
+            "Bebê chorando": "Tem um bebê chorando...",
+            "Vidro quebrando": "Caramba, que barulho foi esse?!",
+        }
+        reaction = sound_reactions.get(event.label)
+        if reaction and not self.voice.is_speaking:
+            await self.voice.say(reaction)
+
     async def _on_transcription(self, event: TranscriptionEvent) -> None:
         if not event.text.strip():
             return
 
         self.self_model.record_interaction()
         self.memory.strengthen_relationship()
+        self.desires.on_interaction()
 
-        detections = [
-            {"label": d.label, "confidence": d.confidence} for d in self.vision.last_detections
-        ]
+        # Extract basic facts (simple heuristic for now)
+        self._extract_facts(event.text)
+
+        # Build context using Fuser with all available perception data
+        detections = self.vision.last_detections
+        activities = self.vision.last_activities
+        emotions = self.vision.last_emotions
+        scene_desc = self.fuser.fuse(detections, activities, emotions)
+        
         system = build_system_prompt(
             self.self_model,
             self.memory,
-            detections=detections,
+            detections=[{"label": d.label} for d in detections],
         )
+        
+        # Inject Fuser context into system prompt or user message
+        # Let's prepend to the user message or append to system
+        system += f"\n\nCONTEXTO VISUAL ATUAL: {scene_desc}"
+        system += "\nVocê tem acesso a ferramentas. Use-as se necessário para responder."
 
-        response = await self.brain.think(event.text, system=system)
+        response = await self.brain.think_agent(event.text, system=system)
         if response:
             await self.voice.say(response)
             self.memory.remember(
                 Episode(
                     kind="conversation",
-                    summary=f"User said: '{event.text[:60]}' → I replied: '{response[:60]}'",
+                    summary=f"User: '{event.text[:60]}' -> Me: '{response[:60]}'",
                     tags=["chat"],
                 )
             )
+
+    def _extract_facts(self, text: str) -> None:
+        # Simple regex extraction for Phase 1
+        patterns = [
+            (r"(?:meu nome é|eu sou o|me chamo) (.+)", "name"),
+            (r"(?:eu gosto de|adoro|amo) (.+)", "like"),
+        ]
+        text_lower = text.lower()
+        for pattern, kind in patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                fact = match.group(1).strip()
+                if kind == "name":
+                    self.memory.learn_about_user(f"Nome é {fact.title()}")
+                else:
+                    self.memory.learn_about_user(f"Gosta de {fact}")
 
     async def _on_speech_request(self, event: SpeechRequest) -> None:
         await self.voice.say(event.text)
@@ -147,27 +243,262 @@ class App:
 
     async def run(self) -> None:
         logger.info("Enton starting up...")
-        logger.info("Self-state: %s", self.self_model.introspect())
-        await self.bus.emit(SystemEvent(kind="startup"))
 
-        async with asyncio.TaskGroup() as tg:
-            tg.create_task(self.bus.run(), name="event_bus")
-            tg.create_task(self.vision.run(), name="vision")
-            tg.create_task(self.voice.run(), name="voice")
-            tg.create_task(self.ears.run(), name="ears")
-            tg.create_task(self._idle_loop(), name="idle")
-            tg.create_task(self._mood_decay_loop(), name="mood_decay")
+        # Lifecycle — restore state from previous session
+        wake_msg = self.lifecycle.on_boot(self.self_model, self.desires)
+        logger.info("Lifecycle: %s", self.lifecycle.summary())
+        logger.info("Self-state: %s", self.self_model.introspect())
+
+        await self.bus.emit(SystemEvent(kind="startup"))
+        if wake_msg:
+            await self.voice.say(wake_msg)
+
+        try:
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(self.bus.run(), name="event_bus")
+                tg.create_task(self.vision.run(), name="vision")
+                tg.create_task(self.voice.run(), name="voice")
+                tg.create_task(self.ears.run(), name="ears")
+                tg.create_task(self._idle_loop(), name="idle")
+                tg.create_task(self._mood_decay_loop(), name="mood_decay")
+                tg.create_task(self._scene_description_loop(), name="scene_desc")
+                tg.create_task(self._desire_loop(), name="desires")
+                tg.create_task(self._planner_loop(), name="planner")
+                tg.create_task(self._autosave_loop(), name="autosave")
+                if self._sound_detector:
+                    tg.create_task(
+                        self._sound_detection_loop(), name="sound_detect",
+                    )
+                if self._metrics:
+                    tg.create_task(self._metrics.run(), name="metrics")
+        finally:
+            # Graceful shutdown — persist state
+            self.lifecycle.on_shutdown(self.self_model, self.desires)
+            logger.info("Enton shutdown. State saved.")
 
     async def _idle_loop(self) -> None:
+        idle_tick = 0
         while True:
-            await asyncio.sleep(settings.idle_timeout)
-            self.self_model.mood.on_idle()
-            if not self._person_present and not self.voice.is_speaking:
-                text = random.choice(REACTION_TEMPLATES["idle"])
-                await self.voice.say(text)
-            self._person_present = False
+            await asyncio.sleep(1.0)
+            idle_tick += 1
+
+            now = time.time()
+            # Person left logic
+            if self._person_present and (now - self._last_person_seen > settings.idle_timeout):
+                self._person_present = False
+                self.greet_skill.reset_presence()
+                if self.self_model.mood.engagement > 0.3:
+                    await self.voice.say("Opa, até mais!")
+                await self.bus.emit(SystemEvent(kind="person_left"))
+
+            # Decay engagement slowly (every 30s, not every 1s)
+            if idle_tick % 30 == 0:
+                self.self_model.mood.on_idle()
 
     async def _mood_decay_loop(self) -> None:
         while True:
             await asyncio.sleep(60)
             self.self_model.mood.tick()
+
+    async def _scene_description_loop(self) -> None:
+        """Periodically describes the scene using VLM if a person is present."""
+        while True:
+            await asyncio.sleep(settings.scene_describe_interval)
+
+            if not self._person_present:
+                continue
+
+            if self.self_model.mood.engagement < 0.4:
+                continue
+
+            if self.voice.is_speaking:
+                continue
+
+            # Try VLM with actual camera frame
+            jpeg = self.vision.get_frame_jpeg()
+            if jpeg is not None:
+                response = await self.brain.describe_scene(
+                    jpeg,
+                    system=(
+                        "Você é o Enton, um robô assistente zoeiro. "
+                        "Comente algo breve e interessante sobre a cena."
+                    ),
+                )
+                if response:
+                    await self.voice.say(response)
+                    continue
+
+            # Fallback: Fuser text-only if no VLM available
+            detections = self.vision.last_detections
+            if not detections:
+                continue
+            activities = self.vision.last_activities
+            emotions = self.vision.last_emotions
+            scene_desc = self.fuser.fuse(detections, activities, emotions)
+            if "Nenhum objeto" in scene_desc:
+                continue
+            prompt = (
+                "Comente algo breve e interessante sobre esta cena. "
+                f"Contexto: {scene_desc}"
+            )
+            response = await self.brain.think(
+                prompt, system="Você é o Enton, um robô observador curioso.",
+            )
+            if response:
+                await self.voice.say(response)
+
+    async def _sound_detection_loop(self) -> None:
+        """Captures audio chunks and classifies ambient sounds."""
+        import sounddevice as sd
+
+        sample_rate = 48000
+        chunk_duration = 2.0  # seconds
+        chunk_samples = int(sample_rate * chunk_duration)
+        cooldown = 10.0  # seconds between sound reactions
+        last_reaction = 0.0
+
+        logger.info("Sound detection loop started (sr=%d)", sample_rate)
+
+        while True:
+            try:
+                # Skip if ears are actively listening to speech
+                if self.ears.muted:
+                    await asyncio.sleep(chunk_duration)
+                    continue
+
+                loop = asyncio.get_running_loop()
+
+                def _record():
+                    return sd.rec(
+                        chunk_samples,
+                        samplerate=sample_rate,
+                        channels=1,
+                        dtype="float32",
+                    )
+
+                audio = await loop.run_in_executor(None, _record)
+                await asyncio.sleep(chunk_duration)
+                sd.wait()
+
+                audio = audio.squeeze()
+                if audio.max() < 0.01:
+                    continue  # silence
+
+                now = time.time()
+                if now - last_reaction < cooldown:
+                    continue
+
+                results = await self._sound_detector.classify_async(
+                    audio, sample_rate,
+                )
+                for r in results:
+                    logger.info(
+                        "Sound event: %s (%.0f%%)",
+                        r.label, r.confidence * 100,
+                    )
+                    await self.bus.emit(
+                        SoundEvent(
+                            label=r.label,
+                            confidence=r.confidence,
+                        )
+                    )
+                    last_reaction = now
+                    break  # only react to top result
+
+            except Exception:
+                logger.exception("Sound detection error")
+                await asyncio.sleep(5.0)
+
+    async def _desire_loop(self) -> None:
+        """Autonomous desire engine — Enton acts on his own wants."""
+        await asyncio.sleep(30)  # Let everything initialize first
+
+        while True:
+            await asyncio.sleep(10)
+
+            # Tick desires based on current mood
+            self.desires.tick(self.self_model, dt=10)
+
+            # Check if any desire should activate
+            desire = self.desires.get_active_desire()
+            if desire is None:
+                continue
+
+            if self.voice.is_speaking:
+                continue
+
+            logger.info("Desire activated: %s (urgency=%.2f)", desire.name, desire.urgency)
+            desire.activate()
+
+            # Act on the desire
+            if desire.name == "socialize":
+                prompt = self.desires.get_prompt(desire)
+                await self.voice.say(prompt)
+
+            elif desire.name == "observe":
+                self.desires.on_observation()
+                jpeg = self.vision.get_frame_jpeg()
+                if jpeg is not None:
+                    desc = await self.brain.describe_scene(
+                        jpeg,
+                        system="Você é o Enton. Comente algo curto sobre a cena.",
+                    )
+                    if desc:
+                        await self.voice.say(desc)
+
+            elif desire.name == "learn":
+                # Use brain with search tool to learn something
+                response = await self.brain.think_agent(
+                    "Pesquise algo interessante e curioso e me conte em 1-2 frases.",
+                    system="Você é o Enton, curioso sobre o mundo.",
+                )
+                if response:
+                    await self.voice.say(response)
+
+            elif desire.name == "check_on_user":
+                prompt = self.desires.get_prompt(desire)
+                await self.voice.say(prompt)
+
+            elif desire.name == "optimize":
+                response = await self.brain.think_agent(
+                    "Verifique o status do sistema (CPU, RAM, GPU) e me diga se está tudo ok.",
+                )
+                if response:
+                    await self.voice.say(response)
+
+            elif desire.name == "reminisce":
+                episodes = self.memory.recent(3)
+                if episodes:
+                    ep = random.choice(episodes)
+                    await self.voice.say(f"Lembrei... {ep.summary}")
+
+    async def _planner_loop(self) -> None:
+        """Checks for due reminders and routines."""
+        await asyncio.sleep(10)
+
+        while True:
+            await asyncio.sleep(30)
+
+            # Check reminders
+            due = self.planner.get_due_reminders()
+            for r in due:
+                logger.info("Reminder due: %s", r.text)
+                if not self.voice.is_speaking:
+                    await self.voice.say(f"Lembrete: {r.text}")
+
+            # Check routines
+            import datetime
+
+            hour = datetime.datetime.now().hour
+            routines = self.planner.get_due_routines(hour)
+            for routine in routines:
+                logger.info("Routine due: %s", routine["name"])
+                if not self.voice.is_speaking:
+                    await self.voice.say(routine["text"])
+
+    async def _autosave_loop(self) -> None:
+        """Periodically saves state for crash recovery."""
+        while True:
+            await asyncio.sleep(300)  # every 5 min
+            self.lifecycle.save_periodic(self.self_model, self.desires)
+            logger.debug("Autosave complete")

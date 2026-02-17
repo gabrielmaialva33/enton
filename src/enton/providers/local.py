@@ -14,10 +14,11 @@ logger = logging.getLogger(__name__)
 
 
 class LocalLLM:
-    """Ollama local LLM fallback."""
+    """Ollama local LLM — primary brain."""
 
     def __init__(self, settings: Settings) -> None:
         self._model = settings.ollama_model
+        self._vlm_model = settings.ollama_vlm_model
 
     async def generate(
         self, prompt: str, *, system: str = "", history: list[dict] | None = None
@@ -33,6 +34,45 @@ class LocalLLM:
 
         response = await ollama.AsyncClient().chat(model=self._model, messages=messages)
         return response.message.content or ""
+
+    async def generate_with_tools(
+        self,
+        prompt: str,
+        tools: list[dict],
+        *,
+        system: str = "",
+        history: list[dict] | None = None,
+    ) -> dict:
+        import ollama
+
+        messages: list[dict] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            response = await ollama.AsyncClient().chat(
+                model=self._model,
+                messages=messages,
+                tools=tools,
+            )
+            msg = response.message
+            content = msg.content or ""
+            tool_calls = []
+
+            if msg.tool_calls:
+                for tc in msg.tool_calls:
+                    tool_calls.append({
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    })
+
+            return {"content": content, "tool_calls": tool_calls}
+        except Exception:
+            logger.exception("LocalLLM generate_with_tools failed")
+            return {"content": "Erro ao processar tools localmente.", "tool_calls": []}
 
     async def generate_with_image(
         self,
@@ -57,7 +97,7 @@ class LocalLLM:
             }
         )
 
-        response = await ollama.AsyncClient().chat(model="llava:7b", messages=messages)
+        response = await ollama.AsyncClient().chat(model=self._vlm_model, messages=messages)
         return response.message.content or ""
 
 
@@ -74,8 +114,8 @@ class LocalSTT:
 
             self._model = WhisperModel(
                 self._model_name,
-                device="cpu",
-                compute_type="int8",
+                device="cuda",
+                compute_type="float16",
             )
         return self._model
 

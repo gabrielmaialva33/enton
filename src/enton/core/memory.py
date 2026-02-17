@@ -34,11 +34,38 @@ class Memory:
         self._max_recent = max_recent
         self._episodes: list[Episode] = []
         self.profile = UserProfile()
+        self._mem0 = None
         self._ensure_dir()
         self._load()
+        self._init_mem0()
 
     def _ensure_dir(self) -> None:
         MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _init_mem0(self) -> None:
+        try:
+            from mem0 import Memory as Mem0Memory
+
+            config = {
+                "vector_store": {
+                    "provider": "qdrant",
+                    "config": {
+                        "host": "localhost",
+                        "port": 6333,
+                        "collection_name": "enton_memory",
+                    },
+                },
+                "embedder": {
+                    "provider": "ollama",
+                    "config": {
+                        "model": "nomic-embed-text",
+                    },
+                },
+            }
+            self._mem0 = Mem0Memory.from_config(config)
+            logger.info("Mem0 + Qdrant initialized")
+        except Exception:
+            logger.warning("Mem0/Qdrant unavailable, using JSONL only")
 
     def _load(self) -> None:
         if EPISODES_FILE.exists():
@@ -63,11 +90,25 @@ class Memory:
         self._episodes.append(episode)
         if len(self._episodes) > self._max_recent * 2:
             self._episodes = self._episodes[-self._max_recent :]
+        # JSONL persistence (always)
         try:
             with EPISODES_FILE.open("a") as f:
                 f.write(json.dumps(asdict(episode), ensure_ascii=False) + "\n")
         except Exception:
             logger.warning("Failed to persist episode")
+        # Mem0 vector indexing (if available)
+        if self._mem0 is not None:
+            try:
+                self._mem0.add(
+                    episode.summary,
+                    user_id="enton",
+                    metadata={
+                        "kind": episode.kind,
+                        "tags": ",".join(episode.tags),
+                    },
+                )
+            except Exception:
+                logger.debug("Mem0 indexing failed for episode")
 
     def recall_recent(self, n: int = 5) -> list[Episode]:
         return self._episodes[-n:]
@@ -80,10 +121,39 @@ class Memory:
         matching = [e for e in self._episodes if tag in e.tags]
         return matching[-n:]
 
+    def semantic_search(self, query: str, n: int = 5) -> list[str]:
+        """Search memories semantically via Qdrant. Falls back to keyword."""
+        if self._mem0 is not None:
+            try:
+                results = self._mem0.search(query, user_id="enton", limit=n)
+                return [r["memory"] for r in results.get("results", [])]
+            except Exception:
+                logger.debug("Mem0 search failed, falling back to keyword")
+
+        # Keyword fallback
+        query_lower = query.lower()
+        matches = []
+        for ep in reversed(self._episodes):
+            if query_lower in ep.summary.lower():
+                matches.append(ep.summary)
+                if len(matches) >= n:
+                    break
+        return matches
+
     def learn_about_user(self, fact: str) -> None:
         if fact not in self.profile.known_facts:
             self.profile.known_facts.append(fact)
             self._save_profile()
+        # Also store in Mem0
+        if self._mem0 is not None:
+            try:
+                self._mem0.add(
+                    fact,
+                    user_id="enton",
+                    metadata={"kind": "user_fact"},
+                )
+            except Exception:
+                logger.debug("Mem0 fact indexing failed")
 
     def strengthen_relationship(self, amount: float = 0.02) -> None:
         self.profile.relationship_score = min(1.0, self.profile.relationship_score + amount)

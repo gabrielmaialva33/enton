@@ -88,6 +88,8 @@ class SelfModel:
         self._interactions_count = 0
         self._detections_count = 0
         self._errors_count = 0
+        self._last_activity = "none"
+        self._last_emotion = "neutral"
 
     @property
     def uptime_seconds(self) -> float:
@@ -113,22 +115,61 @@ class SelfModel:
 
     def record_activity(self, activity: str) -> None:
         self._last_activity = activity
+        # Activity labels come from activity.py in PT-BR
+        low = activity.lower()
+        if "acenando" in low or "maos pra cima" in low:
+            self.mood.social = min(1.0, self.mood.social + 0.1)
+        elif "no celular" in low:
+            self.mood.engagement = max(0.0, self.mood.engagement - 0.03)
 
     def record_emotion(self, emotion: str) -> None:
         self._last_emotion = emotion
+        low = emotion.lower()
+        if low in ("feliz", "happy", "surpreso", "surprised"):
+            self.mood.engagement = min(1.0, self.mood.engagement + 0.1)
+        elif low in ("triste", "sad", "irritado", "angry", "medo", "fear"):
+            self.mood.social = max(0.0, self.mood.social - 0.1)
+
+    @property
+    def last_emotion(self) -> str:
+        return self._last_emotion
+
+    @property
+    def last_activity(self) -> str:
+        return self._last_activity
 
     def record_error(self) -> None:
         self._errors_count += 1
         self.mood.on_error()
 
+    @staticmethod
+    def _get_vram_info() -> str:
+        """Get GPU VRAM usage if available."""
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                used = torch.cuda.memory_allocated() / (1024**3)
+                total = torch.cuda.get_device_properties(0).total_mem / (1024**3)
+                free = total - used
+                return f"VRAM: {used:.1f}GB/{total:.0f}GB (free: {free:.1f}GB)"
+        except Exception:
+            pass
+        return "VRAM: unknown"
+
     def introspect(self) -> str:
         self.mood.tick()
         eng = self.mood.engagement
         soc = self.mood.social
+        last_act = self._last_activity
+        last_emo = self._last_emotion
+
         parts = [
             f"I am Enton. Running for {self.uptime_human}.",
             f"Mood: {self.mood.label} (engagement={eng:.1f}, social={soc:.1f}).",
+            f"User emotion: {last_emo}. User activity: {last_act}.",
             f"Senses: {self.senses.summary()}.",
+            self._get_vram_info(),
             f"Stats: {self._interactions_count} chats, {self._detections_count} detections.",
         ]
         if self._errors_count > 0:

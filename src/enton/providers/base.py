@@ -30,3 +30,11 @@ class LLMProvider(Protocol):
     async def generate_with_image(
         self, prompt: str, image: bytes, *, system: str = "", mime_type: str = "image/jpeg"
     ) -> str: ...
+    async def generate_with_tools(
+        self,
+        prompt: str,
+        tools: list[dict],
+        *,
+        system: str = "",
+        history: list[dict] | None = None,
+    ) -> dict: ...  # Returns {"content": str, "tool_calls": list}

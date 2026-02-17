@@ -59,6 +59,84 @@ class GoogleLLM:
         )
         return response.text or ""
 
+    async def generate_with_tools(
+        self,
+        prompt: str,
+        tools: list[dict],
+        *,
+        system: str = "",
+        history: list[dict] | None = None,
+    ) -> dict:
+        from google.genai import types
+
+        # Convert OpenAI-format tools to Google format
+        function_decls = []
+        for tool_def in tools:
+            if tool_def.get("type") == "function":
+                f = tool_def["function"]
+                function_decls.append(
+                    types.FunctionDeclaration(
+                        name=f["name"],
+                        description=f.get("description"),
+                        parameters=f.get("parameters"),
+                    )
+                )
+
+        # Wrap in Tool object
+        google_tools = (
+            [types.Tool(function_declarations=function_decls)]
+            if function_decls else None
+        )
+
+        contents = []
+        if history:
+            for msg in history:
+                contents.append(
+                    types.Content(
+                        role=msg["role"],
+                        parts=[types.Part.from_text(text=msg["content"])],
+                    )
+                )
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=prompt)],
+            )
+        )
+
+        config = types.GenerateContentConfig(
+            system_instruction=system or None,
+            temperature=0.9,
+            tools=google_tools,
+        )
+
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=self._model,
+                contents=contents,
+                config=config,
+            )
+            
+            content = response.text or ""
+            tool_calls = []
+            
+            if response.candidates and response.candidates[0].content.parts:
+                for part in response.candidates[0].content.parts:
+                    if part.function_call:
+                        # Convert args to dict (it's usually a map/dict already)
+                        args = part.function_call.args
+                        # If it's a proto-plus MapComposite, conversion might be needed, 
+                        # but genai typically returns dicts or dict-like objects.
+                        tool_calls.append({
+                            "name": part.function_call.name,
+                            "arguments": dict(args) if args else {},
+                        })
+
+            return {"content": content, "tool_calls": tool_calls}
+        except Exception:
+            logger.exception("GoogleLLM generate_with_tools failed")
+            return {"content": "Erro ao processar tools no Google.", "tool_calls": []}
+
     async def generate_with_image(
         self,
         prompt: str,

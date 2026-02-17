@@ -108,6 +108,11 @@ class Settings(BaseSettings):
     frames_dir: str = str(Path.home() / ".enton" / "frames")
     commonsense_collection: str = "enton_commonsense"
 
+    # Self-Evolution (v0.4.0)
+    skills_dir: str = str(Path.home() / ".enton" / "skills")
+    forge_sandbox_timeout: float = 10.0
+    forge_max_retries: int = 1
+
     # Infrastructure
     qdrant_url: str = "http://localhost:6333"
     redis_url: str = "redis://localhost:6379"

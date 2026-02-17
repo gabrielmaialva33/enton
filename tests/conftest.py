@@ -15,6 +15,7 @@ def _isolate_env(monkeypatch, tmp_path):
     monkeypatch.setattr("enton.core.memory.EPISODES_FILE", tmp_path / "memory" / "episodes.jsonl")
     monkeypatch.setattr("enton.core.memory.PROFILE_FILE", tmp_path / "memory" / "profile.json")
     monkeypatch.setattr("enton.core.visual_memory.FRAMES_DIR", tmp_path / "frames")
+    monkeypatch.setenv("ENTON_SKILLS_DIR", str(tmp_path / "skills"))
 
 
 @pytest.fixture()

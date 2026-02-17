@@ -87,6 +87,14 @@ class SceneChangeEvent(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class SkillEvent(Event):
+    """Emitted when a dynamic skill is loaded, unloaded, or forged."""
+    kind: str = ""  # "loaded", "unloaded", "forge_created", "forge_failed"
+    name: str = ""
+    detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class SystemEvent(Event):
     kind: str = ""  # startup, shutdown, error, camera_lost, etc.
     detail: str = ""

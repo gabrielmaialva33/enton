@@ -66,6 +66,8 @@ class EntonBrain:
             markdown=False,
         )
 
+        self._dynamic_toolkits: dict[str, Toolkit] = {}
+
         names = [getattr(m, "id", str(m)) for m in self._models]
         logger.info("Brain models: [%s]", ", ".join(names))
 
@@ -287,6 +289,31 @@ class EntonBrain:
             except Exception:
                 logger.debug("QwenVL transformers provider unavailable")
         return self._vlm
+
+    # ------------------------------------------------------------------
+    # Dynamic toolkit management (v0.4.0)
+    # ------------------------------------------------------------------
+
+    def register_toolkit(self, toolkit: Toolkit, name: str) -> None:
+        """Register a dynamic toolkit with the Agent.
+
+        Safe to call between arun() invocations — Agno rebuilds its
+        tool list automatically on the next arun() call.
+        """
+        self._agent.add_tool(toolkit)
+        self._dynamic_toolkits[name] = toolkit
+        logger.info("Registered dynamic toolkit: %s", name)
+
+    def unregister_toolkit(self, name: str) -> bool:
+        """Remove a dynamic toolkit from the Agent."""
+        toolkit = self._dynamic_toolkits.pop(name, None)
+        if toolkit is None:
+            return False
+        if self._agent.tools and toolkit in self._agent.tools:
+            self._agent.tools.remove(toolkit)
+            self._agent._rebuild_tools = True  # noqa: SLF001
+        logger.info("Unregistered dynamic toolkit: %s", name)
+        return True
 
     def clear_history(self) -> None:
         """Clear conversation history."""

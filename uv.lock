@@ -874,6 +874,7 @@ dependencies = [
     { name = "transformers" },
     { name = "ultralytics" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "watchfiles" },
     { name = "websockets" },
 ]
 
@@ -916,6 +917,7 @@ requires-dist = [
     { name = "transformers", specifier = ">=4.47" },
     { name = "ultralytics", specifier = ">=8.3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
+    { name = "watchfiles", specifier = ">=1.0" },
     { name = "websockets", specifier = ">=14.0" },
 ]
 

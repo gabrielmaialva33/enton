@@ -46,6 +46,8 @@ from enton.skills._shell_state import ShellState
 from enton.skills.describe_toolkit import DescribeTools
 from enton.skills.face_toolkit import FaceTools
 from enton.skills.file_toolkit import FileTools
+from enton.skills.forge_engine import ForgeEngine
+from enton.skills.forge_toolkit import ForgeTools
 from enton.skills.greet import GreetSkill
 from enton.skills.knowledge_toolkit import KnowledgeTools
 from enton.skills.memory_toolkit import MemoryTools
@@ -54,6 +56,7 @@ from enton.skills.ptz_toolkit import PTZTools
 from enton.skills.react import ReactSkill
 from enton.skills.search_toolkit import SearchTools
 from enton.skills.shell_toolkit import ShellTools
+from enton.skills.skill_registry import SkillRegistry
 from enton.skills.system_toolkit import SystemTools
 from enton.skills.visual_memory_toolkit import VisualMemoryTools
 
@@ -124,6 +127,21 @@ class App:
         )
         describe_tools._brain = self.brain  # resolve circular dep
         self.knowledge_crawler._brain = self.brain
+
+        # v0.4.0 — Self-Evolution (SkillRegistry + ToolForge)
+        self.skill_registry = SkillRegistry(
+            brain=self.brain, bus=self.bus, skills_dir=settings.skills_dir,
+        )
+        self.forge_engine = ForgeEngine(
+            brain=self.brain,
+            skills_dir=Path(settings.skills_dir),
+            sandbox_timeout=settings.forge_sandbox_timeout,
+            max_retries=settings.forge_max_retries,
+        )
+        forge_tools = ForgeTools(
+            forge=self.forge_engine, registry=self.skill_registry,
+        )
+        self.brain.register_toolkit(forge_tools, "_forge_tools")
 
         # Dream mode (must be after brain + memory)
         self.dream = DreamMode(memory=self.memory, brain=self.brain)
@@ -400,6 +418,7 @@ class App:
                 tg.create_task(self._autosave_loop(), name="autosave")
                 tg.create_task(self._awareness_loop(), name="awareness")
                 tg.create_task(self.dream.run(), name="dream")
+                tg.create_task(self.skill_registry.run(), name="skill_registry")
                 if self._sound_detector:
                     tg.create_task(
                         self._sound_detection_loop(), name="sound_detect",

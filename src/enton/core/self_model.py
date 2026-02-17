@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -90,6 +91,7 @@ class SelfModel:
         self._errors_count = 0
         self._last_activity = "none"
         self._last_emotion = "neutral"
+        self._recent_sounds: deque[tuple[str, float, float]] = deque(maxlen=10)
 
     @property
     def uptime_seconds(self) -> float:
@@ -138,6 +140,16 @@ class SelfModel:
     def last_activity(self) -> str:
         return self._last_activity
 
+    def record_sound(self, label: str, confidence: float) -> None:
+        self._recent_sounds.append((label, confidence, time.time()))
+        # Alert sounds boost engagement
+        if label.lower() in ("alarme", "sirene", "vidro quebrando"):
+            self.mood.engagement = min(1.0, self.mood.engagement + 0.2)
+
+    @property
+    def recent_sounds(self) -> list[tuple[str, float, float]]:
+        return list(self._recent_sounds)
+
     def record_error(self) -> None:
         self._errors_count += 1
         self.mood.on_error()
@@ -172,6 +184,9 @@ class SelfModel:
             self._get_vram_info(),
             f"Stats: {self._interactions_count} chats, {self._detections_count} detections.",
         ]
+        if self._recent_sounds:
+            recent = [s[0] for s in list(self._recent_sounds)[-3:]]
+            parts.append(f"Recent sounds: {', '.join(recent)}.")
         if self._errors_count > 0:
             parts.append(f"Errors so far: {self._errors_count}.")
         return " ".join(parts)

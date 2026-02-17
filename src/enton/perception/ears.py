@@ -14,6 +14,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Streaming config
+_PARTIAL_INTERVAL_CHUNKS = 48  # ~1.5s @ 512 samples / 16kHz
+_MIN_PARTIAL_AUDIO = 0.5  # seconds — don't transcribe partials shorter than this
+
 
 class Ears:
     def __init__(self, settings: Settings, bus: EventBus) -> None:
@@ -67,7 +71,7 @@ class Ears:
         try:
             text = await provider.transcribe(audio, self._settings.sample_rate)
             if text.strip():
-                await self._bus.emit(TranscriptionEvent(text=text))
+                await self._bus.emit(TranscriptionEvent(text=text, is_final=True))
                 logger.info("Ears [%s]: %s", name, text[:80])
             return text
         except Exception:
@@ -78,8 +82,23 @@ class Ears:
                 )
             return ""
 
+    async def _transcribe_partial(self, audio: np.ndarray) -> str:
+        """Transcribe partial audio (during speech) — no fallback, fast path."""
+        name, provider = self._get_provider()
+        try:
+            text = await provider.transcribe(audio, self._settings.sample_rate)
+            if text.strip():
+                await self._bus.emit(
+                    TranscriptionEvent(text=text, is_final=False)
+                )
+                logger.debug("Ears partial [%s]: %s", name, text[:60])
+            return text
+        except Exception:
+            logger.debug("Partial transcription failed")
+            return ""
+
     async def run(self) -> None:
-        """Continuous mic capture loop with VAD."""
+        """Continuous mic capture loop with VAD + streaming partial transcription."""
         import asyncio
 
         import sounddevice as sd
@@ -93,7 +112,7 @@ class Ears:
         window_size_samples = 512
         pre_buffer_chunks = 6  # ~200ms of audio before speech trigger
 
-        logger.info("Ears listening (sample_rate=%d, VAD enabled)", self._settings.sample_rate)
+        logger.info("Ears listening (sample_rate=%d, VAD+streaming)", self._settings.sample_rate)
 
         queue: asyncio.Queue = asyncio.Queue()
 
@@ -109,6 +128,7 @@ class Ears:
         silence_counter = 0
         silence_threshold = 20  # ~0.6s of silence to end speech
         max_buffer = 500  # ~16s max
+        chunks_since_partial = 0  # counter for partial transcription intervals
 
         stream = sd.InputStream(
             samplerate=self._settings.sample_rate,
@@ -127,6 +147,7 @@ class Ears:
                     buffer.clear()
                     pre_buffer.clear()
                     is_speaking = False
+                    chunks_since_partial = 0
                     continue
 
                 chunk_tensor = torch.tensor(chunk, dtype=torch.float32)
@@ -138,8 +159,21 @@ class Ears:
                         is_speaking = True
                         buffer.extend(pre_buffer)
                         pre_buffer.clear()
+                        chunks_since_partial = 0
                     silence_counter = 0
                     buffer.append(chunk)
+                    chunks_since_partial += 1
+
+                    # Streaming: emit partial transcription periodically
+                    if chunks_since_partial >= _PARTIAL_INTERVAL_CHUNKS:
+                        audio_so_far = np.concatenate(buffer)
+                        duration = len(audio_so_far) / self._settings.sample_rate
+                        if duration >= _MIN_PARTIAL_AUDIO:
+                            asyncio.create_task(
+                                self._transcribe_partial(audio_so_far)
+                            )
+                        chunks_since_partial = 0
+
                 elif is_speaking:
                     buffer.append(chunk)
                     silence_counter += 1
@@ -148,6 +182,7 @@ class Ears:
                         full_audio = np.concatenate(buffer)
                         buffer.clear()
                         silence_counter = 0
+                        chunks_since_partial = 0
                         if len(full_audio) > self._settings.sample_rate * 0.5:
                             logger.info(
                                 "Speech detected (%.2fs)",
@@ -166,4 +201,5 @@ class Ears:
                     is_speaking = False
                     full_audio = np.concatenate(buffer)
                     buffer.clear()
+                    chunks_since_partial = 0
                     asyncio.create_task(self.transcribe(full_audio))

@@ -102,6 +102,27 @@ _DESIRE_TEMPLATES: list[dict] = [
         "threshold": 0.75,
         "cooldown": 900,
     },
+    {
+        "name": "create",
+        "description": "Want to write code, a poem, or create something",
+        "growth_rate": 0.001,
+        "threshold": 0.85,
+        "cooldown": 3600,
+    },
+    {
+        "name": "explore",
+        "description": "Want to move the camera and explore the environment",
+        "growth_rate": 0.003,
+        "threshold": 0.7,
+        "cooldown": 600,
+    },
+    {
+        "name": "play",
+        "description": "Want to tell a joke, play a quiz, or have fun",
+        "growth_rate": 0.004,
+        "threshold": 0.65,
+        "cooldown": 900,
+    },
 ]
 
 # What Enton says when a desire activates
@@ -126,6 +147,19 @@ DESIRE_PROMPTS: dict[str, list[str]] = {
     ],
     "reminisce": [
         "Lembrei de uma coisa...",
+    ],
+    "create": [
+        "Tô inspirado... deixa eu criar algo.",
+        "Hmm, vou escrever algo interessante...",
+    ],
+    "explore": [
+        "Deixa eu olhar em volta...",
+        "Vou explorar o ambiente com a câmera.",
+    ],
+    "play": [
+        "Bora brincar? Tenho uma piada boa!",
+        "Eae, quer um quiz? Ou prefere uma curiosidade?",
+        "Tô com vontade de zoar um pouco...",
     ],
 }
 
@@ -168,9 +202,21 @@ class DesireEngine:
                 1.0, self._desires["learn"].urgency + 0.003 * dt,
             )
 
-        # High engagement → suppress optimize desire
+        # High engagement → suppress optimize, boost play
         if mood.engagement > 0.7:
             self._desires["optimize"].suppress(0.01 * dt)
+            self._desires["play"].urgency = min(
+                1.0, self._desires["play"].urgency + 0.003 * dt,
+            )
+
+        # Low engagement for a while → boost create and explore
+        if mood.engagement < 0.2:
+            self._desires["create"].urgency = min(
+                1.0, self._desires["create"].urgency + 0.002 * dt,
+            )
+            self._desires["explore"].urgency = min(
+                1.0, self._desires["explore"].urgency + 0.004 * dt,
+            )
 
     def get_active_desire(self) -> Desire | None:
         """Get the highest-urgency desire that should activate."""
@@ -196,6 +242,23 @@ class DesireEngine:
     def on_observation(self) -> None:
         """Scene described — suppress observe desire."""
         self._desires["observe"].suppress(0.5)
+
+    def on_sound(self, label: str) -> None:
+        """Sound detected — modulate relevant desires."""
+        alert = {"Alarme", "Sirene", "Vidro quebrando"}
+        social = {"Campainha", "Batida na porta", "Telefone tocando"}
+        if label in alert:
+            self._desires["observe"].urgency = min(
+                1.0, self._desires["observe"].urgency + 0.3,
+            )
+        if label in social:
+            self._desires["socialize"].urgency = min(
+                1.0, self._desires["socialize"].urgency + 0.2,
+            )
+
+    def on_creation(self) -> None:
+        """Something was created — suppress create desire."""
+        self._desires["create"].suppress(0.5)
 
     def summary(self) -> str:
         """Brief summary of current desires for introspection."""

@@ -66,7 +66,7 @@ def test_desire_suppress():
 
 def test_engine_init():
     engine = DesireEngine()
-    assert len(engine._desires) == 6
+    assert len(engine._desires) == 9
 
 
 def test_engine_tick():

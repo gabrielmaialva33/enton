@@ -77,6 +77,7 @@ from enton.skills.gcp_toolkit import GcpTools
 from enton.skills.github_learner import GitHubLearner
 from enton.skills.god_mode_toolkit import GodModeToolkit
 from enton.skills.neurosurgeon_toolkit import NeurosurgeonToolkit
+from enton.skills.crypto_toolkit import CryptoToolkit
 from enton.skills.greet import GreetSkill
 from enton.skills.knowledge_toolkit import KnowledgeTools
 from enton.skills.memory_toolkit import MemoryTools
@@ -230,6 +231,7 @@ class App:
             NetworkTools(),
             GodModeToolkit(),
             NeurosurgeonToolkit(),
+            CryptoToolkit(),
         ]
 
         # Agno-powered Brain with tool calling + fallback chain

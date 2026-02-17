@@ -128,8 +128,9 @@ class Settings(BaseSettings):
     blob_store_root: str = str(Path.home() / ".enton" / "blobs")
     blob_store_fallback: str = str(Path.home() / ".enton" / "blobs")
 
-    # Workspace — Enton's personal sandbox (v0.7.0)
-    workspace_root: str = str(Path.home() / ".enton" / "workspace")
+    # Workspace — Enton's personal sandbox on external HD (v0.7.0)
+    workspace_root: str = "/media/gabriel-maia/Memory Dump/enton/workspace"
+    workspace_fallback: str = str(Path.home() / ".enton" / "workspace")
 
     # Self-Evolution (v0.4.0)
     skills_dir: str = str(Path.home() / ".enton" / "skills")

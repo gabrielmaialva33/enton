@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 import shutil
 import tempfile
 import time
@@ -236,14 +237,18 @@ class CodingTools(Toolkit):
                         src.write_text(code, encoding="utf-8")
                         break
 
+            # Quote paths (workspace may have spaces e.g. "Memory Dump")
+            q_src = shlex.quote(str(src))
+            q_out = shlex.quote(str(out))
+            q_dir = shlex.quote(str(tmpdir))
+
             # Compile step
             compile_cmd = str(spec["compile"])
             if compile_cmd:
                 cmd = compile_cmd.format(
-                    src=src, out=out, dir=tmpdir, module=module,
+                    src=q_src, out=q_out, dir=q_dir, module=module,
                 )
-                # Check if compiler exists
-                compiler = cmd.split()[0]
+                compiler = compile_cmd.split(maxsplit=1)[0]
                 if not shutil.which(compiler):
                     return f"Compilador '{compiler}' nao encontrado no sistema."
                 cout, cerr, crc = await self._exec(cmd, cwd=tmpdir)
@@ -252,11 +257,13 @@ class CodingTools(Toolkit):
 
             # Run step
             run_cmd = str(spec["run"]).format(
-                src=src, out=out, dir=tmpdir, module=module,
+                src=q_src, out=q_out, dir=q_dir, module=module,
             )
-            runner = run_cmd.split()[0]
-            if not shutil.which(runner) and not Path(runner).exists():
-                return f"Runtime '{runner}' nao encontrado."
+            # For interpreted langs, check if runtime exists
+            if not compile_cmd:
+                runner = str(spec["run"]).split()[0]
+                if not shutil.which(runner):
+                    return f"Runtime '{runner}' nao encontrado."
 
             rout, rerr, rrc = await self._exec(run_cmd, cwd=tmpdir)
             result = rout
@@ -337,11 +344,16 @@ class CodingTools(Toolkit):
                         src.write_text(code, encoding="utf-8")
                         break
 
+            # Quote paths
+            q_src = shlex.quote(str(src))
+            q_out = shlex.quote(str(out))
+            q_dir = shlex.quote(str(tmpdir))
+
             # Compile
             compile_cmd = str(spec["compile"])
             if compile_cmd:
                 cmd = compile_cmd.format(
-                    src=src, out=out, dir=tmpdir, module=module,
+                    src=q_src, out=q_out, dir=q_dir, module=module,
                 )
                 _, cerr, crc = await self._exec(cmd, cwd=tmpdir)
                 if crc != 0:
@@ -349,7 +361,7 @@ class CodingTools(Toolkit):
 
             # Benchmark
             run_cmd = str(spec["run"]).format(
-                src=src, out=out, dir=tmpdir, module=module,
+                src=q_src, out=q_out, dir=q_dir, module=module,
             )
             times: list[float] = []
             last_output = ""

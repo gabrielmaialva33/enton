@@ -119,11 +119,20 @@ class App:
             commonsense=self.commonsense,
         )
 
-        # v0.7.0 — Enton's personal workspace (sandbox)
-        self._workspace = Path(settings.workspace_root)
+        # v0.7.0 — Enton's personal workspace (sandbox on external HD)
+        ws = Path(settings.workspace_root)
+        try:
+            ws.mkdir(parents=True, exist_ok=True)
+            (ws / ".probe").touch()
+            (ws / ".probe").unlink()
+            self._workspace = ws
+        except OSError:
+            self._workspace = Path(settings.workspace_fallback)
+            self._workspace.mkdir(parents=True, exist_ok=True)
+            logger.warning("HD not mounted, workspace fallback: %s", self._workspace)
         for subdir in ("code", "projects", "downloads", "tmp"):
             (self._workspace / subdir).mkdir(parents=True, exist_ok=True)
-        logger.info("Workspace: %s", self._workspace)
+        logger.info("Workspace: %s (%s free)", self._workspace, self._disk_free())
 
         # Agno Toolkits
         shell_state = ShellState(cwd=self._workspace)
@@ -209,6 +218,12 @@ class App:
         self._register_handlers()
         self._attach_skills()
         self._probe_capabilities()
+
+    def _disk_free(self) -> str:
+        """Human-readable free space on workspace disk."""
+        import shutil
+        total, _used, free = shutil.disk_usage(self._workspace)
+        return f"{free / (1 << 30):.0f}GB/{total / (1 << 30):.0f}GB"
 
     def _init_metrics(self) -> None:
         try:

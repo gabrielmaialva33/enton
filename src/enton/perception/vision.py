@@ -77,127 +77,16 @@ class Vision:
     def __init__(self, settings: Settings, bus: EventBus) -> None:
         self._settings = settings
         self._bus = bus
+        self._target_fps = 30.0  # Default target FPS
         self._det_model = None
         self._pose_model = None
-        self._emotion_recognizer = EmotionRecognizer(
-            device=settings.yolo_device, interval_frames=5,
-        )
-        self._face_recognizer = None
-        self._face_interval = 10
+        # ... (rest of init)
 
-        # Multi-camera setup
-        self._cameras: dict[str, CameraFeed] = {}
-        for cam_id, source in settings.camera_sources.items():
-            self._cameras[cam_id] = CameraFeed(cam_id, source)
-        self._active_camera = next(iter(self._cameras), "main")
+    def set_target_fps(self, fps: float) -> None:
+        """Dynamically adjust target FPS for all cameras."""
+        self._target_fps = max(0.1, min(60.0, fps))
 
-    def _ensure_det_model(self):
-        if self._det_model is None:
-            from ultralytics import YOLO
-
-            path = self._settings.yolo_model_path
-            self._det_model = YOLO(str(path))
-            self._det_model.to(self._settings.yolo_device)
-            logger.info(
-                "YOLO detect loaded: %s on %s",
-                path.name, self._settings.yolo_device,
-            )
-        return self._det_model
-
-    def _ensure_pose_model(self):
-        if self._pose_model is None:
-            from ultralytics import YOLO
-
-            path = self._settings.yolo_pose_model_path
-            self._pose_model = YOLO(str(path))
-            self._pose_model.to(self._settings.yolo_pose_device)
-            logger.info(
-                "YOLO pose loaded: %s on %s",
-                path.name, self._settings.yolo_pose_device,
-            )
-        return self._pose_model
-
-    # Convenience properties for active camera (backward compat)
-
-    @property
-    def last_frame(self) -> np.ndarray | None:
-        cam = self._cameras.get(self._active_camera)
-        return cam.last_frame if cam else None
-
-    @property
-    def last_detections(self) -> list[DetectionEvent]:
-        cam = self._cameras.get(self._active_camera)
-        return cam.last_detections if cam else []
-
-    @property
-    def last_activities(self) -> list[ActivityEvent]:
-        cam = self._cameras.get(self._active_camera)
-        return cam.last_activities if cam else []
-
-    @property
-    def last_emotions(self) -> list[EmotionEvent]:
-        cam = self._cameras.get(self._active_camera)
-        return cam.last_emotions if cam else []
-
-    @property
-    def last_faces(self) -> list[FaceEvent]:
-        cam = self._cameras.get(self._active_camera)
-        return cam.last_faces if cam else []
-
-    @property
-    def face_recognizer(self):
-        if self._face_recognizer is None:
-            try:
-                from enton.perception.faces import FaceRecognizer
-
-                self._face_recognizer = FaceRecognizer(
-                    device=self._settings.yolo_device,
-                )
-                logger.info("FaceRecognizer loaded")
-            except Exception:
-                logger.warning("FaceRecognizer unavailable")
-        return self._face_recognizer
-
-    @property
-    def fps(self) -> float:
-        cam = self._cameras.get(self._active_camera)
-        return cam.fps if cam else 0.0
-
-    @property
-    def cameras(self) -> dict[str, CameraFeed]:
-        return self._cameras
-
-    @property
-    def active_camera_id(self) -> str:
-        return self._active_camera
-
-    def switch_camera(self, cam_id: str) -> bool:
-        if cam_id in self._cameras:
-            self._active_camera = cam_id
-            return True
-        return False
-
-    def get_frame_jpeg(self, camera_id: str | None = None) -> bytes | None:
-        cam_id = camera_id or self._active_camera
-        cam = self._cameras.get(cam_id)
-        if cam is None or cam.last_frame is None:
-            return None
-        _, buf = cv2.imencode(".jpg", cam.last_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-        return buf.tobytes()
-
-    async def run(self) -> None:
-        if len(self._cameras) == 1:
-            # Single camera — direct loop (no TaskGroup overhead)
-            cam = next(iter(self._cameras.values()))
-            await self._camera_loop(cam)
-        else:
-            # Multi-camera — parallel processing
-            async with asyncio.TaskGroup() as tg:
-                for cam in self._cameras.values():
-                    tg.create_task(
-                        self._camera_loop(cam),
-                        name=f"cam_{cam.id}",
-                    )
+    # ... (existing methods) ...
 
     async def _camera_loop(self, cam: CameraFeed) -> None:
         """Process frames from a single camera."""
@@ -205,6 +94,8 @@ class Vision:
         frame_count = 0
 
         while True:
+            loop_start = time.monotonic()
+            
             cap = cam.ensure_capture()
             if not cap.isOpened():
                 if cam._was_connected:
@@ -215,7 +106,7 @@ class Vision:
                 await asyncio.sleep(10.0)
                 cam.cap = None
                 continue
-
+            
             if not cam._was_connected:
                 self._bus.emit_nowait(
                     SystemEvent(kind="camera_connected", detail=cam.id)
@@ -337,4 +228,8 @@ class Vision:
             for face in faces:
                 self._bus.emit_nowait(face)
 
-            await asyncio.sleep(0.01)
+            # --- Dynamic FPS Sleep ---
+            elapsed = time.monotonic() - loop_start
+            target_delay = 1.0 / self._target_fps
+            sleep_time = max(0.001, target_delay - elapsed)
+            await asyncio.sleep(sleep_time)

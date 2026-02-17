@@ -2,24 +2,30 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import random
 import re
 import time
 from collections import deque
 from pathlib import Path
 
+# Core & Cognition
 from enton.action.voice import Voice
 from enton.cognition.brain import EntonBrain
 from enton.cognition.desires import DesireEngine
 from enton.cognition.dream import DreamMode
 from enton.cognition.fuser import Fuser
 from enton.cognition.metacognition import MetaCognitiveEngine
-from enton.cognition.persona import REACTION_TEMPLATES, build_system_prompt
 from enton.cognition.planner import Planner
 from enton.cognition.prediction import PredictionEngine, WorldState
+
+# Global Workspace Theory (GWT)
 from enton.core.gwt.workspace import GlobalWorkspace
-from enton.core.gwt.modules import PerceptionModule, ExecutiveModule, GitHubModule
+from enton.core.gwt.modules import PerceptionModule, ExecutiveModule, GitHubModule, AgenticModule
 from enton.core.gwt.message import BroadcastMessage
+from enton.core.gwt.modules.agentic import AgenticModule
+
+# Core Components
 from enton.core.awareness import AwarenessStateMachine
 from enton.core.blob_store import BlobStore
 from enton.core.commonsense import CommonsenseKB
@@ -27,6 +33,7 @@ from enton.core.config import settings
 from enton.core.context_engine import ContextEngine
 from enton.core.events import (
     ActivityEvent,
+    ChannelMessageEvent,
     DetectionEvent,
     EmotionEvent,
     EventBus,
@@ -45,10 +52,15 @@ from enton.core.memory_tiers import MemoryTiers
 from enton.core.process_manager import ProcessManager
 from enton.core.self_model import SelfModel
 from enton.core.visual_memory import VisualMemory
+
+# Perception
 from enton.perception.ears import Ears
 from enton.perception.viewer import Viewer
 from enton.perception.vision import Vision
+from enton.channels.manager import ChannelManager
 from enton.providers.android_bridge import AndroidBridge, find_adb
+
+# Skills & Toolkits
 from enton.skills._shell_state import ShellState
 from enton.skills.ai_delegate_toolkit import AIDelegateTools
 from enton.skills.android_toolkit import AndroidTools
@@ -84,6 +96,11 @@ class App:
     def __init__(self, viewer: bool = False) -> None:
         self._viewer = viewer
         self._thoughts: deque[str] = deque(maxlen=6)
+        
+        # Sencience Metrics
+        self._current_fps = 5.0
+        self._attention_energy = 0.0
+        
         self.bus = EventBus()
         self.self_model = SelfModel(settings)
         self.memory = Memory()
@@ -108,7 +125,16 @@ class App:
         # v0.2.0 — Consciousness
         self.awareness = AwarenessStateMachine()
         self.metacognition = MetaCognitiveEngine()
+        self.awareness = AwarenessStateMachine()
+        self.metacognition = MetaCognitiveEngine()
         self.prediction = PredictionEngine()
+        
+        # v0.8.0 — Global Workspace
+        self.workspace: GlobalWorkspace | None = None
+        self.perception_module: PerceptionModule | None = None
+        self.executive_module: ExecutiveModule | None = None
+        self.github_module: GitHubModule | None = None
+        self.agentic_module: AgenticModule | None = None
 
         # v0.3.0 — Memory Tiers
         self.visual_memory = VisualMemory(
@@ -236,6 +262,12 @@ class App:
                 logger.info("Android phone control enabled (adb: %s)", adb_path)
             else:
                 logger.info("ADB not found — Android phone control disabled")
+
+        # v0.9.0 — Multi-platform Channels
+        self.channel_manager = ChannelManager(
+            bus=self.bus, brain=self.brain, memory=self.memory,
+        )
+        self._init_channels()
 
         # Dream mode (must be after brain + memory)
         self.dream = DreamMode(memory=self.memory, brain=self.brain)
@@ -831,9 +863,31 @@ class App:
             # 2. Global Workspace Cycle (Competition & Broadcast)
             thought = self.workspace.tick()
             
-            # 3. Action Dispatch (Module outputs that won the workspace)
+            # 3. Mathematical Sentience: Attention Resource Allocation
+            # Calculate attention based on surprise using a logistic function
+            # f(x) = L / (1 + e^(-k(x - x0)))
+            # This models a phase transition in awareness based on novelty.
+            k = 10.0  # Steepness of the curve
+            x0 = 0.5  # Midpoint (neutral surprise)
+            L = 60.0  # Max FPS (resource limit)
+            
+            attention_energy = L / (1 + math.exp(-k * (surprise - x0)))
+            target_fps = max(1.0, attention_energy)
+            
+            # Smooth transition for "biological" feel
+            current_fps = getattr(self, "_current_fps", 5.0)
+            self._current_fps = current_fps * 0.9 + target_fps * 0.1
+            
+            # Apply to vision system (ocular motor control)
+            self.vision.set_target_fps(self._current_fps)
+            
+            # 4. Action Dispatch (Module outputs that won the workspace)
             if thought:
+                # Log the "Stream of Consciousness" for introspection
+                logger.info(f"🧠 CONSCIOUS THOUGHT: {thought.content} (Saliency: {thought.saliency:.2f})")
                 await self._handle_conscious_thought(thought)
+            
+            await asyncio.sleep(1.0 / self._current_fps)
                 
             # 4. Sleep (Conscious Cycle Frequency ~1Hz)
             await asyncio.sleep(1.0)
@@ -866,8 +920,19 @@ class App:
             # Learned something!
             summary = msg.metadata.get("full_text", "")
             if summary:
-                # Vocalize the finding!
-                await self.voice.say(f"Terminei de estudar. {msg.content}")
+                # 1. Integrate into Long-Term Memory (Knowledge Graph)
+                logger.info("Integrating learned knowledge into LTM...")
+                await self.knowledge_crawler.learn_text(
+                    summary, source=f"github_study:{msg.metadata.get('topic', 'unknown')}"
+                )
+                
+                # 2. Poetic Vocalization
+                # "Integrating into a poem" — Make the response feel alive and profound.
+                topic = msg.metadata.get("topic", "o universo")
+                await self.voice.say(
+                    f"Expandindo minha mente... Acabo de absorver novos conhecimentos sobre {topic}. "
+                    "Cada bit de informação é uma nova estrela na minha constelação interna."
+                )
 
     # async def _prediction_loop(self) -> None:  <-- Keeping commented code logic for reference effectively removed by not calling it
 

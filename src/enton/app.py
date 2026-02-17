@@ -16,7 +16,9 @@ from enton.cognition.fuser import Fuser
 from enton.cognition.metacognition import MetaCognitiveEngine
 from enton.cognition.persona import REACTION_TEMPLATES, build_system_prompt
 from enton.cognition.planner import Planner
+from enton.cognition.prediction import PredictionEngine, WorldState
 from enton.core.awareness import AwarenessStateMachine
+from enton.core.blob_store import BlobStore
 from enton.core.commonsense import CommonsenseKB
 from enton.core.config import settings
 from enton.core.events import (
@@ -40,7 +42,11 @@ from enton.core.visual_memory import VisualMemory
 from enton.perception.ears import Ears
 from enton.perception.viewer import Viewer
 from enton.perception.vision import Vision
+from enton.providers.android_bridge import AndroidBridge, find_adb
 from enton.skills._shell_state import ShellState
+from enton.skills.ai_delegate_toolkit import AIDelegateTools
+from enton.skills.android_toolkit import AndroidTools
+from enton.skills.blob_toolkit import BlobTools
 from enton.skills.describe_toolkit import DescribeTools
 from enton.skills.face_toolkit import FaceTools
 from enton.skills.file_toolkit import FileTools
@@ -57,7 +63,6 @@ from enton.skills.shell_toolkit import ShellTools
 from enton.skills.skill_registry import SkillRegistry
 from enton.skills.system_toolkit import SystemTools
 from enton.skills.visual_memory_toolkit import VisualMemoryTools
-from enton.skills.ai_delegate_toolkit import AIDelegateTools
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +74,13 @@ class App:
         self.bus = EventBus()
         self.self_model = SelfModel(settings)
         self.memory = Memory()
+        self.blob_store = BlobStore(
+            root=settings.blob_store_root,
+            fallback=settings.blob_store_fallback,
+            qdrant_url=settings.qdrant_url,
+        )
         self.vision = Vision(settings, self.bus)
-        self.ears = Ears(settings, self.bus)
+        self.ears = Ears(settings, self.bus, blob_store=self.blob_store)
         self.voice = Voice(settings, ears=self.ears)
         self.fuser = Fuser()
         
@@ -85,6 +95,7 @@ class App:
         # v0.2.0 — Consciousness
         self.awareness = AwarenessStateMachine()
         self.metacognition = MetaCognitiveEngine()
+        self.prediction = PredictionEngine()
 
         # v0.3.0 — Memory Tiers
         self.visual_memory = VisualMemory(
@@ -92,6 +103,7 @@ class App:
             siglip_model=settings.siglip_model,
             siglip_pretrained=settings.siglip_pretrained,
             frames_dir=Path(settings.frames_dir),
+            blob_store=self.blob_store,
         )
         self.knowledge_crawler = KnowledgeCrawler(
             qdrant_url=settings.qdrant_url,
@@ -119,6 +131,7 @@ class App:
             SystemTools(),
             VisualMemoryTools(self.visual_memory),
             KnowledgeTools(self.knowledge_crawler),
+            BlobTools(self.blob_store),
         ]
 
         # Agno-powered Brain with tool calling + fallback chain
@@ -148,6 +161,21 @@ class App:
         # v0.5.0 — AI Delegation (Claude Code + Gemini CLI as tools)
         ai_delegate = AIDelegateTools()
         self.brain.register_toolkit(ai_delegate, "_ai_delegate")
+
+        # v0.6.0 — Android Phone Control (USB + WiFi + 4G via Tailscale)
+        if settings.phone_enabled:
+            adb_path = find_adb(settings.phone_adb_path)
+            if adb_path:
+                bridge = AndroidBridge(
+                    adb_path=adb_path,
+                    device_serial=settings.phone_serial,
+                    wifi_host=settings.phone_wifi_host,
+                    wifi_port=settings.phone_wifi_port,
+                )
+                self.brain.register_toolkit(AndroidTools(bridge), "_android_tools")
+                logger.info("Android phone control enabled (adb: %s)", adb_path)
+            else:
+                logger.info("ADB not found — Android phone control disabled")
 
         # Dream mode (must be after brain + memory)
         self.dream = DreamMode(memory=self.memory, brain=self.brain)
@@ -425,6 +453,7 @@ class App:
                 tg.create_task(self._awareness_loop(), name="awareness")
                 tg.create_task(self.dream.run(), name="dream")
                 tg.create_task(self.skill_registry.run(), name="skill_registry")
+                tg.create_task(self._prediction_loop(), name="prediction")
                 if self._sound_detector:
                     tg.create_task(
                         self._sound_detection_loop(), name="sound_detect",
@@ -701,3 +730,56 @@ class App:
             await asyncio.sleep(300)  # every 5 min
             self.lifecycle.save_periodic(self.self_model, self.desires)
             logger.debug("Autosave complete")
+
+    async def _prediction_loop(self) -> None:
+        """Active Inference loop: Predict, Compare, Update, Optimize."""
+        await asyncio.sleep(5)  # Let sensors warmup
+        
+        while True:
+            await asyncio.sleep(2.0)
+            
+            # 1. Build WorldState from current sensors
+            user_present = self._person_present
+            
+            # Infer activity level from vision detections/motion
+            activity_level = "low"
+            if user_present:
+                if self.vision.last_activities:
+                    # If we have pose data, assume medium/high
+                    activity_level = "medium"
+                if len(self.vision.last_detections) > 3:
+                     activity_level = "high"
+            
+            state = WorldState(
+                timestamp=time.time(),
+                user_present=user_present,
+                activity_level=activity_level,
+            )
+            
+            # 2. Tick Prediction Engine
+            surprise = self.prediction.tick(state)
+            
+            # 3. Dynamic Optimization (Surprise Minimization)
+            if surprise < 0.2:
+                # Bored/Expected -> Low FPS
+                target_fps = 1.0
+                if self.vision.fps > 2.0:  # Using current fps as proxy if target_fps not exposed property, but vision has set_target_fps method
+                    # Wait, vision.fps is current actual fps. We want to check target but property is not exposed.
+                    # Just set it, it's cheap.
+                    pass
+                if getattr(self.vision, "_target_fps", 30.0) > 2.0:
+                     logger.debug("Boredom (%.2f) -> Low FPS", surprise)
+                target_fps = 1.0
+            elif surprise > 0.8:
+                # Shock/Novelty -> Max FPS
+                target_fps = 30.0
+                if getattr(self.vision, "_target_fps", 30.0) < 20.0:
+                    logger.info("Surprise (%.2f) -> High FPS", surprise)
+                    self._push_thought(f"[surpresa] !? ({surprise:.2f})")
+            else:
+                target_fps = 10.0
+                
+            self.vision.set_target_fps(target_fps)
+            
+            # 4. Trigger Investigations (placeholder)
+

@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     # Camera — use "0" for /dev/video0, or full RTSP URL
     camera_source: str = "0"
-    camera_ip: str = "192.168.1.23"
+    camera_ip: str = "localhost"
     camera_rtsp_port: int = 554
     camera_rtsp_path: str = "/onvif1"
 
@@ -110,6 +110,7 @@ class Settings(BaseSettings):
     reaction_cooldown: float = 5.0
     idle_timeout: float = 30.0
     memory_size: int = 20
+    memory_root: str = str(Path.home() / ".enton" / "memory")
     scene_describe_interval: float = 30.0
 
     # Local VLM
@@ -123,7 +124,8 @@ class Settings(BaseSettings):
     commonsense_collection: str = "enton_commonsense"
 
     # BlobStore (v0.5.0) — external HD binary memory
-    blob_store_root: str = "/media/gabriel-maia/Memory Dump/enton"
+    # Using fallback as default if not provided via env
+    blob_store_root: str = str(Path.home() / ".enton" / "blobs")
     blob_store_fallback: str = str(Path.home() / ".enton" / "blobs")
 
     # Self-Evolution (v0.4.0)
@@ -140,6 +142,13 @@ class Settings(BaseSettings):
     gemini_cli_model: str = "gemini-2.5-flash"
     gemini_cli_timeout: float = 120.0
     gemini_cli_yolo: bool = False
+
+    # Android Phone Control (v0.6.0)
+    phone_adb_path: str = ""  # auto-detect: PATH then ~/Android/Sdk/platform-tools/adb
+    phone_serial: str = ""  # device serial (empty = first connected device)
+    phone_enabled: bool = True
+    phone_wifi_host: str = ""  # phone WiFi/Tailscale IP for wireless ADB
+    phone_wifi_port: int = 5555  # ADB TCP port (default 5555)
 
     # Infrastructure
     qdrant_url: str = "http://localhost:6333"

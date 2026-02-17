@@ -6,16 +6,8 @@ import random
 import re
 import time
 
-import enton.skills.describe_skill as describe_skill  # noqa: F401
-import enton.skills.face_skill as face_skill  # noqa: F401
-import enton.skills.memory_skill as memory_skill  # noqa: F401
-import enton.skills.planner_skill as planner_skill  # noqa: F401
-import enton.skills.ptz_skill  # noqa: F401
-import enton.skills.search_skill  # noqa: F401
-import enton.skills.shell_skill  # noqa: F401
-import enton.skills.system_skill  # noqa: F401
 from enton.action.voice import Voice
-from enton.cognition.brain import Brain
+from enton.cognition.brain import EntonBrain
 from enton.cognition.desires import DesireEngine
 from enton.cognition.fuser import Fuser
 from enton.cognition.persona import REACTION_TEMPLATES, build_system_prompt
@@ -37,8 +29,16 @@ from enton.core.memory import Episode, Memory
 from enton.core.self_model import SelfModel
 from enton.perception.ears import Ears
 from enton.perception.vision import Vision
+from enton.skills.describe_toolkit import DescribeTools
+from enton.skills.face_toolkit import FaceTools
 from enton.skills.greet import GreetSkill
+from enton.skills.memory_toolkit import MemoryTools
+from enton.skills.planner_toolkit import PlannerTools
+from enton.skills.ptz_toolkit import PTZTools
 from enton.skills.react import ReactSkill
+from enton.skills.search_toolkit import SearchTools
+from enton.skills.shell_toolkit import ShellTools
+from enton.skills.system_toolkit import SystemTools
 
 logger = logging.getLogger(__name__)
 
@@ -50,22 +50,38 @@ class App:
         self.memory = Memory()
         self.vision = Vision(settings, self.bus)
         self.ears = Ears(settings, self.bus)
-        self.brain = Brain(settings)
         self.voice = Voice(settings, ears=self.ears)
         self.fuser = Fuser()
-        
+
         # Phase 10 — Living Entity
         self.desires = DesireEngine()
         self.planner = Planner()
         self.lifecycle = Lifecycle()
 
-        # Skills
+        # Agno Toolkits
+        describe_tools = DescribeTools(self.vision)
+        toolkits = [
+            describe_tools,
+            FaceTools(self.vision, self.vision.face_recognizer),
+            MemoryTools(self.memory),
+            PlannerTools(self.planner),
+            PTZTools(),
+            SearchTools(),
+            ShellTools(),
+            SystemTools(),
+        ]
+
+        # Agno-powered Brain with tool calling + fallback chain
+        self.brain = EntonBrain(
+            settings=settings,
+            toolkits=toolkits,
+            knowledge=self.memory.knowledge,
+        )
+        describe_tools._brain = self.brain  # resolve circular dep
+
+        # Event-driven skills (not Agno tools — react to EventBus)
         self.greet_skill = GreetSkill(self.voice, self.memory)
         self.react_skill = ReactSkill(self.voice, self.memory)
-        describe_skill.init(self.vision, self.brain)
-        face_skill.init(self.vision, self.vision.face_recognizer)
-        memory_skill.init(self.memory)
-        planner_skill.init(self.planner)
 
         self._person_present: bool = False
         self._last_person_seen: float = 0
@@ -103,9 +119,10 @@ class App:
 
     def _probe_capabilities(self) -> None:
         sm = self.self_model.senses
-        sm.llm_ready = bool(self.brain._providers)
-        if self.brain._providers:
-            sm.active_providers["llm"] = str(self.brain._primary)
+        sm.llm_ready = bool(self.brain._models)
+        if self.brain._models:
+            mid = getattr(self.brain._models[0], "id", "unknown")
+            sm.active_providers["llm"] = mid
         sm.tts_ready = bool(self.voice._providers)
         if self.voice._providers:
             sm.active_providers["tts"] = str(self.voice._primary)

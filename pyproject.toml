@@ -6,38 +6,43 @@ readme = "README.md"
 authors = [{ name = "Gabriel Maia", email = "gabrielmaialva33@gmail.com" }]
 requires-python = ">=3.12"
 dependencies = [
+    # Agno framework (core + provider extras)
+    "agno[ollama,groq,google,nvidia,openrouter,qdrant]>=1.4,<2.0",
+    # Google Cloud (STT/TTS only — LLM via Agno)
     "google-genai>=1.0",
     "google-cloud-speech>=2.28",
     "google-cloud-texttospeech>=2.22",
+    # NVIDIA Riva (STT/TTS only — LLM via Agno)
     "nvidia-riva-client>=2.17",
-    "huggingface-hub>=0.27",
+    # Perception
     "ultralytics>=8.3",
     "opencv-python>=4.10",
     "sounddevice>=0.5",
     "numpy>=2.0",
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.34",
-    "websockets>=14.0",
-    "pydantic-settings>=2.7",
-    "ollama>=0.4",
-    "kokoro>=0.9",
     "faster-whisper>=1.1",
     "silero-vad>=5.1",
     "insightface>=0.7",
     "onnxruntime-gpu>=1.19",
-    "duckduckgo-search>=7.0",
-    "psutil>=6.0",
-    "mcp>=1.0",
-    "mem0ai>=0.1",
-    "qdrant-client>=1.12",
-    "redis>=5.0",
-    "aio-pika>=9.4",
-    "asyncpg>=0.30",
+    # TTS
+    "kokoro>=0.9",
+    # VLM local (transformers — last resort)
     "transformers>=4.47",
     "accelerate>=1.2",
     "torch>=2.5",
     "qwen-vl-utils>=0.0.8",
+    # System & infra
+    "psutil>=6.0",
+    "redis>=5.0",
+    "aio-pika>=9.4",
+    "asyncpg>=0.30",
+    # API & dashboard
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "websockets>=14.0",
+    "pydantic-settings>=2.7",
+    # Required by Agno
     "openai>=1.50",
+    "sqlalchemy>=2.0",
 ]
 
 [dependency-groups]

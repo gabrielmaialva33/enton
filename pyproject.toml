@@ -30,6 +30,10 @@ dependencies = [
     "accelerate>=1.2",
     "torch>=2.5",
     "qwen-vl-utils>=0.0.8",
+    # Visual Memory & Knowledge (v0.3.0)
+    "open-clip-torch>=2.26",
+    "beautifulsoup4>=4.12",
+    "httpx>=0.27",
     # System & infra
     "psutil>=6.0",
     "redis>=5.0",

@@ -79,6 +79,14 @@ class SoundEvent(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class SceneChangeEvent(Event):
+    """Emitted when visual scene changes significantly."""
+    camera_id: str = "main"
+    new_objects: list[str] = field(default_factory=list)
+    removed_objects: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
 class SystemEvent(Event):
     kind: str = ""  # startup, shutdown, error, camera_lost, etc.
     detail: str = ""

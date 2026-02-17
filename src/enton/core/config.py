@@ -102,6 +102,12 @@ class Settings(BaseSettings):
     ollama_vlm_model: str = "qwen2.5-vl:7b"
     vlm_transformers_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
 
+    # Visual Memory (v0.3.0)
+    siglip_model: str = "ViT-B-16-SigLIP"
+    siglip_pretrained: str = "webli"
+    frames_dir: str = str(Path.home() / ".enton" / "frames")
+    commonsense_collection: str = "enton_commonsense"
+
     # Infrastructure
     qdrant_url: str = "http://localhost:6333"
     redis_url: str = "redis://localhost:6379"

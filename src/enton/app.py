@@ -7,6 +7,7 @@ import random
 import re
 import time
 from collections import deque
+from pathlib import Path
 
 import numpy as np  # noqa: TC002 — used at runtime
 
@@ -19,6 +20,7 @@ from enton.cognition.metacognition import MetaCognitiveEngine
 from enton.cognition.persona import REACTION_TEMPLATES, build_system_prompt
 from enton.cognition.planner import Planner
 from enton.core.awareness import AwarenessStateMachine
+from enton.core.commonsense import CommonsenseKB
 from enton.core.config import settings
 from enton.core.events import (
     ActivityEvent,
@@ -26,14 +28,18 @@ from enton.core.events import (
     EmotionEvent,
     EventBus,
     FaceEvent,
+    SceneChangeEvent,
     SoundEvent,
     SpeechRequest,
     SystemEvent,
     TranscriptionEvent,
 )
+from enton.core.knowledge_crawler import KnowledgeCrawler
 from enton.core.lifecycle import Lifecycle
 from enton.core.memory import Episode, Memory
+from enton.core.memory_tiers import MemoryTiers
 from enton.core.self_model import SelfModel
+from enton.core.visual_memory import VisualMemory
 from enton.perception.ears import Ears
 from enton.perception.vision import Vision
 from enton.skills._shell_state import ShellState
@@ -41,6 +47,7 @@ from enton.skills.describe_toolkit import DescribeTools
 from enton.skills.face_toolkit import FaceTools
 from enton.skills.file_toolkit import FileTools
 from enton.skills.greet import GreetSkill
+from enton.skills.knowledge_toolkit import KnowledgeTools
 from enton.skills.memory_toolkit import MemoryTools
 from enton.skills.planner_toolkit import PlannerTools
 from enton.skills.ptz_toolkit import PTZTools
@@ -48,6 +55,7 @@ from enton.skills.react import ReactSkill
 from enton.skills.search_toolkit import SearchTools
 from enton.skills.shell_toolkit import ShellTools
 from enton.skills.system_toolkit import SystemTools
+from enton.skills.visual_memory_toolkit import VisualMemoryTools
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +81,24 @@ class App:
         self.awareness = AwarenessStateMachine()
         self.metacognition = MetaCognitiveEngine()
 
+        # v0.3.0 — Memory Tiers
+        self.visual_memory = VisualMemory(
+            qdrant_url=settings.qdrant_url,
+            siglip_model=settings.siglip_model,
+            siglip_pretrained=settings.siglip_pretrained,
+            frames_dir=Path(settings.frames_dir),
+        )
+        self.knowledge_crawler = KnowledgeCrawler(
+            qdrant_url=settings.qdrant_url,
+        )
+        self.commonsense = CommonsenseKB(qdrant_url=settings.qdrant_url)
+        self.memory_tiers = MemoryTiers(
+            memory=self.memory,
+            visual_memory=self.visual_memory,
+            knowledge=self.knowledge_crawler,
+            commonsense=self.commonsense,
+        )
+
         # Agno Toolkits
         shell_state = ShellState()
         describe_tools = DescribeTools(self.vision)
@@ -86,6 +112,8 @@ class App:
             SearchTools(),
             ShellTools(shell_state),
             SystemTools(),
+            VisualMemoryTools(self.visual_memory),
+            KnowledgeTools(self.knowledge_crawler),
         ]
 
         # Agno-powered Brain with tool calling + fallback chain
@@ -95,6 +123,7 @@ class App:
             knowledge=self.memory.knowledge,
         )
         describe_tools._brain = self.brain  # resolve circular dep
+        self.knowledge_crawler._brain = self.brain
 
         # Dream mode (must be after brain + memory)
         self.dream = DreamMode(memory=self.memory, brain=self.brain)
@@ -166,13 +195,27 @@ class App:
         self.bus.on(SoundEvent, self._on_sound)
         self.bus.on(SpeechRequest, self._on_speech_request)
         self.bus.on(SystemEvent, self._on_system_event)
+        self.bus.on(SceneChangeEvent, self._on_scene_change)
 
     def _attach_skills(self) -> None:
         self.greet_skill.attach(self.bus)
         self.react_skill.attach(self.bus)
 
+    async def _on_scene_change(self, event: SceneChangeEvent) -> None:
+        """Embed keyframe on significant scene change."""
+        cam = self.vision.cameras.get(event.camera_id)
+        if cam is None or cam.last_frame is None:
+            return
+        detections = [d.label for d in (cam.last_detections or [])]
+        await self.visual_memory.remember_scene(
+            cam.last_frame, detections, event.camera_id,
+        )
+
     async def _on_detection(self, event: DetectionEvent) -> None:
         self.self_model.record_detection(event.label)
+        self.memory_tiers.update_object_location(
+            event.label, event.camera_id, event.bbox, event.confidence,
+        )
         if event.label == "person":
             self._person_present = True
             self._last_person_seen = time.time()
@@ -268,6 +311,9 @@ class App:
         system += f"\n\nCONTEXTO VISUAL ATUAL: {scene_desc}"
         system += f"\nAWARENESS: {self.awareness.summary()}"
         system += f"\nMETACOGNITION: {self.metacognition.introspect()}"
+        tier_ctx = self.memory_tiers.context_string()
+        if tier_ctx:
+            system += f"\nMEMORY TIERS: {tier_ctx}"
         system += "\nVocê tem acesso a ferramentas. Use-as se necessário para responder."
 
         self._push_thought(f"[ouviu] {event.text[:80]}")

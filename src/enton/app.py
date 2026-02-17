@@ -163,16 +163,20 @@ class App:
         self.brain.register_toolkit(ai_delegate, "_ai_delegate")
 
         # v0.6.0 — Android Phone Control (USB + WiFi + 4G via Tailscale)
+        self._phone_bridge: AndroidBridge | None = None
         if settings.phone_enabled:
             adb_path = find_adb(settings.phone_adb_path)
             if adb_path:
-                bridge = AndroidBridge(
+                self._phone_bridge = AndroidBridge(
                     adb_path=adb_path,
                     device_serial=settings.phone_serial,
                     wifi_host=settings.phone_wifi_host,
                     wifi_port=settings.phone_wifi_port,
                 )
-                self.brain.register_toolkit(AndroidTools(bridge), "_android_tools")
+                self.brain.register_toolkit(
+                    AndroidTools(self._phone_bridge, brain=self.brain),
+                    "_android_tools",
+                )
                 logger.info("Android phone control enabled (adb: %s)", adb_path)
             else:
                 logger.info("ADB not found — Android phone control disabled")
@@ -462,6 +466,10 @@ class App:
                     tg.create_task(self._metrics.run(), name="metrics")
                 if self.viewer:
                     tg.create_task(self.viewer.run(), name="viewer")
+                if self._phone_bridge:
+                    tg.create_task(
+                        self._phone_monitor_loop(), name="phone_monitor",
+                    )
         finally:
             # Graceful shutdown — persist state
             self.lifecycle.on_shutdown(self.self_model, self.desires)
@@ -782,4 +790,102 @@ class App:
             self.vision.set_target_fps(target_fps)
             
             # 4. Trigger Investigations (placeholder)
+
+    # ------------------------------------------------------------------
+    # Phone Monitor (OpenClaw-inspired — Enton lives on the phone)
+    # ------------------------------------------------------------------
+
+    async def _phone_monitor_loop(self) -> None:
+        """24/7 phone monitoring — Enton watches Gabriel's digital life.
+
+        Inspired by OpenClaw/PhoneClaw: periodic polling of phone state,
+        smart notification filtering, location tracking, battery alerts.
+        """
+        await asyncio.sleep(15)  # Let everything else initialize first
+        bridge = self._phone_bridge
+        if not bridge:
+            return
+
+        # Auto-connect (USB → WiFi fallback)
+        status = await bridge.auto_connect()
+        logger.info("Phone monitor: %s", status)
+        if "ERRO" in status:
+            logger.warning("Phone monitor: device not reachable, retrying later")
+
+        last_notif_set: set[str] = set()
+        last_battery = 100
+        last_location = ""
+        poll_interval = 60.0  # seconds between polls
+
+        while True:
+            await asyncio.sleep(poll_interval)
+
+            try:
+                if not await bridge.is_connected():
+                    # Try auto-reconnect
+                    await bridge.auto_connect()
+                    if not await bridge.is_connected():
+                        continue
+
+                # --- Battery monitoring ---
+                info = await bridge.device_info()
+                bat_str = info.get("battery", "0%").replace("%", "")
+                try:
+                    bat = int(bat_str)
+                except ValueError:
+                    bat = -1
+
+                if 0 < bat <= 15 and last_battery > 15:
+                    self._push_thought(f"[phone] Bateria baixa: {bat}%!")
+                    if not self.voice.is_speaking:
+                        await self.voice.say(
+                            f"Gabriel, bateria do celular tá em {bat}%. "
+                            "Coloca pra carregar antes que morra!",
+                        )
+                last_battery = bat
+
+                # --- New notifications ---
+                notifs = await bridge.notifications(10)
+                current_set = {
+                    f"{n['app']}:{n['title']}" for n in notifs
+                }
+                new_notifs = current_set - last_notif_set
+                last_notif_set = current_set
+
+                if new_notifs and not self.voice.is_speaking:
+                    # Filter interesting notifications
+                    important_apps = {
+                        "com.whatsapp", "org.telegram",
+                        "com.google.android.gm", "com.android.phone",
+                    }
+                    for n in notifs:
+                        key = f"{n['app']}:{n['title']}"
+                        if key in new_notifs and any(
+                            app in n["app"] for app in important_apps
+                        ):
+                            self._push_thought(
+                                f"[phone] {n['app']}: {n['title']}",
+                            )
+                            logger.info(
+                                "Phone notification: [%s] %s: %s",
+                                n["app"], n["title"], n["text"][:50],
+                            )
+
+                # --- Location tracking ---
+                loc = await bridge.location()
+                coords = f"{loc.get('lat', '')},{loc.get('lon', '')}"
+                if coords != ",," and coords != last_location:
+                    if last_location:
+                        logger.info("Phone location changed: %s", coords)
+                    last_location = coords
+
+                # --- Memory: store phone state ---
+                self.memory.learn_about_user(
+                    f"Celular: {info.get('battery', '?')} bat, "
+                    f"GPS {coords}, {len(notifs)} notif",
+                )
+
+            except Exception:
+                logger.debug("Phone monitor error", exc_info=True)
+                await asyncio.sleep(30)
 

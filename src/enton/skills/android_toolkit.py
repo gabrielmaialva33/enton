@@ -20,11 +20,16 @@ logger = logging.getLogger(__name__)
 
 
 class AndroidTools(Toolkit):
-    """Controle total do celular Android via ADB — sem root."""
+    """Controle total do celular Android via ADB — sem root.
 
-    def __init__(self, bridge: AndroidBridge) -> None:
+    Inspirado em OpenClaw/PhoneClaw: visao de tela via VLM, automacao
+    cross-app, monitoramento 24/7 da vida digital do usuario.
+    """
+
+    def __init__(self, bridge: AndroidBridge, brain: object | None = None) -> None:
         super().__init__(name="android_tools")
         self._bridge = bridge
+        self._brain = brain  # for VLM screen understanding
         self.register(self.phone_status)
         self.register(self.phone_shell)
         self.register(self.phone_screenshot)
@@ -40,7 +45,7 @@ class AndroidTools(Toolkit):
         self.register(self.phone_push_file)
         self.register(self.phone_pull_file)
         self.register(self.phone_info)
-        # v0.6.1 — Life Access + WiFi
+        # v0.6.1 — Life Access + WiFi + VLM Vision
         self.register(self.phone_wifi_setup)
         self.register(self.phone_wifi_connect)
         self.register(self.phone_network_info)
@@ -51,6 +56,8 @@ class AndroidTools(Toolkit):
         self.register(self.phone_location)
         self.register(self.phone_call_log)
         self.register(self.phone_calendar)
+        self.register(self.phone_see_screen)
+        self.register(self.phone_auto_connect)
 
     # ------------------------------------------------------------------
     # Status & Info
@@ -435,5 +442,58 @@ class AndroidTools(Toolkit):
                 loc = f" @ {e['location']}" if e.get("location") else ""
                 lines.append(f"  - {e['title']}{loc}")
             return f"Eventos ({len(events)}):\n" + "\n".join(lines)
+        except Exception as e:
+            return f"Erro: {e}"
+
+    # ------------------------------------------------------------------
+    # VLM Vision + Auto-connect (OpenClaw-inspired)
+    # ------------------------------------------------------------------
+
+    async def phone_see_screen(self, question: str = "") -> str:
+        """Tira screenshot do celular e usa VLM pra entender o que esta na tela.
+
+        Estilo OpenClaw/PhoneClaw: visao de tela com AI. Pode responder
+        perguntas sobre o que esta exibido, identificar apps abertos,
+        ler textos, e sugerir proximas acoes.
+
+        Args:
+            question: Pergunta sobre a tela (ex: 'que app esta aberto?'). Se vazio, descreve a tela.
+        """
+        try:
+            png_data = await self._bridge.screenshot()
+            if not png_data:
+                return "Erro: screenshot vazio — celular conectado?"
+
+            # Try VLM if brain is available
+            if self._brain and hasattr(self._brain, "describe_scene"):
+                prompt = question or "Descreva o que esta na tela do celular."
+                desc = await self._brain.describe_scene(
+                    png_data,
+                    system=(
+                        "Voce esta olhando a tela de um celular Android. "
+                        "Descreva o que ve: app aberto, conteudo na tela, "
+                        "botoes visiveis, notificacoes. Seja breve e util."
+                    ),
+                    prompt=prompt,
+                )
+                if desc:
+                    return f"[VLM] {desc}"
+
+            # Fallback: just report screenshot size + basic info
+            return (
+                f"Screenshot capturado ({len(png_data):,} bytes). "
+                "VLM nao disponivel para analise visual."
+            )
+        except Exception as e:
+            return f"Erro: {e}"
+
+    async def phone_auto_connect(self) -> str:
+        """Tenta conectar ao celular automaticamente (USB -> WiFi -> Tailscale).
+
+        Args:
+            (nenhum)
+        """
+        try:
+            return await self._bridge.auto_connect()
         except Exception as e:
             return f"Erro: {e}"

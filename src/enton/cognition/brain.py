@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
@@ -67,6 +67,7 @@ class EntonBrain:
         )
 
         self._dynamic_toolkits: dict[str, Toolkit] = {}
+        self._error_handler: Any = None  # ErrorLoopBack (set via set_error_handler)
 
         names = [getattr(m, "id", str(m)) for m in self._models]
         cli_names = [p.id for p in self._cli_providers if p.available]
@@ -249,11 +250,16 @@ class EntonBrain:
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
         return text.strip()
 
+    def set_error_handler(self, handler: Any) -> None:
+        """Attach an ErrorLoopBack handler for error-aware retries."""
+        self._error_handler = handler
+
     async def think(self, prompt: str, *, system: str = "") -> str:
         """Run prompt through agent with full tool calling + fallback.
 
         Fallback order:
         1. Agno models (Ollama → NVIDIA → HF → Groq → OpenRouter → AIMLAPI → Google)
+           - With error loop-back: retry same provider with error context before falling back
         2. CLI providers (Claude Code → Gemini CLI) — subprocess, no tool calling
         """
         # Update instructions if system override provided
@@ -264,16 +270,32 @@ class EntonBrain:
         try:
             # Tier 1: Agno models (full tool calling)
             for model in self._models:
+                mid = getattr(model, "id", "?")
+                self._agent.model = model
+
+                # With error loop-back: retry same provider with error context
+                if self._error_handler:
+                    result, error = await self._error_handler.execute(
+                        self._arun_safe, prompt,
+                        provider_id=mid,
+                    )
+                    if result:
+                        return result
+                    if error:
+                        logger.warning(
+                            "Brain [%s] failed after loop-back: %s",
+                            mid, error.message[:80],
+                        )
+                    continue
+
+                # Without error handler: original behavior
                 try:
-                    self._agent.model = model
                     response = await self._agent.arun(prompt)
                     content = response.content or ""
                     content = self._clean(content)
-                    mid = getattr(model, "id", "?")
                     logger.info("Brain [%s]: %s", mid, content[:80])
                     return content
                 except Exception:
-                    mid = getattr(model, "id", "?")
                     logger.warning("Brain [%s] failed, trying next", mid)
 
             # Tier 2: CLI providers (subprocess, text-only — no tool calling)
@@ -291,6 +313,15 @@ class EntonBrain:
                 self._agent.instructions = original_instructions
 
         return "Erro: todos os providers falharam."
+
+    async def _arun_safe(self, prompt: str) -> str:
+        """Wrapper for agent.arun() that returns clean text or raises."""
+        response = await self._agent.arun(prompt)
+        content = response.content or ""
+        content = self._clean(content)
+        mid = getattr(self._agent.model, "id", "?")
+        logger.info("Brain [%s]: %s", mid, content[:80])
+        return content
 
     async def think_agent(self, prompt: str, *, system: str = "") -> str:
         """Alias for think() — Agno handles tool calling natively."""

@@ -22,19 +22,3 @@ class TTSProvider(Protocol):
         yield np.array([])  # pragma: no cover
 
 
-@runtime_checkable
-class LLMProvider(Protocol):
-    async def generate(
-        self, prompt: str, *, system: str = "", history: list[dict] | None = None
-    ) -> str: ...
-    async def generate_with_image(
-        self, prompt: str, image: bytes, *, system: str = "", mime_type: str = "image/jpeg"
-    ) -> str: ...
-    async def generate_with_tools(
-        self,
-        prompt: str,
-        tools: list[dict],
-        *,
-        system: str = "",
-        history: list[dict] | None = None,
-    ) -> dict: ...  # Returns {"content": str, "tool_calls": list}

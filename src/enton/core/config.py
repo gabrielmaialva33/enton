@@ -113,6 +113,16 @@ class Settings(BaseSettings):
     forge_sandbox_timeout: float = 10.0
     forge_max_retries: int = 1
 
+    # CLI AI Providers (subprocess fallback)
+    claude_code_enabled: bool = True
+    claude_code_model: str = "sonnet"
+    claude_code_timeout: float = 120.0
+    claude_code_max_turns: int = 10
+    gemini_cli_enabled: bool = True
+    gemini_cli_model: str = "gemini-2.5-flash"
+    gemini_cli_timeout: float = 120.0
+    gemini_cli_yolo: bool = False
+
     # Infrastructure
     qdrant_url: str = "http://localhost:6333"
     redis_url: str = "redis://localhost:6379"
@@ -149,7 +159,20 @@ class Settings(BaseSettings):
 
     @property
     def yolo_model_path(self) -> Path:
-        return Path(self.yolo_model)
+        return self._resolve_engine(self.yolo_model)
+
+    @property
+    def yolo_pose_model_path(self) -> Path:
+        return self._resolve_engine(self.yolo_pose_model)
+
+    @staticmethod
+    def _resolve_engine(model: str) -> Path:
+        """Return .engine path if it exists, otherwise the original .pt path."""
+        pt = Path(model)
+        engine = pt.with_suffix(".engine")
+        if engine.exists():
+            return engine
+        return pt
 
 
 settings: Settings = Settings()

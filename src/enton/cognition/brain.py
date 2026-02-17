@@ -4,7 +4,9 @@ Wraps an Agno Agent that handles tool calling, memory, and knowledge
 natively. Provider fallback is implemented by swapping agent.model
 on failure (Agno doesn't have built-in fallback).
 
-Fallback order: LOCAL → NVIDIA(×4) → HuggingFace → Groq → OpenRouter → AIMLAPI → Google
+Fallback order:
+  LOCAL → NVIDIA(×4) → HuggingFace → Groq → OpenRouter → AIMLAPI → Google
+  → Claude Code CLI → Gemini CLI  (last resort — subprocess)
 """
 from __future__ import annotations
 
@@ -15,10 +17,9 @@ from typing import TYPE_CHECKING
 
 from agno.agent import Agent
 from agno.models.ollama import Ollama
-from agno.storage.sqlite import SqliteStorage
 
 if TYPE_CHECKING:
-    from agno.knowledge import AgentKnowledge
+    from agno.knowledge import Knowledge as AgentKnowledge
     from agno.models.base import Model
     from agno.tools import Toolkit
 
@@ -42,6 +43,7 @@ class EntonBrain:
         self._settings = settings
         self._models = self._init_models(settings)
         self._vision_models = self._init_vision_models(settings)
+        self._cli_providers = self._init_cli_providers(settings)
         self._vlm = None  # QwenVL transformers (last resort)
 
         Path.home().joinpath(".enton").mkdir(parents=True, exist_ok=True)
@@ -51,10 +53,7 @@ class EntonBrain:
             model=self._models[0] if self._models else Ollama(id="qwen2.5:14b"),
             tools=toolkits,
             instructions=instructions,
-            storage=SqliteStorage(
-                table_name="agent_sessions",
-                db_file=_DB_PATH,
-            ),
+            db=_DB_PATH,
             knowledge=knowledge,
             search_knowledge=knowledge is not None,
             add_history_to_messages=True,
@@ -69,7 +68,9 @@ class EntonBrain:
         self._dynamic_toolkits: dict[str, Toolkit] = {}
 
         names = [getattr(m, "id", str(m)) for m in self._models]
-        logger.info("Brain models: [%s]", ", ".join(names))
+        cli_names = [p.id for p in self._cli_providers if p.available]
+        all_names = names + cli_names
+        logger.info("Brain models: [%s]", ", ".join(all_names))
 
     # ------------------------------------------------------------------
     # Model initialization
@@ -152,6 +153,40 @@ class EntonBrain:
         return models
 
     @staticmethod
+    def _init_cli_providers(s: Settings) -> list:
+        """Build CLI-based AI providers (last resort fallback)."""
+        from enton.providers.claude_code import ClaudeCodeProvider
+        from enton.providers.gemini_cli import GeminiCliProvider
+
+        providers = []
+
+        if s.claude_code_enabled:
+            p = ClaudeCodeProvider(
+                model=s.claude_code_model,
+                timeout=s.claude_code_timeout,
+                max_turns=s.claude_code_max_turns,
+            )
+            if p.available:
+                providers.append(p)
+                logger.info("CLI provider: Claude Code (%s)", p.id)
+            else:
+                logger.debug("Claude Code CLI not installed")
+
+        if s.gemini_cli_enabled:
+            p = GeminiCliProvider(
+                model=s.gemini_cli_model,
+                timeout=s.gemini_cli_timeout,
+                yolo=s.gemini_cli_yolo,
+            )
+            if p.available:
+                providers.append(p)
+                logger.info("CLI provider: Gemini CLI (%s)", p.id)
+            else:
+                logger.debug("Gemini CLI not installed")
+
+        return providers
+
+    @staticmethod
     def _init_vision_models(s: Settings) -> list[Model]:
         """Models that support vision (image input)."""
         models: list[Model] = []
@@ -214,13 +249,19 @@ class EntonBrain:
         return text.strip()
 
     async def think(self, prompt: str, *, system: str = "") -> str:
-        """Run prompt through agent with full tool calling + fallback."""
+        """Run prompt through agent with full tool calling + fallback.
+
+        Fallback order:
+        1. Agno models (Ollama → NVIDIA → HF → Groq → OpenRouter → AIMLAPI → Google)
+        2. CLI providers (Claude Code → Gemini CLI) — subprocess, no tool calling
+        """
         # Update instructions if system override provided
         original_instructions = self._agent.instructions
         if system:
             self._agent.instructions = [system]
 
         try:
+            # Tier 1: Agno models (full tool calling)
             for model in self._models:
                 try:
                     self._agent.model = model
@@ -233,6 +274,17 @@ class EntonBrain:
                 except Exception:
                     mid = getattr(model, "id", "?")
                     logger.warning("Brain [%s] failed, trying next", mid)
+
+            # Tier 2: CLI providers (subprocess, text-only — no tool calling)
+            for cli in self._cli_providers:
+                try:
+                    content = await cli.generate(prompt, system=system)
+                    if content:
+                        content = self._clean(content)
+                        logger.info("Brain CLI [%s]: %s", cli.id, content[:80])
+                        return content
+                except Exception:
+                    logger.warning("Brain CLI [%s] failed, trying next", cli.id)
         finally:
             if system:
                 self._agent.instructions = original_instructions
@@ -323,3 +375,8 @@ class EntonBrain:
     def agent(self) -> Agent:
         """Direct access to Agno Agent (for session_state, etc.)."""
         return self._agent
+
+    @property
+    def cli_providers(self) -> list:
+        """CLI-based AI providers (Claude Code, Gemini CLI)."""
+        return self._cli_providers

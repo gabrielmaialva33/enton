@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import time
-from collections import deque
 from pathlib import Path
 
 import cv2
@@ -60,9 +59,6 @@ class Overlay:
         self._font_big = _load_font(_FONT_BOLD, int(font_size * 1.5))
         self._font_small = _load_font(_FONT_REGULAR, int(font_size * 0.7))
         self._boot = time.time()
-        # sparkline history
-        self._fps_history: deque[float] = deque(maxlen=60)
-        self._det_history: deque[int] = deque(maxlen=60)
         self._scan_y = 0
 
     # ---- neon glow on skeleton ----
@@ -152,52 +148,6 @@ class Overlay:
             )
         return frame
 
-    # ---- sparkline graph ----
-
-    def _draw_sparkline(
-        self,
-        draw: ImageDraw.Draw,
-        data: deque,
-        x: int, y: int, w: int, h: int,
-        color: tuple[int, int, int, int],
-        label: str,
-        value_fmt: str,
-    ) -> int:
-        """Draw a mini sparkline graph. Returns y offset after drawing."""
-        if not data:
-            return y
-
-        # Label
-        draw.text((x, y), label, font=self._font_small, fill=(150, 160, 170, 200))
-        val = data[-1] if data else 0
-        val_str = value_fmt.format(val)
-        draw.text((x + w - 50, y), val_str, font=self._font_small, fill=color)
-        y += int(self._size * 0.65)
-
-        # Graph background
-        draw.rounded_rectangle([(x, y), (x + w, y + h)], radius=4, fill=(30, 30, 40, 150))
-
-        # Plot line
-        max_val = max(data) if data else 1
-        if max_val == 0:
-            max_val = 1
-        points = []
-        n = len(data)
-        for i, v in enumerate(data):
-            px = x + int(i / max(n - 1, 1) * w)
-            py = y + h - int(v / max_val * (h - 4)) - 2
-            points.append((px, py))
-
-        if len(points) >= 2:
-            # Fill area under curve
-            fill_points = list(points) + [(points[-1][0], y + h), (points[0][0], y + h)]
-            fill_color = (color[0], color[1], color[2], 40)
-            draw.polygon(fill_points, fill=fill_color)
-            # Line
-            draw.line(points, fill=color, width=2)
-
-        return y + h + 6
-
     # ---- main HUD ----
 
     def draw_hud(
@@ -209,98 +159,58 @@ class Overlay:
         detections: dict[str, int],
         activities: list[tuple[str, tuple[int, int, int]]],
     ) -> np.ndarray:
-        """Draw the full cyberpunk HUD panel."""
+        """Draw a clean, minimal cyberpunk HUD."""
         fh, fw = frame.shape[:2]
-        self._fps_history.append(fps)
-        self._det_history.append(n_objects)
 
-        uptime = time.time() - self._boot
-        m, s = divmod(int(uptime), 60)
-
-        # Panel dimensions
         padding = 14
-        line_h = self._size + 6
-        big_line_h = int(self._size * 1.5) + 8
-        graph_h = 40
-        panel_w = 420
+        line_h = self._size + 4
+        panel_w = 300
 
-        # Calculate content height
-        content_h = padding
-        content_h += big_line_h  # title
-        content_h += line_h  # status line
-        content_h += line_h  # uptime
-        content_h += 8  # spacer
-        content_h += int(self._size * 0.65) + graph_h + 6  # fps graph
-        content_h += int(self._size * 0.65) + graph_h + 6  # det graph
-        if detections:
-            content_h += 8 + min(len(detections), 6) * line_h
-        if activities:
-            content_h += 8 + min(len(activities), 4) * line_h
+        # Content: title + status + top 3 detections
+        top_dets = sorted(detections.items(), key=lambda x: -x[1])[:3]
+        content_h = padding + int(self._size * 1.5) + 6 + line_h
+        if top_dets:
+            content_h += 6 + len(top_dets) * (line_h - 2)
         content_h += padding
 
-        # Create RGBA panel
         panel = Image.new("RGBA", (panel_w, content_h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(panel)
 
-        # Background with gradient-ish effect
         draw.rounded_rectangle(
             [(0, 0), (panel_w - 1, content_h - 1)],
-            radius=14,
-            fill=(10, 12, 18, 200),
-            outline=(0, 255, 120, 120),
-            width=2,
+            radius=12,
+            fill=(10, 12, 18, 170),
+            outline=(0, 255, 120, 80),
+            width=1,
         )
-        # Inner glow line at top
-        draw.line([(14, 2), (panel_w - 14, 2)], fill=(0, 255, 120, 60), width=1)
 
         y = padding
 
-        # Title
-        draw.text((padding + 1, y + 1), "ENTON VISION", font=self._font_big, fill=(0, 0, 0, 180))
-        draw.text((padding, y), "ENTON VISION", font=self._font_big, fill=(0, 255, 120, 240))
-        y += big_line_h
+        # Title + FPS inline
+        draw.text((padding, y), "ENTON", font=self._font_big, fill=(0, 255, 120, 230))
+        fps_text = f"{fps:.0f} fps"
+        fps_bbox = self._font_medium.getbbox(fps_text)
+        draw.text((panel_w - padding - (fps_bbox[2] - fps_bbox[0]), y + 8),
+                  fps_text, font=self._font_medium, fill=(80, 90, 100, 180))
+        y += int(self._size * 1.5) + 6
 
-        # Status
-        status = f" {n_objects} objs   {n_persons} pessoa(s)"
-        draw.text((padding, y), status, font=self._font_bold, fill=(0, 230, 255, 220))
+        # Status line
+        parts = []
+        if n_persons:
+            parts.append(f"{n_persons} pessoa{'s' if n_persons > 1 else ''}")
+        if n_objects - n_persons > 0:
+            parts.append(f"{n_objects - n_persons} obj")
+        status = "  ".join(parts) if parts else "scanning..."
+        draw.text((padding, y), status, font=self._font, fill=(0, 210, 230, 200))
         y += line_h
 
-        # Uptime + timestamp
-        ts = time.strftime("%H:%M:%S")
-        draw.text((padding, y), f" {m:02d}:{s:02d} uptime  |  {ts}",
-                  font=self._font_small, fill=(100, 110, 120, 180))
-        y += line_h + 8
-
-        # FPS sparkline
-        gw = panel_w - padding * 2
-        y = self._draw_sparkline(draw, self._fps_history, padding, y, gw, graph_h,
-                                 (0, 255, 120, 220), "FPS", "{:.0f}")
-
-        # Detection sparkline
-        y = self._draw_sparkline(draw, self._det_history, padding, y, gw, graph_h,
-                                 (0, 200, 255, 220), "DETECTIONS", "{:.0f}")
-
-        # Detection list
-        if detections:
-            y += 2
-            for name, count in sorted(detections.items(), key=lambda x: -x[1])[:6]:
-                bar_w = min(int(count / max(detections.values()) * (gw - 120)), gw - 120)
-                draw.rounded_rectangle(
-                    [(padding + 100, y + 4), (padding + 100 + bar_w, y + line_h - 4)],
-                    radius=3, fill=(0, 255, 120, 50),
-                )
-                draw.text((padding + 4, y), f"{name}", font=self._font_medium, fill=(180, 200, 220, 200))
-                draw.text((padding + 100 + bar_w + 6, y + 2), f"{count}",
-                          font=self._font_small, fill=(0, 255, 120, 200))
-                y += line_h
-
-        # Activities
-        if activities:
-            y += 2
-            for act_label, (b, g, r) in activities[:4]:
-                draw.text((padding + 4, y), f" {act_label}",
-                          font=self._font, fill=(r, g, b, 230))
-                y += line_h
+        # Top detections (compact)
+        if top_dets:
+            y += 4
+            for name, count in top_dets:
+                text = f"{name} {count}" if count > 1 else name
+                draw.text((padding + 2, y), text, font=self._font_small, fill=(120, 130, 140, 170))
+                y += line_h - 4
 
         panel_np = np.array(panel)
         frame = _composite(frame, panel_np, 10, 10)

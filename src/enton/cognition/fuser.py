@@ -7,7 +7,10 @@ more contextual.
 """
 from __future__ import annotations
 
-from enton.core.events import ActivityEvent, DetectionEvent, EmotionEvent
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from enton.core.events import ActivityEvent, DetectionEvent, EmotionEvent
 
 
 class Fuser:

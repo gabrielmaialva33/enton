@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import random
 import time
+from typing import TYPE_CHECKING
 
-from enton.action.voice import Voice
 from enton.cognition.persona import REACTION_TEMPLATES
 from enton.core.events import DetectionEvent, Event, EventBus
 from enton.core.memory import Episode, Memory
+
+if TYPE_CHECKING:
+    from enton.action.voice import Voice
 
 
 class GreetSkill:

@@ -104,9 +104,12 @@ def classify(kpts) -> tuple[str, tuple[int, int, int]]:
     # --- arms crossed ---
     if has_arms and shoulder_width > 0:
         lw, rw = _xy(kpts, L_WRIST), _xy(kpts, R_WRIST)
-        if lw[0] > mid_shoulder[0] and rw[0] < mid_shoulder[0]:
-            if abs(lw[1] - rw[1]) < shoulder_width * 0.5:
-                tags.append(("Bracos cruzados", (200, 100, 255)))
+        if (
+            lw[0] > mid_shoulder[0]
+            and rw[0] < mid_shoulder[0]
+            and abs(lw[1] - rw[1]) < shoulder_width * 0.5
+        ):
+            tags.append(("Bracos cruzados", (200, 100, 255)))
 
     if tags:
         return " | ".join(t[0] for t in tags), tags[0][1]

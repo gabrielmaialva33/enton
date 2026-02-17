@@ -90,8 +90,8 @@ class Ears:
             repo_or_dir="snakers4/silero-vad", model="silero_vad", force_reload=False
         )
 
-        WINDOW_SIZE_SAMPLES = 512
-        PRE_BUFFER_CHUNKS = 6  # ~200ms of audio before speech trigger
+        window_size_samples = 512
+        pre_buffer_chunks = 6  # ~200ms of audio before speech trigger
 
         logger.info("Ears listening (sample_rate=%d, VAD enabled)", self._settings.sample_rate)
 
@@ -107,12 +107,12 @@ class Ears:
         pre_buffer: list[np.ndarray] = []  # rolling buffer for pre-speech context
         is_speaking = False
         silence_counter = 0
-        SILENCE_THRESHOLD = 20  # ~0.6s of silence to end speech
-        MAX_BUFFER = 500  # ~16s max
+        silence_threshold = 20  # ~0.6s of silence to end speech
+        max_buffer = 500  # ~16s max
 
         stream = sd.InputStream(
             samplerate=self._settings.sample_rate,
-            blocksize=WINDOW_SIZE_SAMPLES,
+            blocksize=window_size_samples,
             channels=1,
             dtype=np.float32,
             callback=_callback,
@@ -143,7 +143,7 @@ class Ears:
                 elif is_speaking:
                     buffer.append(chunk)
                     silence_counter += 1
-                    if silence_counter > SILENCE_THRESHOLD:
+                    if silence_counter > silence_threshold:
                         is_speaking = False
                         full_audio = np.concatenate(buffer)
                         buffer.clear()
@@ -157,11 +157,11 @@ class Ears:
                 else:
                     # Not speaking — maintain rolling pre-buffer
                     pre_buffer.append(chunk)
-                    if len(pre_buffer) > PRE_BUFFER_CHUNKS:
+                    if len(pre_buffer) > pre_buffer_chunks:
                         pre_buffer.pop(0)
 
                 # Safety valve
-                if len(buffer) > MAX_BUFFER:
+                if len(buffer) > max_buffer:
                     logger.warning("Audio buffer overflow, flushing")
                     is_speaking = False
                     full_audio = np.concatenate(buffer)

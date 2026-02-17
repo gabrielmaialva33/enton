@@ -5,7 +5,7 @@ natively. Provider fallback is implemented by swapping agent.model
 on failure (Agno doesn't have built-in fallback).
 
 Fallback order:
-  LOCAL → NVIDIA(×4) → HuggingFace → Groq → OpenRouter → AIMLAPI → Google
+  LOCAL → NVIDIA(x4) → HuggingFace → Groq → OpenRouter → AIMLAPI → Google
   → Claude Code CLI → Gemini CLI  (last resort — subprocess)
 """
 from __future__ import annotations
@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agno.agent import Agent
+from agno.db.sqlite import SqliteDb
 from agno.models.ollama import Ollama
 
 if TYPE_CHECKING:
@@ -53,10 +54,10 @@ class EntonBrain:
             model=self._models[0] if self._models else Ollama(id="qwen2.5:14b"),
             tools=toolkits,
             instructions=instructions,
-            db=_DB_PATH,
+            db=SqliteDb(db_file=_DB_PATH),
             knowledge=knowledge,
             search_knowledge=knowledge is not None,
-            add_history_to_messages=True,
+            add_history_to_context=True,
             num_history_runs=settings.memory_size,
             tool_call_limit=settings.brain_max_turns,
             retries=2,
@@ -363,13 +364,12 @@ class EntonBrain:
             return False
         if self._agent.tools and toolkit in self._agent.tools:
             self._agent.tools.remove(toolkit)
-            self._agent._rebuild_tools = True  # noqa: SLF001
         logger.info("Unregistered dynamic toolkit: %s", name)
         return True
 
     def clear_history(self) -> None:
-        """Clear conversation history."""
-        self._agent.memory.clear()
+        """Clear conversation history by deleting the session."""
+        self._agent.delete_session()
 
     @property
     def agent(self) -> Agent:

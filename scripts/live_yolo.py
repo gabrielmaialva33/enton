@@ -26,8 +26,9 @@ from enton.perception.overlay import Overlay
 RTSP_URL = "rtsp://192.168.18.23:554/video0_unicast"
 _DET_PT = "models/yolo11x.pt"
 _POSE_PT = "models/yolo11x-pose.pt"
-DET_MODEL = _DET_PT.replace(".pt", ".engine") if os.path.exists(_DET_PT.replace(".pt", ".engine")) else _DET_PT
-POSE_MODEL = _POSE_PT.replace(".pt", ".engine") if os.path.exists(_POSE_PT.replace(".pt", ".engine")) else _POSE_PT
+# Forcing PT model to avoid TensorRT dependency issues for now
+DET_MODEL = _DET_PT # .replace(".pt", ".engine") if os.path.exists(_DET_PT.replace(".pt", ".engine")) else _DET_PT
+POSE_MODEL = _POSE_PT # .replace(".pt", ".engine") if os.path.exists(_POSE_PT.replace(".pt", ".engine")) else _POSE_PT
 DET_CONF = 0.15
 POSE_CONF = 0.2
 IMGSZ = 640
@@ -42,9 +43,7 @@ source = 0 if use_webcam else RTSP_URL
 
 print("Carregando modelos na GPU (FP16)...")
 det_model = YOLO(DET_MODEL)
-det_model.to("cuda:0")
 pose_model = YOLO(POSE_MODEL)
-pose_model.to("cuda:0")
 
 print(f"Conectando: {'webcam' if use_webcam else RTSP_URL}")
 cap = cv2.VideoCapture(source)

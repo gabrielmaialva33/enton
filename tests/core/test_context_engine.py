@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import timedelta
 
 import pytest
 
@@ -47,40 +46,36 @@ def test_context_entry_not_stale_no_ttl():
     assert entry.is_stale is False
 
 
-def test_context_entry_not_stale_within_ttl(freezer):
+def test_context_entry_not_stale_within_ttl():
     """Entries within their TTL are fresh."""
-    now = time.time()
     entry = ContextEntry(
         key="k", content="x", category="system", ttl=60.0,
-        timestamp=now,
+        timestamp=time.time(),
     )
     assert entry.is_stale is False
 
 
-def test_context_entry_stale_after_ttl(freezer):
+def test_context_entry_stale_after_ttl():
     """Entries past their TTL are stale."""
-    now = time.time()
     entry = ContextEntry(
         key="k", content="x", category="system", ttl=1.0,
-        timestamp=now - 5.0,
+        timestamp=time.time() - 5.0,
     )
     assert entry.is_stale is True
 
 
-def test_context_entry_age_seconds(freezer):
+def test_context_entry_age_seconds():
     """age_seconds reflects wall-clock time since creation."""
-    now = time.time()
-    past = now - 120.0
+    past = time.time() - 120.0
     entry = ContextEntry(key="k", content="x", category="system", timestamp=past)
     assert entry.age_seconds >= 119.0
 
 
-def test_context_entry_relevance_score_fresh_high_priority(freezer):
+def test_context_entry_relevance_score_fresh_high_priority():
     """Fresh, high-priority entries have high relevance."""
-    now = time.time()
     entry = ContextEntry(
         key="k", content="x", category="system",
-        priority=1.0, timestamp=now,
+        priority=1.0, timestamp=time.time(),
     )
     score = entry.relevance_score()
     # priority * 0.7 + recency * 0.3
@@ -88,12 +83,11 @@ def test_context_entry_relevance_score_fresh_high_priority(freezer):
     assert score > 0.9
 
 
-def test_context_entry_relevance_score_old_low_priority(freezer):
+def test_context_entry_relevance_score_old_low_priority():
     """Old, low-priority entries have low relevance."""
-    now = time.time()
     entry = ContextEntry(
         key="k", content="x", category="system",
-        priority=0.0, timestamp=now - 3600,
+        priority=0.0, timestamp=time.time() - 3600,
     )
     score = entry.relevance_score()
     assert score < 0.1
@@ -657,17 +651,12 @@ def test_over_budget_all_entries_dropped():
     assert result == ""
 
 
-def test_all_stale_entries(freezer):
+def test_all_stale_entries():
     """Engine with all stale entries behaves like empty after cleanup."""
     engine = ContextEngine(max_tokens=10000)
-    # Set them now (time is frozen at start of test)
     engine.set("x", "data1", ttl=0.01)
     engine.set("y", "data2", ttl=0.01)
-    
-    # Tick 10s (well past the 0.01s TTL)
-    freezer.tick(timedelta(seconds=10.0))
-    
-    engine._cleanup_stale()
+    time.sleep(0.05)
     result = engine.assemble()
     assert result == ""
     assert engine.current_tokens == 0

@@ -14,8 +14,18 @@ wheels/
 
 # Model weights (download on first run)
 models/
+*.pt
 *.onnx
 *.engine
 
 # Enton memory (local data)
 # episodes.jsonl and profile.json live in ~/.enton/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

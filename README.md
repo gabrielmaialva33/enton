@@ -1,12 +1,18 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:4f46e5,50:0891b2,100:059669&height=200&section=header&text=🤖%20E%20N%20T%20O%20N&fontSize=60&fontColor=fff&animation=twinkling&fontAlignY=35&desc=Autonomous%20AI%20Robot%20—%20Vision%20%7C%20Voice%20%7C%20Soul&descSize=18&descAlignY=55" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:991b1b,50:dc2626,100:15803d&height=200&section=header&text=E%20N%20T%20O%20N&fontSize=60&fontColor=fff&animation=twinkling&fontAlignY=35&desc=Autonomous%20AI%20Robot%20—%20Vision%20%7C%20Voice%20%7C%20Soul&descSize=18&descAlignY=55" width="100%"/>
+
+<br/>
+
+<img src="static/logo.png" width="280" alt="Enton — Son of Anton"/>
+
+<br/><br/>
 
 [![Python](https://img.shields.io/badge/Python_3.12+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![PyTorch](https://img.shields.io/badge/PyTorch_2.5+-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org)
 [![CUDA](https://img.shields.io/badge/CUDA-76B900?style=for-the-badge&logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
 [![Tests](https://img.shields.io/badge/tests-136_passing-00C853?style=for-the-badge)](./tests)
-[![License](https://img.shields.io/badge/license-MIT-6366f1?style=for-the-badge)](./LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-dc2626?style=for-the-badge)](./LICENSE)
 
 ---
 
@@ -20,31 +26,33 @@
 > **Enton is not a chatbot.** He is an autonomous digital entity with perception, emotion,
 > desires, and genuine personality. He sees through cameras, hears through microphones,
 > speaks with his own voice, and acts on his own will.
+>
+> *Inspired by [Son of Anton](https://silicon-valley.fandom.com/wiki/Son_of_Anton) — Gilfoyle's sentient AI from HBO's Silicon Valley.*
 
 ---
 
-## 🎯 Overview
+## Overview
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
 flowchart LR
-    subgraph Perception["👁️ Perception"]
-        CAM[Camera<br/>YOLO + Pose]
-        MIC[Microphone<br/>Whisper + VAD]
-        SND[Sound<br/>CLAP]
+    subgraph Perception["Perception"]
+        CAM[Camera — YOLO + Pose]
+        MIC[Microphone — Whisper + VAD]
+        SND[Sound — CLAP]
     end
 
-    subgraph Cognition["🧠 Cognition"]
+    subgraph Cognition["Cognition"]
         direction TB
-        BRAIN[Brain<br/>Qwen3 / Gemini]
-        DESIRE[Desires<br/>9 autonomous goals]
-        MOOD[Mood<br/>engagement + social]
+        BRAIN[Brain — Qwen3 / Gemini]
+        DESIRE[Desires — 9 autonomous goals]
+        MOOD[Mood — engagement + social]
         BRAIN --> DESIRE
         MOOD --> DESIRE
     end
 
-    subgraph Action["⚡ Action"]
-        VOICE[Voice<br/>Kokoro TTS]
+    subgraph Action["Action"]
+        VOICE[Voice — Kokoro TTS]
         PTZ[Camera PTZ]
         TOOLS[Shell + Files]
     end
@@ -67,7 +75,7 @@ flowchart LR
 
 ---
 
-## ⚡ Quick Start
+## Quick Start
 
 ```bash
 git clone https://github.com/gabrielmaialva33/enton.git && cd enton
@@ -76,7 +84,7 @@ uv run enton --webcam --viewer
 ```
 
 <details>
-<summary><strong>📋 Prerequisites</strong></summary>
+<summary><strong>Prerequisites</strong></summary>
 
 | Tool | Version | Required |
 |:-----|:--------|:---------|
@@ -88,7 +96,7 @@ uv run enton --webcam --viewer
 </details>
 
 <details>
-<summary><strong>🔧 Environment (.env)</strong></summary>
+<summary><strong>Environment (.env)</strong></summary>
 
 ```env
 # Provider routing (local-first)
@@ -116,33 +124,33 @@ OPENROUTER_API_KEY=
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
 graph TB
-    subgraph PERCEPTION["👁️ PERCEPTION"]
-        V[Vision<br/>YOLO11s + Pose + Emotion]
-        E[Ears<br/>Whisper + Silero VAD]
-        S[Sounds<br/>CLAP open-set]
-        F[Faces<br/>InsightFace]
+    subgraph PERCEPTION["PERCEPTION"]
+        V[Vision — YOLO11s + Pose + Emotion]
+        E[Ears — Whisper + Silero VAD]
+        S[Sounds — CLAP open-set]
+        F[Faces — InsightFace]
     end
 
-    subgraph CORE["⚙️ CORE"]
-        BUS[EventBus<br/>async pub/sub]
-        SM[SelfModel<br/>mood + senses]
-        MEM[Memory<br/>Qdrant + episodes]
-        CFG[Config<br/>pydantic-settings]
+    subgraph CORE["CORE"]
+        BUS[EventBus — async pub/sub]
+        SM[SelfModel — mood + senses]
+        MEM[Memory — Qdrant + episodes]
+        CFG[Config — pydantic-settings]
     end
 
-    subgraph COGNITION["🧠 COGNITION"]
-        BRAIN[EntonBrain<br/>Agno Agent + fallback chain]
-        FUSER[Fuser<br/>multi-modal context]
-        DES[DesireEngine<br/>9 autonomous desires]
-        PLAN[Planner<br/>reminders + routines]
+    subgraph COGNITION["COGNITION"]
+        BRAIN[EntonBrain — Agno Agent + fallback chain]
+        FUSER[Fuser — multi-modal context]
+        DES[DesireEngine — 9 autonomous desires]
+        PLAN[Planner — reminders + routines]
     end
 
-    subgraph SKILLS["🛠️ SKILLS (10 Agno Toolkits)"]
+    subgraph SKILLS["SKILLS — 10 Agno Toolkits"]
         SH[Shell + Files]
         SR[Search]
         PT[PTZ Control]
@@ -153,9 +161,9 @@ graph TB
         PL[Planner Tools]
     end
 
-    subgraph ACTION["🔊 ACTION"]
-        VOICE[Voice<br/>Kokoro / Google / NVIDIA TTS]
-        VIEWER[Viewer<br/>Cyberpunk HUD + grid]
+    subgraph ACTION["ACTION"]
+        VOICE[Voice — Kokoro / Google / NVIDIA TTS]
+        VIEWER[Viewer — Cyberpunk HUD + grid]
     end
 
     PERCEPTION --> BUS
@@ -168,7 +176,7 @@ graph TB
 
 ---
 
-## 🧠 Subsystems
+## Subsystems
 
 ### Perception
 
@@ -184,7 +192,7 @@ graph TB
 
 | Module | Description |
 |:-------|:------------|
-| **Brain** | Agno Agent with multi-provider fallback chain (Local → Groq → OpenRouter → Google → NVIDIA → HuggingFace) |
+| **Brain** | Agno Agent with multi-provider fallback chain (Local > Groq > OpenRouter > Google > NVIDIA > HuggingFace) |
 | **DesireEngine** | 9 autonomous desires with urgency curves, mood modulation, cooldowns |
 | **Fuser** | Combines detections + activities + emotions into coherent scene context |
 | **Planner** | Task management, reminders, daily routines |
@@ -201,27 +209,27 @@ graph TB
 
 ---
 
-## 🎭 Desire Engine
+## Desire Engine
 
 Enton has 9 autonomous desires that emerge from his internal state:
 
 | Desire | Trigger | Cooldown | Description |
 |:-------|:--------|:---------|:------------|
-| 🗣️ `socialize` | Low social mood | 10min | Wants to chat |
-| 👁️ `observe` | Boredom | 2min | Wants to look around |
-| 📚 `learn` | Curiosity | 30min | Searches for new knowledge |
-| 💬 `check_on_user` | Long absence | 1h | Checks if Gabriel is okay |
-| ⚙️ `optimize` | Background | 30min | Monitors system resources |
-| 💭 `reminisce` | Idle | 15min | Recalls a memory |
-| ✨ `create` | Low engagement | 1h | Writes code, poems, jokes |
-| 🔭 `explore` | Boredom | 10min | Moves camera, explores environment |
-| 🎮 `play` | High engagement | 15min | Tells jokes, proposes quizzes |
+| `socialize` | Low social mood | 10min | Wants to chat |
+| `observe` | Boredom | 2min | Wants to look around |
+| `learn` | Curiosity | 30min | Searches for new knowledge |
+| `check_on_user` | Long absence | 1h | Checks if Gabriel is okay |
+| `optimize` | Background | 30min | Monitors system resources |
+| `reminisce` | Idle | 15min | Recalls a memory |
+| `create` | Low engagement | 1h | Writes code, poems, jokes |
+| `explore` | Boredom | 10min | Moves camera, explores environment |
+| `play` | High engagement | 15min | Tells jokes, proposes quizzes |
 
-Desires have **urgency** (0→1) that grows over time and is modulated by mood, sounds, and interactions.
+Desires have **urgency** (0 to 1) that grows over time and is modulated by mood, sounds, and interactions.
 
 ---
 
-## 📊 Tech Stack
+## Tech Stack
 
 | Layer | Technologies |
 |:------|:-------------|
@@ -234,26 +242,26 @@ Desires have **urgency** (0→1) that grows over time and is modulated by mood, 
 
 ---
 
-## 🗺️ Roadmap
+## Roadmap
 
 | Phase | Status | Description |
 |:------|:------:|:------------|
-| Genesis | ✅ | Core architecture + event bus |
-| Perception | ✅ | Vision (YOLO + pose + emotion + face) |
-| Voice | ✅ | Kokoro TTS + Whisper STT + VAD |
-| Brain | ✅ | Agno agent + multi-provider fallback |
-| Personality | ✅ | Persona, mood, desires, memory |
-| Coding Agent | ✅ | Shell + file tools with security |
-| Multi-Camera | ✅ | Parallel processing + grid viewer |
-| STT Streaming | ✅ | Partial transcription during speech |
-| Sound Intelligence | ✅ | CLAP + brain-driven reactions |
-| Dashboard | 🔄 | Web UI with live metrics |
-| Embodiment | ⏳ | Physical robot integration |
-| Long-term Memory | ⏳ | Persistent episodic + semantic memory |
+| Genesis | done | Core architecture + event bus |
+| Perception | done | Vision (YOLO + pose + emotion + face) |
+| Voice | done | Kokoro TTS + Whisper STT + VAD |
+| Brain | done | Agno agent + multi-provider fallback |
+| Personality | done | Persona, mood, desires, memory |
+| Coding Agent | done | Shell + file tools with security |
+| Multi-Camera | done | Parallel processing + grid viewer |
+| STT Streaming | done | Partial transcription during speech |
+| Sound Intelligence | done | CLAP + brain-driven reactions |
+| Dashboard | next | Web UI with live metrics |
+| Embodiment | planned | Physical robot integration |
+| Long-term Memory | planned | Persistent episodic + semantic memory |
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 ```bash
 git checkout -b feature/your-feature
@@ -265,12 +273,12 @@ uv run pytest tests/ -x -q      # 136 should pass
 
 <div align="center">
 
-**Star if you believe in digital life ⭐**
+**Star if you believe in digital life**
 
 [![GitHub stars](https://img.shields.io/github/stars/gabrielmaialva33/enton?style=social)](https://github.com/gabrielmaialva33/enton)
 
 *Built with obsession by [Gabriel Maia](https://github.com/gabrielmaialva33)*
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:059669,50:0891b2,100:4f46e5&height=100&section=footer" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:15803d,50:991b1b,100:dc2626&height=100&section=footer" width="100%"/>
 
 </div>

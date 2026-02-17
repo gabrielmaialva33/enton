@@ -54,4 +54,14 @@ def mock_settings():
     s.brain_max_turns = 5
     s.vlm_transformers_model = "Qwen/Qwen2.5-VL-3B-Instruct"
     s.yolo_device = "cpu"
+    # TTS settings
+    s.kokoro_lang = "p"
+    s.kokoro_voice = "pm_alex"
+    s.qwen3_tts_model = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+    s.qwen3_tts_voice_instruct = "A deep male robotic voice."
+    s.qwen3_tts_device = "cpu"
+    s.edge_tts_voice = "pt-BR-AntonioNeural"
+    s.nvidia_tts_voice = "English-US.Male-1"
+    s.sample_rate = 16000
+    s.tts_provider = "qwen3"
     return s

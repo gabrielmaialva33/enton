@@ -54,6 +54,7 @@ class LocalTTS:
         self._lang = settings.kokoro_lang
         self._voice = settings.kokoro_voice
         self._pipeline = None
+        self.sample_rate: int = 24000
 
     def _ensure_pipeline(self):
         if self._pipeline is None:

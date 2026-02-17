@@ -17,6 +17,8 @@ class STTProvider(Protocol):
 
 @runtime_checkable
 class TTSProvider(Protocol):
+    sample_rate: int
+
     async def synthesize(self, text: str) -> np.ndarray: ...
     async def synthesize_stream(self, text: str) -> AsyncIterator[np.ndarray]:
         yield np.array([])  # pragma: no cover

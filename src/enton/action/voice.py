@@ -8,9 +8,11 @@ import numpy as np
 import sounddevice as sd
 
 from enton.core.config import Provider
+from enton.providers.edge_tts_provider import EdgeTTS
 from enton.providers.google import GoogleTTS
 from enton.providers.local import LocalTTS
 from enton.providers.nvidia import NvidiaTTS
+from enton.providers.qwen_tts import Qwen3TTS
 
 if TYPE_CHECKING:
     from enton.core.config import Settings
@@ -30,6 +32,18 @@ class Voice:
         self._init_providers(settings)
 
     def _init_providers(self, s: Settings) -> None:
+        # Qwen3-TTS — primary local GPU with voice design
+        try:
+            self._providers[Provider.QWEN3] = Qwen3TTS(s)
+        except Exception:
+            logger.warning("Qwen3 TTS unavailable")
+
+        # Edge-TTS — free cloud fallback
+        try:
+            self._providers[Provider.EDGE] = EdgeTTS(s)
+        except Exception:
+            logger.warning("Edge TTS unavailable")
+
         if s.nvidia_api_key:
             try:
                 self._providers[Provider.NVIDIA] = NvidiaTTS(s)
@@ -79,19 +93,30 @@ class Voice:
                 if self._ears:
                     self._ears.muted = False
 
+    # Fallback order for TTS providers
+    _FALLBACK_ORDER = [Provider.QWEN3, Provider.EDGE, Provider.LOCAL, Provider.GOOGLE]
+
     async def _speak(self, text: str) -> None:
         name, provider = self._get_provider()
         try:
             audio = await provider.synthesize(text)
-            await self._play(audio)
+            sr = getattr(provider, "sample_rate", 24000)
+            await self._play(audio, sample_rate=sr)
             logger.info("Voice [%s]: %s", name, text[:60])
         except Exception:
             logger.warning("TTS [%s] failed, trying fallback", name)
-            if name != Provider.LOCAL and Provider.LOCAL in self._providers:
-                audio = await self._providers[Provider.LOCAL].synthesize(text)
-                await self._play(audio)
-            else:
-                raise
+            for fallback in self._FALLBACK_ORDER:
+                if fallback != name and fallback in self._providers:
+                    try:
+                        fb = self._providers[fallback]
+                        audio = await fb.synthesize(text)
+                        sr = getattr(fb, "sample_rate", 24000)
+                        await self._play(audio, sample_rate=sr)
+                        logger.info("Voice fallback [%s]: %s", fallback, text[:60])
+                        return
+                    except Exception:
+                        logger.warning("TTS fallback [%s] also failed", fallback)
+            raise
 
     async def _play(self, audio: np.ndarray, sample_rate: int = 24000) -> None:
         if audio.size == 0:

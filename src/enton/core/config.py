@@ -14,6 +14,8 @@ class Provider(StrEnum):
     OPENROUTER = "openrouter"
     AIMLAPI = "aimlapi"
     GOOGLE = "google"
+    QWEN3 = "qwen3"
+    EDGE = "edge"
 
 
 class Settings(BaseSettings):
@@ -31,7 +33,7 @@ class Settings(BaseSettings):
 
     # Provider routing (local-first)
     brain_provider: Provider = Provider.LOCAL
-    tts_provider: Provider = Provider.LOCAL
+    tts_provider: Provider = Provider.QWEN3
     stt_provider: Provider = Provider.LOCAL
 
     # Google Cloud
@@ -70,7 +72,19 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen2.5:14b"
     whisper_model: str = "large-v3-turbo"
     kokoro_lang: str = "p"  # pt-BR
-    kokoro_voice: str = "am_onyx"
+    kokoro_voice: str = "pm_alex"  # pt-BR male voice
+
+    # Qwen3-TTS (primary — local GPU with voice design)
+    qwen3_tts_model: str = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+    qwen3_tts_voice_instruct: str = (
+        "A deep, authoritative male voice with a robotic, futuristic tone. "
+        "Speaks Portuguese with confidence and clarity, like an AI assistant "
+        "from a sci-fi movie. Slightly metallic timbre."
+    )
+    qwen3_tts_device: str = "cuda:0"
+
+    # Edge-TTS (cloud fallback — free Microsoft Neural TTS)
+    edge_tts_voice: str = "pt-BR-AntonioNeural"
     
     # Brain
     brain_timeout: float = 30.0
@@ -107,6 +121,10 @@ class Settings(BaseSettings):
     siglip_pretrained: str = "webli"
     frames_dir: str = str(Path.home() / ".enton" / "frames")
     commonsense_collection: str = "enton_commonsense"
+
+    # BlobStore (v0.5.0) — external HD binary memory
+    blob_store_root: str = "/media/gabriel-maia/Memory Dump/enton"
+    blob_store_fallback: str = str(Path.home() / ".enton" / "blobs")
 
     # Self-Evolution (v0.4.0)
     skills_dir: str = str(Path.home() / ".enton" / "skills")

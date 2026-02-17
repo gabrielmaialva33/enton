@@ -74,6 +74,7 @@ class NvidiaTTS:
         self._tts = riva.client.SpeechSynthesisService(auth)
         self._voice = settings.nvidia_tts_voice
         self._sample_rate = settings.sample_rate
+        self.sample_rate: int = settings.sample_rate
 
     async def synthesize(self, text: str) -> np.ndarray:
         loop = asyncio.get_running_loop()

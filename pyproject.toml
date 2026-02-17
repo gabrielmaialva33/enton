@@ -25,6 +25,9 @@ dependencies = [
     "onnxruntime-gpu>=1.19",
     # TTS
     "kokoro>=0.9",
+    "qwen-tts>=0.1",
+    "edge-tts>=7.0",
+    "numba>=0.60",  # force modern numba for Python 3.12+ (qwen-tts→librosa chain)
     # VLM local (transformers — last resort)
     "transformers>=4.47",
     "accelerate>=1.2",

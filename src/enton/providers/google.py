@@ -4,10 +4,9 @@ import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
-
+from google.cloud import texttospeech_v1 as tts
 from google.cloud.speech_v2 import SpeechAsyncClient
 from google.cloud.speech_v2.types import cloud_speech
-from google.cloud import texttospeech_v1 as tts
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -60,6 +59,7 @@ class GoogleTTS:
             audio_encoding=tts.AudioEncoding.LINEAR16,
             sample_rate_hertz=settings.sample_rate,
         )
+        self.sample_rate: int = settings.sample_rate
 
     async def synthesize(self, text: str) -> np.ndarray:
         request = tts.SynthesizeSpeechRequest(

@@ -11,6 +11,7 @@ from pathlib import Path
 
 # Core & Cognition
 from enton.action.voice import Voice
+from enton.channels.manager import ChannelManager
 from enton.cognition.brain import EntonBrain
 from enton.cognition.desires import DesireEngine
 from enton.cognition.dream import DreamMode
@@ -19,21 +20,15 @@ from enton.cognition.metacognition import MetaCognitiveEngine
 from enton.cognition.planner import Planner
 from enton.cognition.prediction import PredictionEngine, WorldState
 
-# Global Workspace Theory (GWT)
-from enton.core.gwt.workspace import GlobalWorkspace
-from enton.core.gwt.modules import PerceptionModule, ExecutiveModule, GitHubModule, AgenticModule
-from enton.core.gwt.message import BroadcastMessage
-from enton.core.gwt.modules.agentic import AgenticModule
-
 # Core Components
 from enton.core.awareness import AwarenessStateMachine
 from enton.core.blob_store import BlobStore
 from enton.core.commonsense import CommonsenseKB
 from enton.core.config import settings
 from enton.core.context_engine import ContextEngine
+from enton.core.error_handler import ErrorLoopBack
 from enton.core.events import (
     ActivityEvent,
-    ChannelMessageEvent,
     DetectionEvent,
     EmotionEvent,
     EventBus,
@@ -44,6 +39,13 @@ from enton.core.events import (
     SystemEvent,
     TranscriptionEvent,
 )
+from enton.core.extension_registry import ExtensionRegistry
+from enton.core.gwt.message import BroadcastMessage
+from enton.core.gwt.modules import AgenticModule, ExecutiveModule, GitHubModule, PerceptionModule
+
+
+# Global Workspace Theory (GWT)
+from enton.core.gwt.workspace import GlobalWorkspace
 from enton.core.hardware import detect_hardware
 from enton.core.knowledge_crawler import KnowledgeCrawler
 from enton.core.lifecycle import Lifecycle
@@ -57,7 +59,6 @@ from enton.core.visual_memory import VisualMemory
 from enton.perception.ears import Ears
 from enton.perception.viewer import Viewer
 from enton.perception.vision import Vision
-from enton.channels.manager import ChannelManager
 from enton.providers.android_bridge import AndroidBridge, find_adb
 
 # Skills & Toolkits
@@ -67,6 +68,7 @@ from enton.skills.android_toolkit import AndroidTools
 from enton.skills.blob_toolkit import BlobTools
 from enton.skills.coding_toolkit import CodingTools
 from enton.skills.describe_toolkit import DescribeTools
+from enton.skills.extension_toolkit import ExtensionTools
 from enton.skills.face_toolkit import FaceTools
 from enton.skills.file_toolkit import FileTools
 from enton.skills.forge_engine import ForgeEngine
@@ -85,6 +87,7 @@ from enton.skills.screenpipe_toolkit import ScreenpipeTools
 from enton.skills.search_toolkit import SearchTools
 from enton.skills.shell_toolkit import ShellTools
 from enton.skills.skill_registry import SkillRegistry
+from enton.skills.sub_agent_toolkit import SubAgentTools
 from enton.skills.system_toolkit import SystemTools
 from enton.skills.visual_memory_toolkit import VisualMemoryTools
 from enton.skills.workspace_toolkit import WorkspaceTools
@@ -194,6 +197,12 @@ class App:
         describe_tools = DescribeTools(self.vision)
         self.github_learner = GitHubLearner()
 
+        # v0.9.0 — New hardware-powered toolkits
+        from enton.skills.browser_toolkit import BrowserTools
+        from enton.skills.desktop_toolkit import DesktopTools
+        from enton.skills.media_toolkit import MediaTools
+        from enton.skills.network_toolkit import NetworkTools
+
         toolkits = [
             describe_tools,
             self.github_learner,
@@ -214,6 +223,11 @@ class App:
             GcpTools(project=settings.google_project),
             ScreenpipeTools(),
             N8nTools(),
+            # v0.9.0 — Hardware-powered tools
+            DesktopTools(),
+            BrowserTools(workspace=self._workspace),
+            MediaTools(workspace=self._workspace),
+            NetworkTools(),
         ]
 
         # Agno-powered Brain with tool calling + fallback chain
@@ -224,6 +238,40 @@ class App:
         )
         describe_tools._brain = self.brain  # resolve circular dep
         self.knowledge_crawler._brain = self.brain
+
+        # v1.0.0 — Error Loop-Back Handler (auto-retry with error context)
+        self.error_handler = ErrorLoopBack(
+            context_engine=self.context_engine,
+            max_retries_per_provider=1,
+            max_total_retries=3,
+        )
+        self.brain.set_error_handler(self.error_handler)
+
+        # v1.0.0 — Extension Registry (centralized plugin management)
+        self.extension_registry = ExtensionRegistry(
+            brain=self.brain,
+            extensions_dir=Path.home() / ".enton" / "extensions",
+        )
+        self.extension_registry.discover_all()
+        # Track builtin toolkits for visibility
+        for tk in toolkits:
+            name = getattr(tk, "name", type(tk).__name__)
+            self.extension_registry.register_builtin(name, tk)
+        self.brain.register_toolkit(
+            ExtensionTools(self.extension_registry), "_extension_tools",
+        )
+
+        # v1.0.0 — Role-Specialized Sub-Agents (CrewAI pattern)
+        from enton.cognition.sub_agents import SubAgentOrchestrator
+        # Map toolkit names to instances for sub-agent access
+        toolkit_map = {getattr(tk, "name", ""): tk for tk in toolkits}
+        self.sub_agents = SubAgentOrchestrator(
+            models=self.brain._models,
+            toolkits=toolkit_map,
+        )
+        self.brain.register_toolkit(
+            SubAgentTools(self.sub_agents), "_sub_agent_tools",
+        )
 
         # v0.4.0 — Self-Evolution (SkillRegistry + ToolForge)
         self.skill_registry = SkillRegistry(
@@ -243,6 +291,19 @@ class App:
         # v0.5.0 — AI Delegation (Claude Code + Gemini CLI as tools)
         ai_delegate = AIDelegateTools()
         self.brain.register_toolkit(ai_delegate, "_ai_delegate")
+
+        # v0.8.0 — Global Workspace Initialization
+        self.workspace = GlobalWorkspace()
+        
+        self.perception_module = PerceptionModule(self.prediction)
+        self.executive_module = ExecutiveModule(self.metacognition, self.skill_registry)
+        self.agentic_module = AgenticModule(self.brain)
+        
+        self.workspace.register_module(self.perception_module)
+        self.workspace.register_module(self.executive_module)
+        self.workspace.register_module(self.agentic_module)
+        logger.info("Global Workspace initialized with modules: Perception, Executive, Agentic")
+
 
         # v0.6.0 — Android Phone Control (USB + WiFi + 4G via Tailscale)
         self._phone_bridge: AndroidBridge | None = None
@@ -268,6 +329,10 @@ class App:
             bus=self.bus, brain=self.brain, memory=self.memory,
         )
         self._init_channels()
+        from enton.skills.channel_toolkit import ChannelTools
+        self.brain.register_toolkit(
+            ChannelTools(self.channel_manager), "_channel_tools",
+        )
 
         # Dream mode (must be after brain + memory)
         self.dream = DreamMode(memory=self.memory, brain=self.brain)

@@ -55,11 +55,12 @@ def test_should_not_embed_cooldown():
     assert vm._should_embed(["person", "cup"], "main") is False
 
 
-def test_save_thumbnail(tmp_path, monkeypatch):
+@pytest.mark.asyncio()
+async def test_save_thumbnail(tmp_path, monkeypatch):
     monkeypatch.setattr("enton.core.visual_memory.FRAMES_DIR", tmp_path)
     vm = VisualMemory(frames_dir=tmp_path)
     frame = _fake_frame()
-    path = vm._save_thumbnail(frame, time.time())
+    path = await vm._save_thumbnail(frame, time.time())
     assert path.endswith(".jpg")
 
 
@@ -128,7 +129,9 @@ async def test_search_with_results():
         "detections": ["cup"], "thumbnail_path": "/tmp/t.jpg",
     }
     mock_result.score = 0.9
-    mock_client.search.return_value = [mock_result]
+    mock_response = MagicMock()
+    mock_response.points = [mock_result]
+    mock_client.query_points.return_value = mock_response
     vm._qdrant = mock_client
 
     with patch.object(vm, "embed_text", return_value=[0.1] * 512):

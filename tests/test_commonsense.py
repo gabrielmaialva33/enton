@@ -57,7 +57,12 @@ async def test_search_with_results():
         "subject": "cat", "predicate": "has", "obj": "four legs",
     }
     mock_result.score = 0.9
-    mock_client.search.return_value = [mock_result]
+
+    # query_points returns response with .points
+    mock_response = MagicMock()
+    mock_response.points = [mock_result]
+    mock_client.query_points.return_value = mock_response
+
     kb._qdrant = mock_client
     kb._available = True
 
@@ -79,7 +84,11 @@ async def test_what_is():
         "subject": "dog", "predicate": "is", "obj": "a mammal",
     }
     mock_result.score = 0.8
-    mock_client.search.return_value = [mock_result]
+
+    mock_response = MagicMock()
+    mock_response.points = [mock_result]
+    mock_client.query_points.return_value = mock_response
+
     kb._qdrant = mock_client
     kb._available = True
 

@@ -84,12 +84,16 @@ class TestRoleConfigs:
             assert "toolkit_names" in config, f"Role {role} missing 'toolkit_names'"
             assert "description" in config, f"Role {role} missing 'description'"
 
-    def test_system_prompts_in_portuguese(self):
+    def test_system_prompts_not_empty(self):
         for role, config in ROLE_CONFIGS.items():
             system = config["system"]
-            assert "voce" in system.lower() or "sua" in system.lower(), (
-                f"Role {role} system prompt not in Portuguese"
-            )
+            assert len(system) > 20, f"Role {role} system prompt too short"
+            # coding prompt is intentionally EN (LLMs code better in English)
+            if role != "coding":
+                low = system.lower()
+                assert "você" in low or "sua" in low or "voce" in low, (
+                    f"Role {role} system prompt not in Portuguese"
+                )
 
 
 class TestSubAgent:

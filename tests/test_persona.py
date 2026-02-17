@@ -66,17 +66,17 @@ def test_env_context_with_detections():
     )
     assert "person" in ctx
     assert "laptop" in ctx
-    assert "afternoon" in ctx
+    assert "tarde" in ctx
 
 
 def test_env_context_empty():
     ctx = _build_env_context([], hour=22)
-    assert "night" in ctx
+    assert "noite" in ctx
 
 
 def test_env_context_morning():
     ctx = _build_env_context([], hour=9)
-    assert "morning" in ctx
+    assert "manhã" in ctx
 
 
 def test_reaction_templates_exist():

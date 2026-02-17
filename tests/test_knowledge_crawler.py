@@ -142,7 +142,9 @@ async def test_search_with_results():
         "obj": "fast", "source_url": "https://x.com",
     }
     mock_result.score = 0.85
-    mock_client.search.return_value = [mock_result]
+    mock_response = MagicMock()
+    mock_response.points = [mock_result]
+    mock_client.query_points.return_value = mock_response
     kc._qdrant = mock_client
 
     mock_embedder = MagicMock()

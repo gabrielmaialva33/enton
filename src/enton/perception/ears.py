@@ -79,32 +79,91 @@ class Ears:
             return ""
 
     async def run(self) -> None:
-        """Continuous mic capture loop. Phase 2: streaming mic → STT → events."""
+        """Continuous mic capture loop with VAD."""
         import asyncio
 
         import sounddevice as sd
+        import torch
 
-        logger.info("Ears listening on default mic (sample_rate=%d)", self._settings.sample_rate)
-        chunk_duration = 3.0  # seconds per chunk
-        chunk_samples = int(self._settings.sample_rate * chunk_duration)
+        logger.info("Loading silero-vad...")
+        model, utils = torch.hub.load(
+            repo_or_dir="snakers4/silero-vad", model="silero_vad", force_reload=False
+        )
 
-        while True:
-            loop = asyncio.get_running_loop()
+        WINDOW_SIZE_SAMPLES = 512
+        PRE_BUFFER_CHUNKS = 6  # ~200ms of audio before speech trigger
 
-            def _record():
-                return sd.rec(
-                    chunk_samples,
-                    samplerate=self._settings.sample_rate,
-                    channels=1,
-                    dtype=np.float32,
-                    blocking=True,
-                )
+        logger.info("Ears listening (sample_rate=%d, VAD enabled)", self._settings.sample_rate)
 
-            audio = await loop.run_in_executor(None, _record)
-            audio = audio.squeeze()
+        queue: asyncio.Queue = asyncio.Queue()
 
-            # Skip silence or when muted (echo cancellation)
-            if np.abs(audio).max() < 0.01 or self._muted:
-                continue
+        def _callback(indata, frames, time_info, status):
+            if status:
+                logger.warning("Audio input status: %s", status)
+            queue.put_nowait(indata.copy())
 
-            await self.transcribe(audio)
+        # Audio buffer state
+        buffer: list[np.ndarray] = []
+        pre_buffer: list[np.ndarray] = []  # rolling buffer for pre-speech context
+        is_speaking = False
+        silence_counter = 0
+        SILENCE_THRESHOLD = 20  # ~0.6s of silence to end speech
+        MAX_BUFFER = 500  # ~16s max
+
+        stream = sd.InputStream(
+            samplerate=self._settings.sample_rate,
+            blocksize=WINDOW_SIZE_SAMPLES,
+            channels=1,
+            dtype=np.float32,
+            callback=_callback,
+        )
+
+        with stream:
+            while True:
+                chunk = await queue.get()
+                chunk = chunk.squeeze()
+
+                if self._muted:
+                    buffer.clear()
+                    pre_buffer.clear()
+                    is_speaking = False
+                    continue
+
+                chunk_tensor = torch.tensor(chunk, dtype=torch.float32)
+                speech_prob = model(chunk_tensor, self._settings.sample_rate).item()
+
+                if speech_prob > 0.5:
+                    if not is_speaking:
+                        # Speech just started — prepend pre-buffer for context
+                        is_speaking = True
+                        buffer.extend(pre_buffer)
+                        pre_buffer.clear()
+                    silence_counter = 0
+                    buffer.append(chunk)
+                elif is_speaking:
+                    buffer.append(chunk)
+                    silence_counter += 1
+                    if silence_counter > SILENCE_THRESHOLD:
+                        is_speaking = False
+                        full_audio = np.concatenate(buffer)
+                        buffer.clear()
+                        silence_counter = 0
+                        if len(full_audio) > self._settings.sample_rate * 0.5:
+                            logger.info(
+                                "Speech detected (%.2fs)",
+                                len(full_audio) / self._settings.sample_rate,
+                            )
+                            asyncio.create_task(self.transcribe(full_audio))
+                else:
+                    # Not speaking — maintain rolling pre-buffer
+                    pre_buffer.append(chunk)
+                    if len(pre_buffer) > PRE_BUFFER_CHUNKS:
+                        pre_buffer.pop(0)
+
+                # Safety valve
+                if len(buffer) > MAX_BUFFER:
+                    logger.warning("Audio buffer overflow, flushing")
+                    is_speaking = False
+                    full_audio = np.concatenate(buffer)
+                    buffer.clear()
+                    asyncio.create_task(self.transcribe(full_audio))

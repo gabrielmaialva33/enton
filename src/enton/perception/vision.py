@@ -8,9 +8,16 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np  # noqa: TC002 — used at runtime
 
+from enton.core.events import (
+    ActivityEvent,
+    DetectionEvent,
+    EmotionEvent,
+    EventBus,
+    FaceEvent,
+    SystemEvent,
+)
 from enton.perception.activity import classify as classify_activity
 from enton.perception.emotion import EmotionRecognizer
-from enton.core.events import ActivityEvent, DetectionEvent, EmotionEvent, EventBus, SystemEvent
 
 if TYPE_CHECKING:
     from enton.core.config import Settings
@@ -29,7 +36,12 @@ class Vision:
         self._last_detections: list[DetectionEvent] = []
         self._last_activities: list[ActivityEvent] = []
         self._last_emotions: list[EmotionEvent] = []
-        self._emotion_recognizer = EmotionRecognizer(device=settings.yolo_device, interval_frames=5)
+        self._last_faces: list[FaceEvent] = []
+        self._emotion_recognizer = EmotionRecognizer(
+            device=settings.yolo_device, interval_frames=5,
+        )
+        self._face_recognizer = None
+        self._face_interval = 10  # run face recognition every N frames
         self._fps: float = 0.0
 
     def _ensure_det_model(self):
@@ -38,7 +50,10 @@ class Vision:
 
             self._det_model = YOLO(str(self._settings.yolo_model_path))
             self._det_model.to(self._settings.yolo_device)
-            logger.info("YOLO detect loaded: %s on %s", self._settings.yolo_model, self._settings.yolo_device)
+            logger.info(
+                "YOLO detect loaded: %s on %s",
+                self._settings.yolo_model, self._settings.yolo_device,
+            )
         return self._det_model
 
     def _ensure_pose_model(self):
@@ -47,7 +62,10 @@ class Vision:
 
             self._pose_model = YOLO(self._settings.yolo_pose_model)
             self._pose_model.to(self._settings.yolo_pose_device)
-            logger.info("YOLO pose loaded: %s on %s", self._settings.yolo_pose_model, self._settings.yolo_device)
+            logger.info(
+                "YOLO pose loaded: %s on %s",
+                self._settings.yolo_pose_model, self._settings.yolo_device,
+            )
         return self._pose_model
 
     def _ensure_camera(self) -> cv2.VideoCapture:
@@ -81,6 +99,25 @@ class Vision:
     @property
     def last_emotions(self) -> list[EmotionEvent]:
         return self._last_emotions
+
+    @property
+    def last_faces(self) -> list[FaceEvent]:
+        return self._last_faces
+
+    @property
+    def face_recognizer(self):
+        """Lazy-init face recognizer on first access."""
+        if self._face_recognizer is None:
+            try:
+                from enton.perception.faces import FaceRecognizer
+
+                self._face_recognizer = FaceRecognizer(
+                    device=self._settings.yolo_device,
+                )
+                logger.info("FaceRecognizer loaded")
+            except Exception:
+                logger.warning("FaceRecognizer unavailable")
+        return self._face_recognizer
 
     @property
     def fps(self) -> float:
@@ -192,6 +229,25 @@ class Vision:
                     emotions.append(emo)
             self._last_emotions = emotions
 
+            # --- face recognition (every N frames, only if persons detected) ---
+            faces = []
+            has_person = any(d.label == "person" for d in detections)
+            if has_person and frame_count % self._face_interval == 0:
+                fr = self.face_recognizer
+                if fr is not None:
+                    face_results = await loop.run_in_executor(
+                        None, fr.identify, frame,
+                    )
+                    for f_res in face_results:
+                        faces.append(
+                            FaceEvent(
+                                identity=f_res.identity,
+                                confidence=f_res.confidence,
+                                bbox=f_res.bbox,
+                            )
+                        )
+            self._last_faces = faces
+
             # --- emit events ---
             for det in detections:
                 self._bus.emit_nowait(det)
@@ -199,6 +255,8 @@ class Vision:
                 self._bus.emit_nowait(act)
             for emo in emotions:
                 self._bus.emit_nowait(emo)
+            for face in faces:
+                self._bus.emit_nowait(face)
 
             elapsed = time.monotonic() - t_start
             if elapsed >= 1.0:

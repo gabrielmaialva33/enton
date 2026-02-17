@@ -40,6 +40,15 @@ class ReasoningTrace:
     timestamp: float = field(default_factory=time.time)
 
 
+@dataclass
+class CuriosityItem:
+    """A topic or question Enton wants to investigate."""
+    topic: str
+    source: str  # e.g., "prediction_anomaly", "user_mention", "random_thought"
+    priority: float = 0.5
+    created_at: float = field(default_factory=time.time)
+
+
 class MetaCognitiveEngine:
     """Monitors and improves Enton's reasoning quality over time."""
 
@@ -55,7 +64,24 @@ class MetaCognitiveEngine:
         }
         self._total_calls = 0
         self._total_errors = 0
+        self._total_calls = 0
+        self._total_errors = 0
         self._total_latency_ms = 0.0
+        
+        # -- Sentience State (v0.7.0) --
+        self.boredom_level: float = 0.0  # 0.0 to 1.0
+        self.boredom_threshold: float = 0.8
+        self._last_tick = time.time()
+        
+        # Queue of things to learn/explore
+        self.curiosity_queue: deque[CuriosityItem] = deque()
+        
+        # Default fallback interests if queue is empty
+        self.default_interests = [
+            "machine learning", "rust programming", "distributed systems", 
+            "neuromorphic computing", "philosophy of mind", "generative art",
+            "autonomous agents", "computer vision", "game development"
+        ]
 
     # -- recording --
 
@@ -229,4 +255,54 @@ class MetaCognitiveEngine:
             "avg_latency_ms": round(self.avg_latency_ms, 1),
             "avg_confidence": round(self.avg_confidence, 3),
             "strategy_scores": {k: round(v, 3) for k, v in self._strategy_scores.items()},
+            "boredom_level": round(self.boredom_level, 2),
+            "curiosity_queue_len": len(self.curiosity_queue),
         }
+
+    # -- Sentience Logic --
+
+    def tick(self, surprise_score: float) -> str | None:
+        """
+        Update internal state based on recent surprise.
+        Returns a high-level directive (e.g., 'study_github') or None.
+        """
+        now = time.time()
+        dt = now - self._last_tick
+        self._last_tick = now
+        
+        # 1. Update Boredom
+        # Low surprise increases boredom. High surprise reduces it quickly.
+        if surprise_score < 0.2:
+            # Accumulate boredom slowly
+            # Takes ~100s to go from 0 to 1.0 at 0.01 per second
+            self.boredom_level = min(1.0, self.boredom_level + (0.01 * dt))
+        elif surprise_score > 0.5:
+            # Surprise clears boredom immediately
+            self.boredom_level = max(0.0, self.boredom_level - 0.5)
+            
+        # 2. Check Thresholds
+        if self.boredom_level > self.boredom_threshold:
+            # We are bored. Let's do something productive.
+            return self._decide_autodidact_action()
+            
+        return None
+
+    def _decide_autodidact_action(self) -> str:
+        """Decides what to study/learn."""
+        # Simple heuristic for now: Always default to studying
+        return "study_github"
+
+    def get_next_topic(self) -> str:
+        """Returns the next topic to study."""
+        if self.curiosity_queue:
+            item = self.curiosity_queue.popleft()
+            return item.topic
+            
+        # Fallback to random default interest
+        import random
+        return random.choice(self.default_interests)
+
+    def add_curiosity(self, topic: str, source: str = "internal") -> None:
+        """Add a new topic to explore."""
+        self.curiosity_queue.append(CuriosityItem(topic=topic, source=source))
+        logger.info(f"Added new curiosity: {topic} (source: {source})")

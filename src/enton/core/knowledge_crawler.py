@@ -176,6 +176,19 @@ class KnowledgeCrawler:
         logger.info("Learned %d triples from %s", len(triples), url)
         return triples
 
+    async def learn_text(self, text: str, source: str = "internal_thought") -> list[KnowledgeTriple]:
+        """Learn directly from provided text (e.g. from GitHubModule)."""
+        if not text:
+            return []
+        
+        triples = await self.extract_triples(text, source_url=source)
+        if not triples:
+            return []
+            
+        await self._store_triples(triples)
+        logger.info("Learned %d triples from %s", len(triples), source)
+        return triples
+
     async def learn_topic(self, topic: str) -> list[KnowledgeTriple]:
         """Search web for topic, crawl top results, extract triples."""
         urls = await self._search_web(topic)
@@ -263,9 +276,9 @@ class KnowledgeCrawler:
             if embedding is None:
                 return []
 
-            results = self._qdrant.search(
+            response = self._qdrant.query_points(
                 collection_name=KNOWLEDGE_COLLECTION,
-                query_vector=embedding,
+                query=embedding,
                 limit=n,
             )
             return [
@@ -276,7 +289,7 @@ class KnowledgeCrawler:
                     "source_url": r.payload.get("source_url", ""),
                     "score": r.score,
                 }
-                for r in results
+                for r in response.points
             ]
         except Exception:
             logger.warning("Knowledge search failed")

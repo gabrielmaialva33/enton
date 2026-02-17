@@ -77,9 +77,9 @@ class CommonsenseKB:
             if embedding is None:
                 return []
 
-            results = self._qdrant.search(
+            response = self._qdrant.query_points(
                 collection_name=COMMONSENSE_COLLECTION,
-                query_vector=embedding,
+                query=embedding,
                 limit=n,
             )
             return [
@@ -89,7 +89,7 @@ class CommonsenseKB:
                     "obj": r.payload.get("obj", ""),
                     "score": r.score,
                 }
-                for r in results
+                for r in response.points
             ]
         except Exception:
             logger.warning("Commonsense search failed")

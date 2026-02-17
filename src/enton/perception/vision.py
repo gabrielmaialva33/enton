@@ -25,24 +25,71 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class CameraFeed:
+    """Single camera capture + per-camera state."""
+
+    __slots__ = (
+        "id", "source", "cap", "last_frame",
+        "last_detections", "last_activities", "last_emotions", "last_faces",
+        "fps", "_frame_count", "_t_start", "_was_connected",
+    )
+
+    def __init__(self, cam_id: str, source: str | int) -> None:
+        self.id = cam_id
+        self.source = source
+        self.cap: cv2.VideoCapture | None = None
+        self.last_frame: np.ndarray | None = None
+        self.last_detections: list[DetectionEvent] = []
+        self.last_activities: list[ActivityEvent] = []
+        self.last_emotions: list[EmotionEvent] = []
+        self.last_faces: list[FaceEvent] = []
+        self.fps: float = 0.0
+        self._frame_count = 0
+        self._t_start = time.monotonic()
+        self._was_connected = False
+
+    def ensure_capture(self) -> cv2.VideoCapture:
+        if self.cap is None or not self.cap.isOpened():
+            if isinstance(self.source, int):
+                self.cap = cv2.VideoCapture(self.source)
+            else:
+                self.cap = cv2.VideoCapture(
+                    self.source, cv2.CAP_FFMPEG,
+                    [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000],
+                )
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            if self.cap.isOpened():
+                logger.info("Camera [%s] connected: %s", self.id, self.source)
+            else:
+                logger.error("Camera [%s] failed: %s", self.id, self.source)
+        return self.cap
+
+    def update_fps(self) -> None:
+        self._frame_count += 1
+        elapsed = time.monotonic() - self._t_start
+        if elapsed >= 1.0:
+            self.fps = self._frame_count / elapsed
+            self._frame_count = 0
+            self._t_start = time.monotonic()
+
+
 class Vision:
     def __init__(self, settings: Settings, bus: EventBus) -> None:
         self._settings = settings
         self._bus = bus
         self._det_model = None
         self._pose_model = None
-        self._cap: cv2.VideoCapture | None = None
-        self._last_frame: np.ndarray | None = None
-        self._last_detections: list[DetectionEvent] = []
-        self._last_activities: list[ActivityEvent] = []
-        self._last_emotions: list[EmotionEvent] = []
-        self._last_faces: list[FaceEvent] = []
         self._emotion_recognizer = EmotionRecognizer(
             device=settings.yolo_device, interval_frames=5,
         )
         self._face_recognizer = None
-        self._face_interval = 10  # run face recognition every N frames
-        self._fps: float = 0.0
+        self._face_interval = 10
+
+        # Multi-camera setup
+        self._cameras: dict[str, CameraFeed] = {}
+        for cam_id, source in settings.camera_sources.items():
+            self._cameras[cam_id] = CameraFeed(cam_id, source)
+        self._active_camera = next(iter(self._cameras), "main")
 
     def _ensure_det_model(self):
         if self._det_model is None:
@@ -68,45 +115,35 @@ class Vision:
             )
         return self._pose_model
 
-    def _ensure_camera(self) -> cv2.VideoCapture:
-        if self._cap is None or not self._cap.isOpened():
-            source = self._settings.camera_url
-            if isinstance(source, int):
-                self._cap = cv2.VideoCapture(source)
-            else:
-                self._cap = cv2.VideoCapture(
-                    source, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000]
-                )
-            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            if self._cap.isOpened():
-                logger.info("Camera connected: %s", source)
-            else:
-                logger.error("Camera failed: %s", source)
-        return self._cap
+    # Convenience properties for active camera (backward compat)
 
     @property
     def last_frame(self) -> np.ndarray | None:
-        return self._last_frame
+        cam = self._cameras.get(self._active_camera)
+        return cam.last_frame if cam else None
 
     @property
     def last_detections(self) -> list[DetectionEvent]:
-        return self._last_detections
+        cam = self._cameras.get(self._active_camera)
+        return cam.last_detections if cam else []
 
     @property
     def last_activities(self) -> list[ActivityEvent]:
-        return self._last_activities
+        cam = self._cameras.get(self._active_camera)
+        return cam.last_activities if cam else []
 
     @property
     def last_emotions(self) -> list[EmotionEvent]:
-        return self._last_emotions
+        cam = self._cameras.get(self._active_camera)
+        return cam.last_emotions if cam else []
 
     @property
     def last_faces(self) -> list[FaceEvent]:
-        return self._last_faces
+        cam = self._cameras.get(self._active_camera)
+        return cam.last_faces if cam else []
 
     @property
     def face_recognizer(self):
-        """Lazy-init face recognizer on first access."""
         if self._face_recognizer is None:
             try:
                 from enton.perception.faces import FaceRecognizer
@@ -121,33 +158,67 @@ class Vision:
 
     @property
     def fps(self) -> float:
-        return self._fps
+        cam = self._cameras.get(self._active_camera)
+        return cam.fps if cam else 0.0
 
-    def get_frame_jpeg(self) -> bytes | None:
-        if self._last_frame is None:
+    @property
+    def cameras(self) -> dict[str, CameraFeed]:
+        return self._cameras
+
+    @property
+    def active_camera_id(self) -> str:
+        return self._active_camera
+
+    def switch_camera(self, cam_id: str) -> bool:
+        if cam_id in self._cameras:
+            self._active_camera = cam_id
+            return True
+        return False
+
+    def get_frame_jpeg(self, camera_id: str | None = None) -> bytes | None:
+        cam_id = camera_id or self._active_camera
+        cam = self._cameras.get(cam_id)
+        if cam is None or cam.last_frame is None:
             return None
-        _, buf = cv2.imencode(".jpg", self._last_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        _, buf = cv2.imencode(".jpg", cam.last_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
         return buf.tobytes()
 
     async def run(self) -> None:
+        if len(self._cameras) == 1:
+            # Single camera — direct loop (no TaskGroup overhead)
+            cam = next(iter(self._cameras.values()))
+            await self._camera_loop(cam)
+        else:
+            # Multi-camera — parallel processing
+            async with asyncio.TaskGroup() as tg:
+                for cam in self._cameras.values():
+                    tg.create_task(
+                        self._camera_loop(cam),
+                        name=f"cam_{cam.id}",
+                    )
+
+    async def _camera_loop(self, cam: CameraFeed) -> None:
+        """Process frames from a single camera."""
         loop = asyncio.get_running_loop()
         frame_count = 0
-        t_start = time.monotonic()
-        was_connected = False
 
         while True:
-            cap = self._ensure_camera()
+            cap = cam.ensure_capture()
             if not cap.isOpened():
-                if was_connected:
-                    self._bus.emit_nowait(SystemEvent(kind="camera_lost"))
-                    was_connected = False
+                if cam._was_connected:
+                    self._bus.emit_nowait(
+                        SystemEvent(kind="camera_lost", detail=cam.id)
+                    )
+                    cam._was_connected = False
                 await asyncio.sleep(10.0)
-                self._cap = None
+                cam.cap = None
                 continue
 
-            if not was_connected:
-                self._bus.emit_nowait(SystemEvent(kind="camera_connected"))
-                was_connected = True
+            if not cam._was_connected:
+                self._bus.emit_nowait(
+                    SystemEvent(kind="camera_connected", detail=cam.id)
+                )
+                cam._was_connected = True
 
             try:
                 det_model = self._ensure_det_model()
@@ -159,13 +230,14 @@ class Vision:
 
             ret, frame = await loop.run_in_executor(None, cap.read)
             if not ret:
-                logger.warning("Frame read failed, reconnecting...")
-                self._cap = None
+                logger.warning("Frame read failed [%s], reconnecting...", cam.id)
+                cam.cap = None
                 await asyncio.sleep(1.0)
                 continue
 
-            self._last_frame = frame
+            cam.last_frame = frame
             frame_count += 1
+            cam.update_fps()
 
             det_conf = self._settings.yolo_confidence
             pose_conf = self._settings.yolo_pose_confidence
@@ -190,9 +262,10 @@ class Vision:
                         confidence=conf,
                         bbox=(x1, y1, x2, y2),
                         frame_shape=(frame.shape[0], frame.shape[1]),
+                        camera_id=cam.id,
                     )
                     detections.append(det)
-            self._last_detections = detections
+            cam.last_detections = detections
 
             # --- activity recognition ---
             activities = []
@@ -204,9 +277,10 @@ class Vision:
                             person_index=i,
                             activity=activity_label,
                             color=color,
+                            camera_id=cam.id,
                         )
                         activities.append(act)
-            self._last_activities = activities
+            cam.last_activities = activities
 
             # --- emotion recognition ---
             emotions = []
@@ -226,9 +300,10 @@ class Vision:
                         score=fe.score,
                         color=fe.color,
                         bbox=fe.bbox,
+                        camera_id=cam.id,
                     )
                     emotions.append(emo)
-            self._last_emotions = emotions
+            cam.last_emotions = emotions
 
             # --- face recognition (every N frames, only if persons detected) ---
             faces = []
@@ -245,9 +320,10 @@ class Vision:
                                 identity=f_res.identity,
                                 confidence=f_res.confidence,
                                 bbox=f_res.bbox,
+                                camera_id=cam.id,
                             )
                         )
-            self._last_faces = faces
+            cam.last_faces = faces
 
             # --- emit events ---
             for det in detections:
@@ -258,11 +334,5 @@ class Vision:
                 self._bus.emit_nowait(emo)
             for face in faces:
                 self._bus.emit_nowait(face)
-
-            elapsed = time.monotonic() - t_start
-            if elapsed >= 1.0:
-                self._fps = frame_count / elapsed
-                frame_count = 0
-                t_start = time.monotonic()
 
             await asyncio.sleep(0.01)

@@ -23,6 +23,7 @@ class DetectionEvent(Event):
     confidence: float = 0.0
     bbox: tuple[int, int, int, int] = (0, 0, 0, 0)
     frame_shape: tuple[int, int] = (0, 0)
+    camera_id: str = "main"
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +31,7 @@ class ActivityEvent(Event):
     person_index: int = 0
     activity: str = ""
     color: tuple[int, int, int] = (200, 200, 200)
+    camera_id: str = "main"
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +42,7 @@ class EmotionEvent(Event):
     score: float = 0.0
     color: tuple[int, int, int] = (180, 180, 180)
     bbox: tuple[int, int, int, int] = (0, 0, 0, 0)
+    camera_id: str = "main"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +69,7 @@ class FaceEvent(Event):
     identity: str = "unknown"
     confidence: float = 0.0
     bbox: tuple[int, int, int, int] = (0, 0, 0, 0)
+    camera_id: str = "main"
 
 
 @dataclass(frozen=True, slots=True)

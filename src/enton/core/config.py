@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     camera_rtsp_port: int = 554
     camera_rtsp_path: str = "/onvif1"
 
+    # Multi-camera: comma-separated "id:source" pairs
+    # e.g. "main:0,hack:rtsp://192.168.18.23:554/video0_unicast"
+    cameras: str = ""
+
     # Provider routing (local-first)
     brain_provider: Provider = Provider.LOCAL
     tts_provider: Provider = Provider.LOCAL
@@ -114,6 +118,23 @@ class Settings(BaseSettings):
         if self.camera_source.startswith("rtsp://"):
             return self.camera_source
         return f"rtsp://{self.camera_ip}:{self.camera_rtsp_port}{self.camera_rtsp_path}"
+
+    @property
+    def camera_sources(self) -> dict[str, str | int]:
+        """Parse multi-camera config into {id: source} dict."""
+        if self.cameras:
+            result: dict[str, str | int] = {}
+            for entry in self.cameras.split(","):
+                entry = entry.strip()
+                if ":" in entry:
+                    cam_id, source = entry.split(":", 1)
+                    result[cam_id.strip()] = (
+                        int(source) if source.strip().isdigit() else source.strip()
+                    )
+            if result:
+                return result
+        # Fallback: single camera from camera_source
+        return {"main": self.camera_url}
 
     @property
     def yolo_model_path(self) -> Path:

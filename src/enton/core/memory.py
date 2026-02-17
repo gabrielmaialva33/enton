@@ -139,7 +139,9 @@ class Memory:
         if self._knowledge is not None:
             try:
                 results = self._knowledge.search(query=query, num_documents=n)
-                return [doc.content for doc in results if doc.content]
+                hits = [doc.content for doc in results if doc.content]
+                if hits:
+                    return hits
             except Exception:
                 logger.debug("Knowledge search failed, falling back to keyword")
 

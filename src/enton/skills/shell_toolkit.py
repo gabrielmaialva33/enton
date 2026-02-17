@@ -61,12 +61,20 @@ def _classify_command(command: str) -> str:
 
     # sudo wrapping -- classify the inner command
     if base == "sudo" and len(parts) > 1:
-        inner = parts[1]
-        if inner in SAFE_COMMANDS:
+        inner_cmd = " ".join(parts[1:])
+        inner_base = parts[1]
+        for pattern in ELEVATED_COMMANDS:
+            if inner_cmd.startswith(pattern):
+                return "elevated"
+        if inner_base in SAFE_COMMANDS:
             return "safe"
-        if inner in ELEVATED_COMMANDS:
-            return "elevated"
         return "elevated"
+
+    # Check multi-word elevated patterns before single-word safe
+    full_cmd = " ".join(parts)
+    for pattern in ELEVATED_COMMANDS:
+        if full_cmd.startswith(pattern):
+            return "elevated"
 
     if base in SAFE_COMMANDS:
         return "safe"

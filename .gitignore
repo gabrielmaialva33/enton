@@ -30,5 +30,8 @@ models/
 .DS_Store
 Thumbs.db
 
+# Backups
+*.bak
+
 # MCP
 .playwright-mcp

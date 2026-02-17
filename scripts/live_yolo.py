@@ -39,7 +39,12 @@ SKELETON = [
 ]
 
 use_webcam = "--webcam" in sys.argv
-source = 0 if use_webcam else RTSP_URL
+camera_index = 0
+for arg in sys.argv:
+    if arg.startswith("--cam="):
+        camera_index = int(arg.split("=")[1])
+
+source = camera_index if use_webcam else RTSP_URL
 
 print("Carregando modelos na GPU (FP16)...")
 det_model = YOLO(DET_MODEL)

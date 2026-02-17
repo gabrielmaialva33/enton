@@ -13,9 +13,6 @@ except ImportError:
     uvloop = None
 
 
-from enton.app import App
-
-
 def main() -> None:
     if uvloop:
         asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -27,6 +24,7 @@ def main() -> None:
         help="Open live vision window with HUD overlay",
     )
     args = parser.parse_args()
+
 
     # Force webcam if requested (before Settings reads .env)
     if args.webcam:
@@ -47,7 +45,7 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-
+    from enton.app import App
     app = App(viewer=args.viewer)
     try:
         asyncio.run(app.run())

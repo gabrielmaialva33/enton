@@ -89,20 +89,25 @@ class Vision:
         self._det_model = None
         self._pose_model = None
 
-        # Components
+        # Initialize sub-modules
         from enton.perception.emotion import EmotionRecognizer
         from enton.perception.faces import FaceRecognizer
 
+        self._emotion_recognizer = EmotionRecognizer(
+            device=settings.yolo_device, interval_frames=5
+        )
         self.face_recognizer = FaceRecognizer(device=settings.yolo_device)
-        self._emotion_recognizer = EmotionRecognizer(device=settings.yolo_device)
-        self._face_interval = 30
+        self._face_interval = 30  # Run face rec every 30 frames
 
-        # Cameras
+        # Initialize cameras
         self.cameras: dict[str, CameraFeed] = {}
-        for cam_id, source in settings.camera_sources.items():
-            self.cameras[cam_id] = CameraFeed(cam_id, source)
+        self.active_camera_id = "main"
 
-        self.fps = 0.0
+        # Main camera
+        src = settings.camera_source
+        if isinstance(src, str) and src.isdigit():
+            src = int(src)
+        self.cameras["main"] = CameraFeed("main", src)
 
     def set_target_fps(self, fps: float) -> None:
         """Dynamically adjust target FPS for all cameras."""
@@ -111,23 +116,35 @@ class Vision:
     def _ensure_det_model(self):
         if self._det_model is None:
             from ultralytics import YOLO
-            self._det_model = YOLO(self._settings.yolo_model_path)
+            self._det_model = YOLO(self._settings.yolo_model)
+            self._det_model.to(self._settings.yolo_device)
+            logger.info("YOLO detection model loaded: %s", self._settings.yolo_model)
         return self._det_model
 
     def _ensure_pose_model(self):
         if self._pose_model is None:
             from ultralytics import YOLO
-            self._pose_model = YOLO(self._settings.yolo_pose_model_path)
+            self._pose_model = YOLO(self._settings.yolo_pose_model)
+            self._pose_model.to(self._settings.yolo_pose_device)
+            logger.info("YOLO pose model loaded: %s", self._settings.yolo_pose_model)
         return self._pose_model
 
     def get_frame_jpeg(self) -> bytes | None:
-        """Get the latest frame from the main camera as JPEG."""
-        cam = self.cameras.get("main")
-        if cam and cam.last_frame is not None:
-            ret, buf = cv2.imencode(".jpg", cam.last_frame)
-            if ret:
-                return buf.tobytes()
-        return None
+        """Get current frame from active camera as JPEG bytes."""
+        cam = self.cameras.get(self.active_camera_id)
+        if cam is None or cam.last_frame is None:
+            return None
+        success, buffer = cv2.imencode(".jpg", cam.last_frame)
+        if not success:
+            return None
+        return buffer.tobytes()
+
+    def switch_camera(self, cam_id: str) -> None:
+        if cam_id in self.cameras:
+            self.active_camera_id = cam_id
+            logger.info("Switched active camera to [%s]", cam_id)
+        else:
+            logger.warning("Camera [%s] not found", cam_id)
 
     @property
     def last_detections(self) -> list[DetectionEvent]:
@@ -152,10 +169,14 @@ class Vision:
         return all_emos
 
     async def run(self) -> None:
-        logger.info("Vision system starting (%d cameras)", len(self.cameras))
+        """Main vision loop."""
+        logger.info("Vision system starting (Target FPS: %.1f)", self._target_fps)
+
+        # Start loops for all cameras
         async with asyncio.TaskGroup() as tg:
             for cam in self.cameras.values():
                 tg.create_task(self._camera_loop(cam))
+                logger.info("Started camera loop for [%s]", cam.id)
 
     async def _camera_loop(self, cam: CameraFeed) -> None:
         """Process frames from a single camera."""

@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install deps
+        run: uv sync --frozen --group dev
+
+      - name: Ruff check
+        run: uv run ruff check src/
+
+      - name: Ruff format check
+        run: uv run ruff format --check src/
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install deps
+        run: uv sync --frozen --group dev
+
+      - name: Run tests (skip hardware)
+        run: uv run pytest -m "not hardware" -v --tb=short
+
+  import-check:
+    name: Import check
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install deps
+        run: uv sync --frozen --group dev
+
+      - name: Verify all module imports
+        run: |
+          uv run python -c "
+          from enton.cognition.brain import EntonBrain
+          from enton.core.memory import Memory
+          from enton.core.events import EventBus
+          from enton.skills.system_toolkit import SystemTools
+          from enton.skills.search_toolkit import SearchTools
+          from enton.skills.shell_toolkit import ShellTools
+          from enton.skills.ptz_toolkit import PTZTools
+          from enton.skills.describe_toolkit import DescribeTools
+          from enton.skills.memory_toolkit import MemoryTools
+          from enton.skills.planner_toolkit import PlannerTools
+          from enton.skills.face_toolkit import FaceTools
+          print('All imports OK')
+          "

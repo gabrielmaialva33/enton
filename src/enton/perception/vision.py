@@ -95,11 +95,12 @@ class Vision:
         if self._det_model is None:
             from ultralytics import YOLO
 
-            self._det_model = YOLO(str(self._settings.yolo_model_path))
+            path = self._settings.yolo_model_path
+            self._det_model = YOLO(str(path))
             self._det_model.to(self._settings.yolo_device)
             logger.info(
                 "YOLO detect loaded: %s on %s",
-                self._settings.yolo_model, self._settings.yolo_device,
+                path.name, self._settings.yolo_device,
             )
         return self._det_model
 
@@ -107,11 +108,12 @@ class Vision:
         if self._pose_model is None:
             from ultralytics import YOLO
 
-            self._pose_model = YOLO(self._settings.yolo_pose_model)
+            path = self._settings.yolo_pose_model_path
+            self._pose_model = YOLO(str(path))
             self._pose_model.to(self._settings.yolo_pose_device)
             logger.info(
                 "YOLO pose loaded: %s on %s",
-                self._settings.yolo_pose_model, self._settings.yolo_device,
+                path.name, self._settings.yolo_pose_device,
             )
         return self._pose_model
 

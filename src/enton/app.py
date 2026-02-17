@@ -17,10 +17,14 @@ from enton.cognition.metacognition import MetaCognitiveEngine
 from enton.cognition.persona import REACTION_TEMPLATES, build_system_prompt
 from enton.cognition.planner import Planner
 from enton.cognition.prediction import PredictionEngine, WorldState
+from enton.core.gwt.workspace import GlobalWorkspace
+from enton.core.gwt.modules import PerceptionModule, ExecutiveModule, GitHubModule
+from enton.core.gwt.message import BroadcastMessage
 from enton.core.awareness import AwarenessStateMachine
 from enton.core.blob_store import BlobStore
 from enton.core.commonsense import CommonsenseKB
 from enton.core.config import settings
+from enton.core.context_engine import ContextEngine
 from enton.core.events import (
     ActivityEvent,
     DetectionEvent,
@@ -38,6 +42,7 @@ from enton.core.knowledge_crawler import KnowledgeCrawler
 from enton.core.lifecycle import Lifecycle
 from enton.core.memory import Episode, Memory
 from enton.core.memory_tiers import MemoryTiers
+from enton.core.process_manager import ProcessManager
 from enton.core.self_model import SelfModel
 from enton.core.visual_memory import VisualMemory
 from enton.perception.ears import Ears
@@ -54,12 +59,14 @@ from enton.skills.face_toolkit import FaceTools
 from enton.skills.file_toolkit import FileTools
 from enton.skills.forge_engine import ForgeEngine
 from enton.skills.forge_toolkit import ForgeTools
+from enton.skills.gcp_toolkit import GcpTools
 from enton.skills.github_learner import GitHubLearner
 from enton.skills.greet import GreetSkill
 from enton.skills.knowledge_toolkit import KnowledgeTools
 from enton.skills.memory_toolkit import MemoryTools
 from enton.skills.n8n_toolkit import N8nTools
 from enton.skills.planner_toolkit import PlannerTools
+from enton.skills.process_toolkit import ProcessTools
 from enton.skills.ptz_toolkit import PTZTools
 from enton.skills.react import ReactSkill
 from enton.skills.screenpipe_toolkit import ScreenpipeTools
@@ -140,11 +147,27 @@ class App:
         logger.info("Workspace: %s (%s free)", self._workspace, self._disk_free())
         logger.info("Hardware: %s", self.hardware.summary())
 
+        # v0.8.0 — Process Manager + Context Engine
+        self.process_manager = ProcessManager(max_concurrent=10)
+        self.context_engine = ContextEngine(
+            max_tokens=8000,
+            checkpoint_dir=self._workspace / "checkpoints",
+        )
+        # Seed context with hardware awareness
+        self.context_engine.set(
+            "hardware", self.hardware.summary(),
+            category="system", priority=0.8, ttl=300.0,
+        )
+        self.context_engine.set(
+            "workspace", f"Workspace: {self._workspace} ({self._disk_free()} free)",
+            category="system", priority=0.6,
+        )
+
         # Agno Toolkits
         shell_state = ShellState(cwd=self._workspace)
         describe_tools = DescribeTools(self.vision)
         self.github_learner = GitHubLearner()
-        
+
         toolkits = [
             describe_tools,
             self.github_learner,
@@ -161,6 +184,8 @@ class App:
             BlobTools(self.blob_store),
             CodingTools(workspace=self._workspace),
             WorkspaceTools(self._workspace, self.hardware),
+            ProcessTools(self.process_manager, cwd=str(self._workspace)),
+            GcpTools(project=settings.google_project),
             ScreenpipeTools(),
             N8nTools(),
         ]
@@ -494,7 +519,8 @@ class App:
                 tg.create_task(self._awareness_loop(), name="awareness")
                 tg.create_task(self.dream.run(), name="dream")
                 tg.create_task(self.skill_registry.run(), name="skill_registry")
-                tg.create_task(self._prediction_loop(), name="prediction")
+                # tg.create_task(self._prediction_loop(), name="prediction") # Deprecated by GWT
+                tg.create_task(self._consciousness_loop(), name="consciousness")
                 if self._sound_detector:
                     tg.create_task(
                         self._sound_detection_loop(), name="sound_detect",
@@ -776,21 +802,16 @@ class App:
             self.lifecycle.save_periodic(self.self_model, self.desires)
             logger.debug("Autosave complete")
 
-    async def _prediction_loop(self) -> None:
-        """Active Inference loop: Predict, Compare, Update, Optimize."""
-        await asyncio.sleep(5)  # Let sensors warmup
+    async def _consciousness_loop(self) -> None:
+        """GWT Loop: Sensation -> Perception Update -> Global Broadcast -> Action."""
+        await asyncio.sleep(5)  # Warmup
         
         while True:
-            await asyncio.sleep(2.0)
-            
-            # 1. Build WorldState from current sensors
+            # 1. Sensation & Perception Update
             user_present = self._person_present
-            
-            # Infer activity level from vision detections/motion
             activity_level = "low"
             if user_present:
                 if self.vision.last_activities:
-                    # If we have pose data, assume medium/high
                     activity_level = "medium"
                 if len(self.vision.last_detections) > 3:
                      activity_level = "high"
@@ -801,47 +822,54 @@ class App:
                 activity_level=activity_level,
             )
             
-            # 2. Tick Prediction Engine
-            surprise = self.prediction.tick(state)
+            # Feed perception module (updates prediction engine internally)
+            surprise = self.perception_module.update_state(state)
             
-            # 3. Dynamic Optimization (Surprise Minimization)
-            if surprise < 0.2:
-                # Bored/Expected -> Low FPS
-                target_fps = 1.0
-                if self.vision.fps > 2.0:  # Using current fps as proxy if target_fps not exposed property, but vision has set_target_fps method
-                    # Wait, vision.fps is current actual fps. We want to check target but property is not exposed.
-                    # Just set it, it's cheap.
-                    pass
-                if getattr(self.vision, "_target_fps", 30.0) > 2.0:
-                     logger.debug("Boredom (%.2f) -> Low FPS", surprise)
-                target_fps = 1.0
-            elif surprise > 0.8:
-                # Shock/Novelty -> Max FPS
-                target_fps = 30.0
-                if getattr(self.vision, "_target_fps", 30.0) < 20.0:
-                    logger.info("Surprise (%.2f) -> High FPS", surprise)
-                    self._push_thought(f"[surpresa] !? ({surprise:.2f})")
-            else:
-                target_fps = 10.0
+            # Legacy FPS Control (Reacting to raw surprise)
+            self._adjust_fps(surprise)
+            
+            # 2. Global Workspace Cycle (Competition & Broadcast)
+            thought = self.workspace.tick()
+            
+            # 3. Action Dispatch (Module outputs that won the workspace)
+            if thought:
+                await self._handle_conscious_thought(thought)
                 
-            self.vision.set_target_fps(target_fps)
+            # 4. Sleep (Conscious Cycle Frequency ~1Hz)
+            await asyncio.sleep(1.0)
+
+    def _adjust_fps(self, surprise: float) -> None:
+        """Optimizes vision processing based on surprise level."""
+        if surprise < 0.2:
+            target_fps = 1.0 # Bored -> Save energy
+        elif surprise > 0.8:
+            target_fps = 30.0 # Alert -> Max details
+        else:
+            target_fps = 10.0 # Normal
             
-            # 4. Metacognition & Autodidactism (Fase 2)
-            action = self.metacognition.tick(surprise)
-            if action == "study_github":
-                # Only if we are not already busy/talking
-                if not self.voice.is_speaking and not self.ears.is_listening:
-                    topic = self.metacognition.get_next_topic()
-                    logger.info("Boredom threshold reached. Auto-triggering study on: %s", topic)
-                    self._push_thought(f"[autodidata] Tédio... Vou estudar sobre {topic}.")
-                    
-                    # Fire-and-forget task to learn
-                    asyncio.create_task(
-                        self.brain.think(
-                            f"Estou com tédio e decidi estudar. Use a skill github_learner para pesquisar e aprender sobre '{topic}'. Resuma o que aprendeu.",
-                            voice_mode=False  # Internal thought/log, maybe speak summary later
-                        )
-                    )
+        self.vision.set_target_fps(target_fps)
+
+    async def _handle_conscious_thought(self, msg: BroadcastMessage) -> None:
+        """Act on the winning broadcast message."""
+        # Log thought to HUD (if it's not spammy vision data)
+        if msg.modality != "vision":
+             self._push_thought(f"[{msg.source}] {msg.content}")
+
+        # Intentions -> Actions
+        if msg.modality == "intention" and msg.source == "executive":
+            # Executive Intents are commands
+            # In this case, GitHubModule listens to them, so we don't need to do much here
+            # other than maybe vocalize if it's important.
+            pass
+            
+        elif msg.modality == "memory_recall" and msg.source == "github_skill":
+            # Learned something!
+            summary = msg.metadata.get("full_text", "")
+            if summary:
+                # Vocalize the finding!
+                await self.voice.say(f"Terminei de estudar. {msg.content}")
+
+    # async def _prediction_loop(self) -> None:  <-- Keeping commented code logic for reference effectively removed by not calling it
 
     # ------------------------------------------------------------------
     # Phone Monitor (OpenClaw-inspired — Enton lives on the phone)

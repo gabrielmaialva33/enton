@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import wave
 from typing import TYPE_CHECKING
 
 import numpy as np
 import sounddevice as sd
 import torch
 
+from enton.core.blob_store import BlobType
 from enton.core.config import Provider
 from enton.core.events import EventBus, TranscriptionEvent
 from enton.providers.google import GoogleSTT
@@ -26,9 +29,10 @@ _MIN_PARTIAL_AUDIO = 0.5  # seconds — don't transcribe partials shorter than t
 
 
 class Ears:
-    def __init__(self, settings: Settings, bus: EventBus) -> None:
+    def __init__(self, settings: Settings, bus: EventBus, blob_store: object | None = None) -> None:
         self._settings = settings
         self._bus = bus
+        self._blob_store = blob_store
         self._providers: dict[Provider, STTProvider] = {}
         self._primary = settings.stt_provider
         self._muted = False
@@ -101,6 +105,26 @@ class Ears:
         except Exception:
             logger.debug("Partial transcription failed")
             return ""
+
+    async def _save_audio(self, audio: np.ndarray) -> None:
+        """Save audio segment to BlobStore as WAV."""
+        try:
+            buf = io.BytesIO()
+            pcm = (audio * 32767).clip(-32768, 32767).astype(np.int16)
+            with wave.open(buf, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(self._settings.sample_rate)
+                wf.writeframes(pcm.tobytes())
+
+            await self._blob_store.store(
+                buf.getvalue(),
+                BlobType.AUDIO,
+                extension=".wav",
+                tags=["speech"],
+            )
+        except Exception:
+            logger.debug("Failed to save audio blob")
 
     async def run(self) -> None:
         """Continuous mic capture loop with VAD + streaming partial transcription."""
@@ -189,6 +213,8 @@ class Ears:
                                 len(full_audio) / self._settings.sample_rate,
                             )
                             asyncio.create_task(self.transcribe(full_audio))
+                            if self._blob_store:
+                                asyncio.create_task(self._save_audio(full_audio))
                 else:
                     # Not speaking — maintain rolling pre-buffer
                     pre_buffer.append(chunk)

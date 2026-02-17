@@ -50,11 +50,13 @@ class VisualMemory:
         siglip_model: str = "ViT-B-16-SigLIP",
         siglip_pretrained: str = "webli",
         frames_dir: Path = FRAMES_DIR,
+        blob_store: Any = None,
     ) -> None:
         self._qdrant_url = qdrant_url
         self._siglip_model_name = siglip_model
         self._siglip_pretrained = siglip_pretrained
         self._frames_dir = frames_dir
+        self._blob_store = blob_store
         self._model: Any = None
         self._preprocess: Any = None
         self._tokenizer: Any = None
@@ -187,7 +189,7 @@ class VisualMemory:
         self._episode_count += 1
 
         # Save thumbnail
-        thumbnail_path = self._save_thumbnail(frame_bgr, now)
+        thumbnail_path = await self._save_thumbnail(frame_bgr, now, camera_id)
 
         episode = VisualEpisode(
             timestamp=now,
@@ -222,12 +224,11 @@ class VisualMemory:
         )
         return episode
 
-    def _save_thumbnail(self, frame_bgr: np.ndarray, timestamp: float) -> str:
+    async def _save_thumbnail(
+        self, frame_bgr: np.ndarray, timestamp: float, camera_id: str = "",
+    ) -> str:
         """Save JPEG thumbnail, return path string."""
         try:
-            self._ensure_frames_dir()
-            fname = f"{int(timestamp * 1000)}.jpg"
-            path = self._frames_dir / fname
             # Resize to 320px wide for storage
             h, w = frame_bgr.shape[:2]
             if w > 320:
@@ -235,7 +236,35 @@ class VisualMemory:
                 frame_bgr = cv2.resize(
                     frame_bgr, (320, int(h * scale)),
                 )
-            cv2.imwrite(str(path), frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
+
+            _, jpeg_buf = cv2.imencode(
+                ".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 70],
+            )
+            jpeg_bytes = jpeg_buf.tobytes()
+
+            # Use BlobStore (external HD) when available
+            if self._blob_store is not None:
+                try:
+                    from enton.core.blob_store import BlobType
+
+                    meta = await self._blob_store.store(
+                        jpeg_bytes,
+                        BlobType.IMAGE,
+                        extension=".jpg",
+                        camera_id=camera_id,
+                        tags=["thumbnail", "visual_memory"],
+                    )
+                    return meta.path
+                except Exception:
+                    logger.debug("BlobStore save failed, falling back to local")
+
+            # Fallback: direct local save
+            import asyncio
+
+            self._ensure_frames_dir()
+            fname = f"{int(timestamp * 1000)}.jpg"
+            path = self._frames_dir / fname
+            await asyncio.to_thread(path.write_bytes, jpeg_bytes)
             return str(path)
         except Exception:
             logger.warning("Failed to save thumbnail")
@@ -250,9 +279,9 @@ class VisualMemory:
             return []
 
         try:
-            results = self._qdrant.search(
+            response = self._qdrant.query_points(
                 collection_name=VISUAL_COLLECTION,
-                query_vector=embedding,
+                query=embedding,
                 limit=n,
             )
             return [
@@ -263,7 +292,7 @@ class VisualMemory:
                     "thumbnail_path": r.payload.get("thumbnail_path", ""),
                     "score": r.score,
                 }
-                for r in results
+                for r in response.points
             ]
         except Exception:
             logger.warning("Visual search failed")

@@ -39,6 +39,7 @@ class EmotionEvent(Event):
     emotion_en: str = ""
     score: float = 0.0
     color: tuple[int, int, int] = (180, 180, 180)
+    bbox: tuple[int, int, int, int] = (0, 0, 0, 0)
 
 
 @dataclass(frozen=True, slots=True)

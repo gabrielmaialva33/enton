@@ -225,6 +225,7 @@ class Vision:
                         emotion_en=fe.label_en,
                         score=fe.score,
                         color=fe.color,
+                        bbox=fe.bbox,
                     )
                     emotions.append(emo)
             self._last_emotions = emotions

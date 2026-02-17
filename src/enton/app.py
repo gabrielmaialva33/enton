@@ -5,6 +5,7 @@ import logging
 import random
 import re
 import time
+from collections import deque
 
 from enton.action.voice import Voice
 from enton.cognition.brain import EntonBrain
@@ -44,7 +45,9 @@ logger = logging.getLogger(__name__)
 
 
 class App:
-    def __init__(self) -> None:
+    def __init__(self, viewer: bool = False) -> None:
+        self._viewer = viewer
+        self._thoughts: deque[str] = deque(maxlen=6)
         self.bus = EventBus()
         self.self_model = SelfModel(settings)
         self.memory = Memory()
@@ -117,6 +120,13 @@ class App:
         except Exception:
             logger.warning("SoundDetector unavailable")
 
+    def _push_thought(self, text: str) -> None:
+        """Add a thought to the viewer display buffer."""
+        # Truncate long thoughts for the HUD
+        if len(text) > 120:
+            text = text[:117] + "..."
+        self._thoughts.append(text)
+
     def _probe_capabilities(self) -> None:
         sm = self.self_model.senses
         sm.llm_ready = bool(self.brain._models)
@@ -158,6 +168,7 @@ class App:
 
     async def _on_face(self, event: FaceEvent) -> None:
         if event.identity != "unknown":
+            self._push_thought(f"[face] {event.identity} ({event.confidence:.0%})")
             logger.info(
                 "Face recognized: %s (%.0f%%)",
                 event.identity, event.confidence * 100,
@@ -211,8 +222,10 @@ class App:
         system += f"\n\nCONTEXTO VISUAL ATUAL: {scene_desc}"
         system += "\nVocê tem acesso a ferramentas. Use-as se necessário para responder."
 
+        self._push_thought(f"[ouviu] {event.text[:80]}")
         response = await self.brain.think_agent(event.text, system=system)
         if response:
+            self._push_thought(f"[brain] {response[:100]}")
             await self.voice.say(response)
             self.memory.remember(
                 Episode(
@@ -288,6 +301,8 @@ class App:
                     )
                 if self._metrics:
                     tg.create_task(self._metrics.run(), name="metrics")
+                if self._viewer:
+                    tg.create_task(self._viewer_loop(), name="viewer")
         finally:
             # Graceful shutdown — persist state
             self.lifecycle.on_shutdown(self.self_model, self.desires)
@@ -444,6 +459,7 @@ class App:
             if self.voice.is_speaking:
                 continue
 
+            self._push_thought(f"[desejo] {desire.name} (urgencia={desire.urgency:.1f})")
             logger.info("Desire activated: %s (urgency=%.2f)", desire.name, desire.urgency)
             desire.activate()
 
@@ -512,6 +528,99 @@ class App:
                 logger.info("Routine due: %s", routine["name"])
                 if not self.voice.is_speaking:
                     await self.voice.say(routine["text"])
+
+    async def _viewer_loop(self) -> None:
+        """Live vision window with cyberpunk HUD overlay + thoughts."""
+        import cv2
+
+        from enton.perception.overlay import Overlay
+
+        hud = Overlay(font_size=18)
+        fullscreen = False
+
+        cv2.namedWindow("Enton Vision", cv2.WINDOW_NORMAL)
+        logger.info("Viewer window opened")
+
+        while True:
+            frame = self.vision.last_frame
+            if frame is None:
+                await asyncio.sleep(0.1)
+                continue
+
+            annotated = frame.copy()
+
+            # Scan line
+            annotated = hud.draw_scan_line(annotated)
+
+            # Detection overlays
+            det_summary: dict[str, int] = {}
+            for det in self.vision.last_detections:
+                det_summary[det.label] = det_summary.get(det.label, 0) + 1
+                if det.bbox:
+                    color = (0, 255, 120) if det.label == "person" else (255, 160, 0)
+                    if det.label in ("cat", "dog"):
+                        color = (0, 200, 255)
+                    annotated = hud.draw_target_brackets(annotated, det.bbox, color)
+                    annotated = hud.draw_confidence_badge(
+                        annotated, det.label, det.confidence, det.bbox,
+                    )
+
+            # Pose skeleton + activity labels
+            n_persons = 0
+            activities_hud: list[tuple[str, tuple[int, int, int]]] = []
+            # Use pose from vision if available — rerun pose on frame for skeleton
+            # Access vision's stored data (no recompute needed for labels)
+            for act in self.vision.last_activities:
+                activities_hud.append((act.activity, act.color or (0, 255, 120)))
+
+            # Emotion labels
+            for emo in self.vision.last_emotions:
+                if emo.bbox:
+                    annotated = hud.draw_emotion_label(
+                        annotated, emo.emotion, emo.score,
+                        emo.bbox, emo.color or (0, 230, 255),
+                    )
+
+            # Main HUD panel
+            n_persons = sum(1 for d in self.vision.last_detections if d.label == "person")
+            annotated = hud.draw_hud(
+                annotated,
+                fps=self.vision.fps,
+                n_objects=len(self.vision.last_detections),
+                n_persons=n_persons,
+                detections=det_summary,
+                activities=activities_hud,
+            )
+
+            # Thoughts panel — bottom of screen
+            if self._thoughts:
+                fh, fw = annotated.shape[:2]
+                y_base = fh - 30
+                for thought in reversed(self._thoughts):
+                    cv2.putText(
+                        annotated, thought,
+                        (12, y_base), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5, (0, 0, 0), 3, cv2.LINE_AA,
+                    )
+                    cv2.putText(
+                        annotated, thought,
+                        (12, y_base), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5, (0, 255, 200), 1, cv2.LINE_AA,
+                    )
+                    y_base -= 22
+
+            # Show
+            cv2.imshow("Enton Vision", annotated)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                cv2.destroyAllWindows()
+                raise KeyboardInterrupt
+            elif key == ord("f"):
+                fullscreen = not fullscreen
+                prop = cv2.WINDOW_FULLSCREEN if fullscreen else cv2.WINDOW_NORMAL
+                cv2.setWindowProperty("Enton Vision", cv2.WND_PROP_FULLSCREEN, prop)
+
+            await asyncio.sleep(0.01)
 
     async def _autosave_loop(self) -> None:
         """Periodically saves state for crash recovery."""

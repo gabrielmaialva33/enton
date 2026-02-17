@@ -1,9 +1,10 @@
-import logging
 import asyncio
-from typing import Optional, Dict, Any
-from enton.core.gwt.module import CognitiveModule
-from enton.core.gwt.message import BroadcastMessage
+import logging
+from typing import Any
+
 from enton.cognition.brain import EntonBrain
+from enton.core.gwt.message import BroadcastMessage
+from enton.core.gwt.module import CognitiveModule
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +19,10 @@ class AgenticModule(CognitiveModule):
         super().__init__(name="agentic_module")
         self.brain = brain
         self.is_busy = False
-        self._pending_result: Optional[str] = None
-        self._action_memory: Dict[str, Any] = {}
+        self._pending_result: str | None = None
+        self._action_memory: dict[str, Any] = {}
 
-    def run_step(self, context: Optional[BroadcastMessage]) -> Optional[BroadcastMessage]:
+    def run_step(self, context: BroadcastMessage | None) -> BroadcastMessage | None:
         # 1. Entrega resultados pendentes (Feedback Loop)
         if self._pending_result:
             content = self._pending_result
@@ -80,7 +81,10 @@ class AgenticModule(CognitiveModule):
             
             # Aqui usamos o brain.think, mas forçando o contexto da ferramenta se possível
             # Como o brain já tem toolkits registrados, pedimos pra ele usar.
-            prompt = f"Use a ferramenta '{tool_name}' para: {instruction}"
+            from enton.cognition.prompts import AGENTIC_TOOL_PROMPT
+            prompt = AGENTIC_TOOL_PROMPT.format(
+                tool_name=tool_name, instruction=instruction,
+            )
             result = await self.brain.think(prompt)
             
             self._pending_result = f"Tool {tool_name} output: {result}"

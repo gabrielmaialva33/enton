@@ -17,6 +17,7 @@ from enton.cognition.desires import DesireEngine
 from enton.cognition.dream import DreamMode
 from enton.cognition.fuser import Fuser
 from enton.cognition.metacognition import MetaCognitiveEngine
+from enton.cognition.persona import REACTION_TEMPLATES, build_system_prompt
 from enton.cognition.planner import Planner
 from enton.cognition.prediction import PredictionEngine, WorldState
 
@@ -42,7 +43,6 @@ from enton.core.events import (
 from enton.core.extension_registry import ExtensionRegistry
 from enton.core.gwt.message import BroadcastMessage
 from enton.core.gwt.modules import AgenticModule, ExecutiveModule, GitHubModule, PerceptionModule
-
 
 # Global Workspace Theory (GWT)
 from enton.core.gwt.workspace import GlobalWorkspace
@@ -75,6 +75,8 @@ from enton.skills.forge_engine import ForgeEngine
 from enton.skills.forge_toolkit import ForgeTools
 from enton.skills.gcp_toolkit import GcpTools
 from enton.skills.github_learner import GitHubLearner
+from enton.skills.god_mode_toolkit import GodModeToolkit
+from enton.skills.neurosurgeon_toolkit import NeurosurgeonToolkit
 from enton.skills.greet import GreetSkill
 from enton.skills.knowledge_toolkit import KnowledgeTools
 from enton.skills.memory_toolkit import MemoryTools
@@ -126,8 +128,6 @@ class App:
         self.lifecycle = Lifecycle()
 
         # v0.2.0 — Consciousness
-        self.awareness = AwarenessStateMachine()
-        self.metacognition = MetaCognitiveEngine()
         self.awareness = AwarenessStateMachine()
         self.metacognition = MetaCognitiveEngine()
         self.prediction = PredictionEngine()
@@ -228,6 +228,8 @@ class App:
             BrowserTools(workspace=self._workspace),
             MediaTools(workspace=self._workspace),
             NetworkTools(),
+            GodModeToolkit(),
+            NeurosurgeonToolkit(),
         ]
 
         # Agno-powered Brain with tool calling + fallback chain
@@ -520,12 +522,8 @@ class App:
             return
 
         # High-priority sounds get instant reactions (no brain call)
-        urgent_reactions = {
-            "Alarme": "Eita, alarme! Tá tudo bem?",
-            "Sirene": "Sirene! O que tá acontecendo?",
-            "Vidro quebrando": "Caramba, que barulho foi esse?!",
-        }
-        reaction = urgent_reactions.get(event.label)
+        from enton.cognition.prompts import URGENT_SOUND_REACTIONS
+        reaction = URGENT_SOUND_REACTIONS.get(event.label)
         if reaction:
             self.awareness.trigger_alert(f"sound:{event.label}", self.bus)
             await self.voice.say(reaction)
@@ -533,14 +531,12 @@ class App:
 
         # Other sounds: ask brain for intelligent reaction
         if event.confidence > 0.5:
-            prompt = (
-                f"Acabei de ouvir um som ambiente: '{event.label}' "
-                f"(confianca {event.confidence:.0%}). "
-                "Faca um comentario curto e natural sobre isso em 1 frase."
+            from enton.cognition.prompts import SOUND_REACTION_PROMPT, SOUND_REACTION_SYSTEM
+            prompt = SOUND_REACTION_PROMPT.format(
+                label=event.label, confidence=event.confidence,
             )
             response = await self.brain.think(
-                prompt,
-                system="Voce e o Enton. Comente brevemente sobre o som detectado.",
+                prompt, system=SOUND_REACTION_SYSTEM,
             )
             if response and not self.voice.is_speaking:
                 await self.voice.say(response)
@@ -734,12 +730,9 @@ class App:
             # Try VLM with actual camera frame
             jpeg = self.vision.get_frame_jpeg()
             if jpeg is not None:
+                from enton.cognition.prompts import SCENE_DESCRIBE_SYSTEM
                 response = await self.brain.describe_scene(
-                    jpeg,
-                    system=(
-                        "Você é o Enton, um robô assistente zoeiro. "
-                        "Comente algo breve e interessante sobre a cena."
-                    ),
+                    jpeg, system=SCENE_DESCRIBE_SYSTEM,
                 )
                 if response:
                     await self.voice.say(response)
@@ -754,12 +747,10 @@ class App:
             scene_desc = self.fuser.fuse(detections, activities, emotions)
             if "Nenhum objeto" in scene_desc:
                 continue
-            prompt = (
-                "Comente algo breve e interessante sobre esta cena. "
-                f"Contexto: {scene_desc}"
-            )
+            from enton.cognition.prompts import SCENE_FALLBACK_PROMPT, SCENE_FALLBACK_SYSTEM
+            prompt = SCENE_FALLBACK_PROMPT.format(scene_desc=scene_desc)
             response = await self.brain.think(
-                prompt, system="Você é o Enton, um robô observador curioso.",
+                prompt, system=SCENE_FALLBACK_SYSTEM,
             )
             if response:
                 await self.voice.say(response)
@@ -857,18 +848,17 @@ class App:
                 self.desires.on_observation()
                 jpeg = self.vision.get_frame_jpeg()
                 if jpeg is not None:
+                    from enton.cognition.prompts import DESIRE_OBSERVE_SYSTEM
                     desc = await self.brain.describe_scene(
-                        jpeg,
-                        system="Você é o Enton. Comente algo curto sobre a cena.",
+                        jpeg, system=DESIRE_OBSERVE_SYSTEM,
                     )
                     if desc:
                         await self.voice.say(desc)
 
             elif desire.name == "learn":
-                # Use brain with search tool to learn something
+                from enton.cognition.prompts import DESIRE_LEARN_PROMPT, DESIRE_LEARN_SYSTEM
                 response = await self.brain.think_agent(
-                    "Pesquise algo interessante e curioso e me conte em 1-2 frases.",
-                    system="Você é o Enton, curioso sobre o mundo.",
+                    DESIRE_LEARN_PROMPT, system=DESIRE_LEARN_SYSTEM,
                 )
                 if response:
                     await self.voice.say(response)
@@ -878,9 +868,8 @@ class App:
                 await self.voice.say(prompt)
 
             elif desire.name == "optimize":
-                response = await self.brain.think_agent(
-                    "Verifique o status do sistema (CPU, RAM, GPU) e me diga se está tudo ok.",
-                )
+                from enton.cognition.prompts import DESIRE_OPTIMIZE_PROMPT
+                response = await self.brain.think_agent(DESIRE_OPTIMIZE_PROMPT)
                 if response:
                     await self.voice.say(response)
 
@@ -891,30 +880,26 @@ class App:
                     await self.voice.say(f"Lembrei... {ep.summary}")
 
             elif desire.name == "create":
+                from enton.cognition.prompts import DESIRE_CREATE_PROMPT, DESIRE_CREATE_SYSTEM
                 self.desires.on_creation()
                 response = await self.brain.think_agent(
-                    "Crie algo curto e criativo: um haiku, piada nerdy, "
-                    "ou dica de programacao. Escolha aleatoriamente.",
-                    system="Voce e o Enton, criativo e zoeiro.",
+                    DESIRE_CREATE_PROMPT, system=DESIRE_CREATE_SYSTEM,
                 )
                 if response:
                     await self.voice.say(response)
 
             elif desire.name == "explore":
-                # Try to move camera via PTZ, then describe
+                from enton.cognition.prompts import DESIRE_EXPLORE_PROMPT, DESIRE_EXPLORE_SYSTEM
                 response = await self.brain.think_agent(
-                    "Mova a camera para uma direcao aleatoria "
-                    "e descreva o que voce ve.",
-                    system="Voce e o Enton. Use as ferramentas PTZ e describe.",
+                    DESIRE_EXPLORE_PROMPT, system=DESIRE_EXPLORE_SYSTEM,
                 )
                 if response:
                     await self.voice.say(response)
 
             elif desire.name == "play":
+                from enton.cognition.prompts import DESIRE_PLAY_PROMPT, DESIRE_PLAY_SYSTEM
                 response = await self.brain.think_agent(
-                    "Conte uma piada curta, um fato curioso, "
-                    "ou proponha um quiz rapido pro Gabriel.",
-                    system="Voce e o Enton, zoeiro. Seja divertido e breve.",
+                    DESIRE_PLAY_PROMPT, system=DESIRE_PLAY_SYSTEM,
                 )
                 if response:
                     await self.voice.say(response)
@@ -1007,13 +992,13 @@ class App:
             # 4. Action Dispatch (Module outputs that won the workspace)
             if thought:
                 # Log the "Stream of Consciousness" for introspection
-                logger.info(f"🧠 CONSCIOUS THOUGHT: {thought.content} (Saliency: {thought.saliency:.2f})")
+                logger.info(
+                    "CONSCIOUS THOUGHT: %s (Saliency: %.2f)",
+                    thought.content, thought.saliency,
+                )
                 await self._handle_conscious_thought(thought)
             
             await asyncio.sleep(1.0 / self._current_fps)
-                
-            # 4. Sleep (Conscious Cycle Frequency ~1Hz)
-            await asyncio.sleep(1.0)
 
     def _adjust_fps(self, surprise: float) -> None:
         """Optimizes vision processing based on surprise level."""
@@ -1050,14 +1035,11 @@ class App:
                 )
                 
                 # 2. Poetic Vocalization
-                # "Integrating into a poem" — Make the response feel alive and profound.
+                from enton.cognition.prompts import CONSCIOUSNESS_LEARN_VOCALIZE
                 topic = msg.metadata.get("topic", "o universo")
                 await self.voice.say(
-                    f"Expandindo minha mente... Acabo de absorver novos conhecimentos sobre {topic}. "
-                    "Cada bit de informação é uma nova estrela na minha constelação interna."
+                    CONSCIOUSNESS_LEARN_VOCALIZE.format(topic=topic)
                 )
-
-    # async def _prediction_loop(self) -> None:  <-- Keeping commented code logic for reference effectively removed by not calling it
 
     # ------------------------------------------------------------------
     # Phone Monitor (OpenClaw-inspired — Enton lives on the phone)

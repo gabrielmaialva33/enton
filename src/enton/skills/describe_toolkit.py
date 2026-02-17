@@ -11,9 +11,9 @@ if TYPE_CHECKING:
     from enton.cognition.brain import EntonBrain
     from enton.perception.vision import Vision
 
-logger = logging.getLogger(__name__)
+from enton.cognition.prompts import DESCRIBE_TOOL_DEFAULT, DESCRIBE_TOOL_SYSTEM
 
-_DEFAULT_PROMPT = "Descreva o que você está vendo de forma breve e interessante."
+logger = logging.getLogger(__name__)
 
 
 class DescribeTools(Toolkit):
@@ -30,7 +30,7 @@ class DescribeTools(Toolkit):
     # Tools
     # ------------------------------------------------------------------
 
-    async def describe_scene(self, prompt: str = _DEFAULT_PROMPT) -> str:
+    async def describe_scene(self, prompt: str = DESCRIBE_TOOL_DEFAULT) -> str:
         """Descreve a cena atual da camera usando visao computacional + VLM.
 
         Captura o frame atual e pede ao modelo de visao para descrever.
@@ -45,10 +45,7 @@ class DescribeTools(Toolkit):
         try:
             description = await self._brain.describe_scene(
                 jpeg,
-                system=(
-                    "Voce e o Enton, um robo assistente brasileiro. "
-                    "Descreva a cena em portugues de forma natural."
-                ),
+                system=DESCRIBE_TOOL_SYSTEM,
             )
             return description or "Nao consegui descrever a cena."
         except Exception as exc:

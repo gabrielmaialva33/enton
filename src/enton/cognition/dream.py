@@ -128,21 +128,16 @@ class DreamMode:
         if len(recent) < 5:
             return ""
 
+        from enton.cognition.prompts import DREAM_CONSOLIDATE_PROMPT, DREAM_CONSOLIDATE_SYSTEM
+
         summaries = [e.summary for e in recent]
-        prompt = (
-            "Voce e o sistema de consolidacao de memoria do Enton. "
-            "Resuma estes episodios recentes em 2-3 insights chave. "
-            "Foque em padroes, preferencias do usuario, e eventos importantes.\n\n"
-            + "\n".join(f"- {s}" for s in summaries[-10:])
-        )
+        episodes_text = "\n".join(f"- {s}" for s in summaries[-10:])
+        prompt = DREAM_CONSOLIDATE_PROMPT.format(episodes=episodes_text)
 
         try:
             result = await self._brain.think(
                 prompt,
-                system=(
-                    "Voce e um sistema de memoria. Seja conciso e factual. "
-                    "Responda em 2-3 frases no maximo."
-                ),
+                system=DREAM_CONSOLIDATE_SYSTEM,
             )
         except Exception:
             logger.debug("Consolidation LLM call failed")
@@ -196,18 +191,19 @@ class DreamMode:
         if len(convos) < 3:
             return
 
+        from enton.cognition.prompts import DREAM_PROFILE_PROMPT, DREAM_PROFILE_SYSTEM
+
         texts = [e.summary for e in convos[-10:]]
-        prompt = (
-            f"Destes trechos de conversa com {self._memory.profile.name}, "
-            "extraia preferencias, habitos ou fatos sobre a pessoa. "
-            "Retorne como JSON: lista de strings com cada fato.\n\n"
-            + "\n".join(f"- {t}" for t in texts)
+        conversations_text = "\n".join(f"- {t}" for t in texts)
+        prompt = DREAM_PROFILE_PROMPT.format(
+            user_name=self._memory.profile.name,
+            conversations=conversations_text,
         )
 
         try:
             result = await self._brain.think(
                 prompt,
-                system="Retorne APENAS um JSON array de strings. Nada mais.",
+                system=DREAM_PROFILE_SYSTEM,
             )
         except Exception:
             return

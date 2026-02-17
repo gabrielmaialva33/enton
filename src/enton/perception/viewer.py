@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 if TYPE_CHECKING:
-    from enton.perception.vision import Vision, CameraFeed
+    from enton.perception.vision import CameraFeed, Vision
 
 logger = logging.getLogger(__name__)
 

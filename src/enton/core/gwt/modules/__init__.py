@@ -1,6 +1,6 @@
-from .perception import PerceptionModule
+from .agentic import AgenticModule
 from .executive import ExecutiveModule
 from .github import GitHubModule
-from .agentic import AgenticModule
+from .perception import PerceptionModule
 
-__all__ = ["PerceptionModule", "ExecutiveModule", "GitHubModule", "AgenticModule"]
+__all__ = ["AgenticModule", "ExecutiveModule", "GitHubModule", "PerceptionModule"]

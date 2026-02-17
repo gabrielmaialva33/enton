@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Optional
+
 from enton.core.gwt.message import BroadcastMessage
+
 
 class CognitiveModule(ABC):
     """
@@ -12,7 +13,7 @@ class CognitiveModule(ABC):
         self.name = name
 
     @abstractmethod
-    def run_step(self, context: Optional[BroadcastMessage]) -> Optional[BroadcastMessage]:
+    def run_step(self, context: BroadcastMessage | None) -> BroadcastMessage | None:
         """
         Executa um passo de processamento.
         

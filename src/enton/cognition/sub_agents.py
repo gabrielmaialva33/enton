@@ -62,57 +62,38 @@ class AgentResult:
 # Role Definitions
 # ------------------------------------------------------------------ #
 
+from enton.cognition.prompts import SUBAGENT_PROMPTS
+
 ROLE_CONFIGS: dict[str, dict[str, Any]] = {
     "vision": {
         "name": "EntonVision",
-        "system": (
-            "Voce e o EntonVision, especialista em analise visual. "
-            "Sua tarefa e analisar cenas, identificar objetos, descrever "
-            "atividades e interpretar o que a camera esta vendo. "
-            "Seja preciso e objetivo. Responda em portugues."
-        ),
+        "system": SUBAGENT_PROMPTS["vision"],
         "toolkit_names": [
             "describe_tools", "face_tools", "visual_memory_tools",
             "ptz_tools",
         ],
-        "description": "Analise de cenas, objetos, faces e atividades visuais.",
+        "description": "Análise de cenas, objetos, faces e atividades visuais.",
     },
     "coding": {
         "name": "EntonCoder",
-        "system": (
-            "Voce e o EntonCoder, especialista em programacao. "
-            "Voce sabe C, Rust, Zig, Python, Erlang/Elixir e mais. "
-            "Sua tarefa e escrever, revisar, debuggar e executar codigo. "
-            "Use as ferramentas de workspace e coding disponiveis. "
-            "Priorize codigo correto, seguro e performatico."
-        ),
+        "system": SUBAGENT_PROMPTS["coding"],
         "toolkit_names": [
             "coding_tools", "shell_tools", "file_tools",
             "workspace_tools", "process_tools",
         ],
-        "description": "Programacao multi-linguagem, review, debug e execucao.",
+        "description": "Programação multi-linguagem, review, debug e execução.",
     },
     "research": {
         "name": "EntonResearch",
-        "system": (
-            "Voce e o EntonResearch, especialista em pesquisa. "
-            "Sua tarefa e buscar informacoes na web, crawlear paginas, "
-            "extrair conhecimento e sintetizar descobertas. "
-            "Seja rigoroso com fontes. Responda em portugues."
-        ),
+        "system": SUBAGENT_PROMPTS["research"],
         "toolkit_names": [
             "search_tools", "knowledge_tools", "memory_tools",
         ],
-        "description": "Pesquisa web, knowledge crawling e sintese de informacoes.",
+        "description": "Pesquisa web, knowledge crawling e síntese de informações.",
     },
     "system": {
         "name": "EntonSysAdmin",
-        "system": (
-            "Voce e o EntonSysAdmin, especialista em infraestrutura. "
-            "Monitora hardware (CPU, GPU, RAM, disco), gerencia processos, "
-            "deploya em GCP, e mantem o sistema saudavel. "
-            "Seja conciso e objetivo em diagnosticos."
-        ),
+        "system": SUBAGENT_PROMPTS["system"],
         "toolkit_names": [
             "system_tools", "workspace_tools", "process_tools",
             "gcp_tools", "shell_tools",

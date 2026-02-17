@@ -1,8 +1,8 @@
-import logging
 import asyncio
-from typing import Optional
-from enton.core.gwt.module import CognitiveModule
+import logging
+
 from enton.core.gwt.message import BroadcastMessage
+from enton.core.gwt.module import CognitiveModule
 from enton.skills.github_learner import GitHubLearner
 
 logger = logging.getLogger(__name__)
@@ -17,9 +17,9 @@ class GitHubModule(CognitiveModule):
         super().__init__(name="github_skill")
         self.learner = learner
         self.is_busy = False
-        self._pending_result: Optional[str] = None
+        self._pending_result: str | None = None
 
-    def run_step(self, context: Optional[BroadcastMessage]) -> Optional[BroadcastMessage]:
+    def run_step(self, context: BroadcastMessage | None) -> BroadcastMessage | None:
         # 1. Se tem resultado pendente de uma tarefa anterior, entrega agora
         if self._pending_result:
             content = self._pending_result

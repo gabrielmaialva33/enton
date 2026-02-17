@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from agno.tools import Toolkit
 
@@ -22,7 +22,7 @@ class N8nTools(Toolkit):
     def trigger_automation(
         self,
         workflow_id: str,
-        data: Optional[Dict[str, Any]] = None,
+        data: dict[str, Any] | None = None,
     ) -> str:
         """Dispara um workflow de automacao no n8n.
 

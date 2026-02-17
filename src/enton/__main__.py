@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import os
+
 import torch
 
 try:
@@ -37,7 +38,6 @@ def main() -> None:
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
     os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "1")
 
-    import torch
 
     torch.set_num_threads(1)
 
@@ -47,7 +47,6 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    from enton.app import App
 
     app = App(viewer=args.viewer)
     try:

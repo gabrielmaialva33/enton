@@ -1,9 +1,9 @@
 import logging
-import time
-from typing import Optional, Any
-from enton.core.gwt.module import CognitiveModule
-from enton.core.gwt.message import BroadcastMessage
+from typing import Any
+
 from enton.cognition.prediction import PredictionEngine
+from enton.core.gwt.message import BroadcastMessage
+from enton.core.gwt.module import CognitiveModule
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ class PerceptionModule(CognitiveModule):
         self._current_surprise = self.engine.tick(state)
         return self._current_surprise
 
-    def run_step(self, context: Optional[BroadcastMessage]) -> Optional[BroadcastMessage]:
+    def run_step(self, context: BroadcastMessage | None) -> BroadcastMessage | None:
         # Saliência é baseada no desvio da neutralidade (0.5).
         # Tanto surpresa muito alta (CAOS) quanto muito baixa (TÉDIO) são salientes.
         # 0.0 -> |0.0 - 0.5| = 0.5 * 2 = 1.0 Saliência

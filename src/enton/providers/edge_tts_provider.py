@@ -30,8 +30,8 @@ class EdgeTTS:
         self.sample_rate: int = 24000
 
     async def synthesize(self, text: str) -> np.ndarray:
-        import edge_tts  # noqa: PLC0415
-        import soundfile as sf  # noqa: PLC0415
+        import edge_tts
+        import soundfile as sf
 
         communicate = edge_tts.Communicate(text, self._voice)
 

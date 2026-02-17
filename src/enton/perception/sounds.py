@@ -33,7 +33,7 @@ DEFAULT_SOUND_CLASSES = {
 
 
 class SoundResult:
-    __slots__ = ("label", "label_en", "confidence")
+    __slots__ = ("confidence", "label", "label_en")
 
     def __init__(self, label: str, label_en: str, confidence: float) -> None:
         self.label = label

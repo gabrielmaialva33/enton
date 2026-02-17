@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 from agno.tools import Toolkit
 
@@ -26,7 +26,7 @@ class ScreenpipeTools(Toolkit):
         query: str,
         limit: int = 5,
         content_type: str = "ocr",
-        minutes_back: Optional[int] = None,
+        minutes_back: int | None = None,
     ) -> str:
         """Pesquisa por texto ou audio no historico de tela do usuario (Screenpipe).
 

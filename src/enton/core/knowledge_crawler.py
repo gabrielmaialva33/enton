@@ -124,12 +124,9 @@ class KnowledgeCrawler:
         if not self._brain or not text:
             return []
 
-        prompt = (
-            "Extraia fatos do texto abaixo como JSON array de objetos com "
-            '"subject", "predicate", "obj". Maximo 10 fatos. '
-            "Retorne APENAS o JSON array, sem markdown.\n\n"
-            f"Texto:\n{text[:3000]}"
-        )
+        from enton.cognition.prompts import KNOWLEDGE_EXTRACT_PROMPT
+
+        prompt = KNOWLEDGE_EXTRACT_PROMPT.format(text=text[:3000])
 
         try:
             response = await self._brain.think(prompt)

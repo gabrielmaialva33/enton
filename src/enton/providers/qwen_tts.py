@@ -37,8 +37,8 @@ class Qwen3TTS:
         if self._model is not None:
             return self._model
 
-        import torch  # noqa: PLC0415
-        from qwen_tts import Qwen3TTSModel  # noqa: PLC0415
+        import torch
+        from qwen_tts import Qwen3TTSModel
 
         logger.info("Loading Qwen3-TTS model: %s", self._model_id)
         self._model = Qwen3TTSModel.from_pretrained(

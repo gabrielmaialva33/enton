@@ -146,7 +146,7 @@ class SkillRegistry:
             module = _types.ModuleType(module_name)
             module.__file__ = str(path)
             sys.modules[module_name] = module
-            exec(code, module.__dict__)  # noqa: S102
+            exec(code, module.__dict__)
             return module
         except Exception:
             logger.warning("Failed to import %s", path.name, exc_info=True)

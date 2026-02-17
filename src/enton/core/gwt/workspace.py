@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, List
+
 from enton.core.gwt.message import BroadcastMessage
 from enton.core.gwt.module import CognitiveModule
 
@@ -12,16 +12,16 @@ class GlobalWorkspace:
     """
     
     def __init__(self):
-        self.modules: List[CognitiveModule] = []
-        self.current_conscious_content: Optional[BroadcastMessage] = None
-        self.history: List[BroadcastMessage] = []
+        self.modules: list[CognitiveModule] = []
+        self.current_conscious_content: BroadcastMessage | None = None
+        self.history: list[BroadcastMessage] = []
         self.step_counter: int = 0
 
     def register_module(self, module: CognitiveModule) -> None:
         self.modules.append(module)
         logger.info(f"Module registered in GWT: {module.name}")
 
-    def tick(self) -> Optional[BroadcastMessage]:
+    def tick(self) -> BroadcastMessage | None:
         """
         Executa um ciclo cognitivo completo.
         1. Envia contexto atual para todos os módulos.
@@ -30,7 +30,7 @@ class GlobalWorkspace:
         4. Atualiza contexto.
         """
         self.step_counter += 1
-        candidates: List[BroadcastMessage] = []
+        candidates: list[BroadcastMessage] = []
 
         # 1. Parallel execution (synchronous for now, but conceptual parallel)
         for module in self.modules:

@@ -6,7 +6,7 @@ import time
 from typing import TYPE_CHECKING
 
 import cv2
-import numpy as np  # noqa: TC002 — used at runtime
+import numpy as np
 
 from enton.core.events import (
     ActivityEvent,
@@ -17,7 +17,6 @@ from enton.core.events import (
     SystemEvent,
 )
 from enton.perception.activity import classify as classify_activity
-from enton.perception.emotion import EmotionRecognizer
 
 if TYPE_CHECKING:
     from enton.core.config import Settings
@@ -29,9 +28,18 @@ class CameraFeed:
     """Single camera capture + per-camera state."""
 
     __slots__ = (
-        "id", "source", "cap", "last_frame",
-        "last_detections", "last_activities", "last_emotions", "last_faces",
-        "fps", "_frame_count", "_t_start", "_was_connected",
+        "_frame_count",
+        "_t_start",
+        "_was_connected",
+        "cap",
+        "fps",
+        "id",
+        "last_activities",
+        "last_detections",
+        "last_emotions",
+        "last_faces",
+        "last_frame",
+        "source",
     )
 
     def __init__(self, cam_id: str, source: str | int) -> None:

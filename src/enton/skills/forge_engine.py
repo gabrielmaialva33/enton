@@ -23,44 +23,10 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from enton.cognition.brain import EntonBrain
 
+from enton.cognition.prompts import FORGE_CORRECTION_PROMPT as CORRECTION_PROMPT
+from enton.cognition.prompts import FORGE_SYSTEM_PROMPT
+
 logger = logging.getLogger(__name__)
-
-FORGE_SYSTEM_PROMPT = """\
-You are a Python tool engineer for Enton, an AI robot assistant.
-Generate a SINGLE Python function that will become an Agno Toolkit method.
-
-CONSTRAINTS:
-- The function must be self-contained (no external state).
-- Only use Python stdlib + common packages (requests, json, re, math, os, etc).
-- Do NOT use: asyncio, torch, numpy, or any heavy ML libraries.
-- The function must accept string/int/float arguments and return a string.
-- Write clean, safe, production-ready code.
-
-OUTPUT FORMAT (JSON only, no markdown fences):
-{
-  "name": "snake_case_tool_name",
-  "description": "What this tool does, in Portuguese (pt-BR)",
-  "params": "param1: str, param2: int = 5",
-  "code": "the function body (indented with 8 spaces, NO def line)",
-  "test_code": "assert-based test code that validates the function works"
-}
-"""
-
-CORRECTION_PROMPT = """\
-The tool you generated failed testing. Fix the code.
-
-ORIGINAL TASK: {task}
-GENERATED CODE:
-{code}
-
-TEST CODE:
-{test_code}
-
-ERROR:
-{error}
-
-Return the SAME JSON format with corrected code. JSON only, no markdown.
-"""
 
 SKILL_TEMPLATE = '''\
 """Auto-generated skill: {name}

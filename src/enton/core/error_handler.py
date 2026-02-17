@@ -53,21 +53,7 @@ class ErrorRecord:
         )
 
 
-LOOPBACK_PROMPT = """\
-Sua tentativa anterior falhou com o seguinte erro:
-
-ERRO: {error_type}: {error_message}
-PROVIDER: {provider}
-TENTATIVA: {attempt}/{max_attempts}
-
-O que voce tentou fazer:
-{original_prompt}
-
-{context_hint}
-
-Tente de novo, ajustando sua abordagem para evitar o mesmo erro. \
-Se o erro foi de uma ferramenta, tente uma ferramenta diferente ou \
-reformule os parametros."""
+from enton.cognition.prompts import ERROR_LOOPBACK_PROMPT as LOOPBACK_PROMPT
 
 
 class ErrorLoopBack:

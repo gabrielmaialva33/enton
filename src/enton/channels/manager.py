@@ -80,12 +80,12 @@ class ChannelManager:
             msg.channel, msg.sender_name, msg.text[:80],
         )
 
+        from enton.cognition.prompts import CHANNEL_MESSAGE_SYSTEM
+
         # Build context-aware system prompt
-        system = (
-            f"Voce e o Enton, um assistente AI zoeiro brasileiro. "
-            f"Voce esta respondendo via {msg.channel}. "
-            f"O usuario {msg.sender_name} disse algo. "
-            f"Responda de forma natural, breve e zoeira em pt-BR."
+        system = CHANNEL_MESSAGE_SYSTEM.format(
+            channel=msg.channel,
+            sender_name=msg.sender_name,
         )
 
         # Use VLM if message has image

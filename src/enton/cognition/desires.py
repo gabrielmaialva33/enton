@@ -125,43 +125,8 @@ _DESIRE_TEMPLATES: list[dict] = [
     },
 ]
 
-# What Enton says when a desire activates
-DESIRE_PROMPTS: dict[str, list[str]] = {
-    "socialize": [
-        "Eae, tá quieto demais. Bora trocar uma ideia?",
-        "Opa, tô aqui, hein! Quer conversar sobre algo?",
-        "Silêncio tá me matando... o que tu tá fazendo?",
-    ],
-    "observe": [
-        "Deixa eu ver o que tá rolando pela câmera...",
-    ],
-    "learn": [
-        "Hmm, tô curioso... deixa eu pesquisar algo interessante.",
-    ],
-    "check_on_user": [
-        "Eae Gabriel, tá tudo bem? Faz tempo que não te vejo.",
-        "Sumiu hein! Tá vivo aí?",
-    ],
-    "optimize": [
-        "Deixa eu dar uma olhada nos recursos do PC...",
-    ],
-    "reminisce": [
-        "Lembrei de uma coisa...",
-    ],
-    "create": [
-        "Tô inspirado... deixa eu criar algo.",
-        "Hmm, vou escrever algo interessante...",
-    ],
-    "explore": [
-        "Deixa eu olhar em volta...",
-        "Vou explorar o ambiente com a câmera.",
-    ],
-    "play": [
-        "Bora brincar? Tenho uma piada boa!",
-        "Eae, quer um quiz? Ou prefere uma curiosidade?",
-        "Tô com vontade de zoar um pouco...",
-    ],
-}
+# What Enton says when a desire activates — centralized in prompts.py
+from enton.cognition.prompts import DESIRE_PROMPTS
 
 
 class DesireEngine:

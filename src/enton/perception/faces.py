@@ -18,7 +18,7 @@ _SIMILARITY_THRESHOLD = 0.45  # cosine similarity threshold for match
 
 
 class FaceResult:
-    __slots__ = ("identity", "confidence", "bbox")
+    __slots__ = ("bbox", "confidence", "identity")
 
     def __init__(
         self, identity: str, confidence: float, bbox: tuple[int, int, int, int]

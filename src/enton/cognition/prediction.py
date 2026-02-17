@@ -17,10 +17,9 @@ import logging
 import math
 import time
 from collections import defaultdict
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +70,7 @@ class WorldModel:
     def _load(self) -> None:
         if self._path.exists():
             try:
-                with open(self._path, "r") as f:
+                with open(self._path) as f:
                     data = json.load(f)
                     for k, v in data.items():
                         self._stats[k] = v

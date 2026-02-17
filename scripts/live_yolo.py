@@ -1,6 +1,6 @@
 """Live camera feed with YOLO detection + pose + activity recognition.
 
-Standalone demo script — imports activity classifier from enton module.
+Standalone demo with high-quality PIL-rendered HUD overlay.
 
 Usage:
     python scripts/live_yolo.py          # câmera IP (RTSP)
@@ -18,9 +18,9 @@ os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 import cv2
 from ultralytics import YOLO
 
-# allow importing enton modules from project root
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from enton.activity import NOSE, classify as classify_activity, _visible as visible
+from enton.overlay import Overlay
 
 RTSP_URL = "rtsp://192.168.18.23:554/video0_unicast"
 DET_MODEL = "yolo11x.pt"
@@ -62,6 +62,8 @@ cv2.namedWindow("Enton Vision", cv2.WINDOW_NORMAL)
 cv2.resizeWindow("Enton Vision", w, h)
 print(f"YOLO11x detect+pose | {w}x{h} FP16 | 'q'=sair 'f'=fullscreen")
 
+hud = Overlay(font_size=18)
+
 fps_t = time.time()
 fps_count = 0
 fps = 0.0
@@ -81,39 +83,42 @@ while True:
     det_r = det_model.predict(frame, conf=DET_CONF, imgsz=IMGSZ, half=True, verbose=False)
     pose_r = pose_model.predict(frame, conf=POSE_CONF, imgsz=IMGSZ, half=True, verbose=False)
 
-    annotated = det_r[0].plot(line_width=2, font_size=0.5)
+    # draw detection boxes (thin, clean)
+    annotated = det_r[0].plot(line_width=2, font_size=0.4, pil=False)
 
     # pose overlay + activity
+    activities_hud: list[tuple[str, tuple[int, int, int]]] = []
     n_persons = 0
     if pose_r[0].keypoints is not None and len(pose_r[0].keypoints) > 0:
         kpts_data = pose_r[0].keypoints.data
         n_persons = len(kpts_data)
         for kpts in kpts_data:
             activity, color = classify_activity(kpts)
+            activities_hud.append((activity, color))
 
+            # skeleton
             for a, b in SKELETON:
                 if visible(kpts, a) and visible(kpts, b):
                     pa = (int(kpts[a][0]), int(kpts[a][1]))
                     pb = (int(kpts[b][0]), int(kpts[b][1]))
-                    cv2.line(annotated, pa, pb, color, 2)
+                    cv2.line(annotated, pa, pb, color, 2, cv2.LINE_AA)
 
+            # keypoint dots
             for ki in range(17):
                 if visible(kpts, ki):
                     px, py = int(kpts[ki][0]), int(kpts[ki][1])
-                    cv2.circle(annotated, (px, py), 4, (255, 255, 255), -1)
-                    cv2.circle(annotated, (px, py), 3, color, -1)
+                    cv2.circle(annotated, (px, py), 5, (0, 0, 0), -1, cv2.LINE_AA)
+                    cv2.circle(annotated, (px, py), 4, color, -1, cv2.LINE_AA)
 
+            # activity label (PIL rendered)
             if visible(kpts, NOSE):
                 nx, ny = int(kpts[NOSE][0]), int(kpts[NOSE][1])
-                cv2.putText(annotated, activity, (nx - 60, ny - 25),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4)
-                cv2.putText(annotated, activity, (nx - 60, ny - 25),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                annotated = hud.draw_activity_label(annotated, activity, (nx, ny), color)
 
     # detection summary
     boxes = det_r[0].boxes
     names = det_r[0].names
-    det_summary = {}
+    det_summary: dict[str, int] = {}
     for cls_id in boxes.cls.int().tolist():
         name = names[cls_id]
         det_summary[name] = det_summary.get(name, 0) + 1
@@ -126,18 +131,15 @@ while True:
         fps_count = 0
         fps_t = now
 
-    # HUD
-    hud_h = 70 + len(det_summary) * 26
-    overlay = annotated.copy()
-    cv2.rectangle(overlay, (5, 5), (380, hud_h), (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.6, annotated, 0.4, 0, annotated)
-    cv2.putText(annotated, f"YOLO11x detect+pose | FPS: {fps:.1f}",
-                (10, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-    cv2.putText(annotated, f"{len(boxes)} objs | {n_persons} pessoa(s)",
-                (10, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 2)
-    for i, (name, count) in enumerate(sorted(det_summary.items(), key=lambda x: -x[1])):
-        cv2.putText(annotated, f"  {name}: {count}",
-                    (10, 82 + i * 26), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1)
+    # HUD (PIL rendered)
+    annotated = hud.draw_hud(
+        annotated,
+        fps=fps,
+        n_objects=len(boxes),
+        n_persons=n_persons,
+        detections=det_summary,
+        activities=activities_hud,
+    )
 
     cv2.imshow("Enton Vision", annotated)
     key = cv2.waitKey(1) & 0xFF

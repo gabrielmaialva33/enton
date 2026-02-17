@@ -1,3 +1,8 @@
+"""Memory — Enton's episodic memory and user profile.
+
+Uses Agno Knowledge (Qdrant + Ollama embeddings) for semantic search.
+JSONL file as durable backup. User profile persisted as JSON.
+"""
 from __future__ import annotations
 
 import json
@@ -5,6 +10,8 @@ import logging
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+from enton.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -29,43 +36,47 @@ class UserProfile:
     relationship_score: float = 0.5  # 0=stranger, 1=best friend
 
 
+def create_knowledge():
+    """Create Agno Knowledge backed by Qdrant + Ollama embeddings."""
+    try:
+        from agno.embedder.ollama import OllamaEmbedder
+        from agno.knowledge import AgentKnowledge
+        from agno.vectordb.qdrant import Qdrant
+
+        vector_db = Qdrant(
+            collection="enton_episodes",
+            embedder=OllamaEmbedder(id="nomic-embed-text", dimensions=768),
+            url=settings.qdrant_url,
+        )
+        knowledge = AgentKnowledge(vector_db=vector_db)
+        logger.info("Agno Knowledge + Qdrant initialized")
+        return knowledge
+    except Exception:
+        logger.warning("Agno Knowledge unavailable (Qdrant/Ollama embedder)")
+        return None
+
+
 class Memory:
     def __init__(self, max_recent: int = 50) -> None:
         self._max_recent = max_recent
         self._episodes: list[Episode] = []
         self.profile = UserProfile()
-        self._mem0 = None
+        self._knowledge = None
         self._ensure_dir()
         self._load()
-        self._init_mem0()
+        self._init_knowledge()
 
     def _ensure_dir(self) -> None:
         MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 
-    def _init_mem0(self) -> None:
-        try:
-            from mem0 import Memory as Mem0Memory
+    def _init_knowledge(self) -> None:
+        """Initialize Agno Knowledge for semantic search."""
+        self._knowledge = create_knowledge()
 
-            config = {
-                "vector_store": {
-                    "provider": "qdrant",
-                    "config": {
-                        "host": "localhost",
-                        "port": 6333,
-                        "collection_name": "enton_memory",
-                    },
-                },
-                "embedder": {
-                    "provider": "ollama",
-                    "config": {
-                        "model": "nomic-embed-text",
-                    },
-                },
-            }
-            self._mem0 = Mem0Memory.from_config(config)
-            logger.info("Mem0 + Qdrant initialized")
-        except Exception:
-            logger.warning("Mem0/Qdrant unavailable, using JSONL only")
+    @property
+    def knowledge(self):
+        """Agno AgentKnowledge instance (or None)."""
+        return self._knowledge
 
     def _load(self) -> None:
         if EPISODES_FILE.exists():
@@ -90,28 +101,30 @@ class Memory:
         self._episodes.append(episode)
         if len(self._episodes) > self._max_recent * 2:
             self._episodes = self._episodes[-self._max_recent :]
-        # JSONL persistence (always)
+
+        # JSONL persistence (always — durable backup)
         try:
             with EPISODES_FILE.open("a") as f:
                 f.write(json.dumps(asdict(episode), ensure_ascii=False) + "\n")
         except Exception:
             logger.warning("Failed to persist episode")
-        # Mem0 vector indexing (if available)
-        if self._mem0 is not None:
+
+        # Agno Knowledge indexing (if available)
+        if self._knowledge is not None:
             try:
-                self._mem0.add(
+                self._knowledge.load_text(
                     episode.summary,
-                    user_id="enton",
-                    metadata={
-                        "kind": episode.kind,
-                        "tags": ",".join(episode.tags),
-                    },
+                    upsert=True,
                 )
             except Exception:
-                logger.debug("Mem0 indexing failed for episode")
+                logger.debug("Knowledge indexing failed for episode")
 
     def recall_recent(self, n: int = 5) -> list[Episode]:
         return self._episodes[-n:]
+
+    def recent(self, n: int = 5) -> list[Episode]:
+        """Alias for recall_recent."""
+        return self.recall_recent(n)
 
     def recall_by_kind(self, kind: str, n: int = 5) -> list[Episode]:
         matching = [e for e in self._episodes if e.kind == kind]
@@ -123,12 +136,12 @@ class Memory:
 
     def semantic_search(self, query: str, n: int = 5) -> list[str]:
         """Search memories semantically via Qdrant. Falls back to keyword."""
-        if self._mem0 is not None:
+        if self._knowledge is not None:
             try:
-                results = self._mem0.search(query, user_id="enton", limit=n)
-                return [r["memory"] for r in results.get("results", [])]
+                results = self._knowledge.search(query=query, num_documents=n)
+                return [doc.content for doc in results if doc.content]
             except Exception:
-                logger.debug("Mem0 search failed, falling back to keyword")
+                logger.debug("Knowledge search failed, falling back to keyword")
 
         # Keyword fallback
         query_lower = query.lower()
@@ -144,19 +157,17 @@ class Memory:
         if fact not in self.profile.known_facts:
             self.profile.known_facts.append(fact)
             self._save_profile()
-        # Also store in Mem0
-        if self._mem0 is not None:
+        # Also index in Knowledge
+        if self._knowledge is not None:
             try:
-                self._mem0.add(
-                    fact,
-                    user_id="enton",
-                    metadata={"kind": "user_fact"},
-                )
+                self._knowledge.load_text(f"Fato sobre {self.profile.name}: {fact}")
             except Exception:
-                logger.debug("Mem0 fact indexing failed")
+                logger.debug("Knowledge fact indexing failed")
 
     def strengthen_relationship(self, amount: float = 0.02) -> None:
-        self.profile.relationship_score = min(1.0, self.profile.relationship_score + amount)
+        self.profile.relationship_score = min(
+            1.0, self.profile.relationship_score + amount,
+        )
         self._save_profile()
 
     def _save_profile(self) -> None:
@@ -167,7 +178,9 @@ class Memory:
                 "preferences": self.profile.preferences,
                 "relationship_score": self.profile.relationship_score,
             }
-            PROFILE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+            PROFILE_FILE.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+            )
         except Exception:
             logger.warning("Failed to save user profile")
 
@@ -179,7 +192,9 @@ class Memory:
             parts.append(f"Recent memories: {'; '.join(summaries)}")
         if self.profile.known_facts:
             facts = self.profile.known_facts[-5:]
-            parts.append(f"Known about {self.profile.name}: {', '.join(facts)}")
+            parts.append(
+                f"Known about {self.profile.name}: {', '.join(facts)}",
+            )
         rel = self.profile.relationship_score
         if rel >= 0.8:
             parts.append(f"{self.profile.name} is my best friend")

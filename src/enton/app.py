@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import random
 import re
 import time
 from collections import deque
+
+import numpy as np  # noqa: TC002 — used at runtime
 
 from enton.action.voice import Voice
 from enton.cognition.brain import EntonBrain
@@ -30,16 +33,16 @@ from enton.core.memory import Episode, Memory
 from enton.core.self_model import SelfModel
 from enton.perception.ears import Ears
 from enton.perception.vision import Vision
+from enton.skills._shell_state import ShellState
 from enton.skills.describe_toolkit import DescribeTools
 from enton.skills.face_toolkit import FaceTools
+from enton.skills.file_toolkit import FileTools
 from enton.skills.greet import GreetSkill
 from enton.skills.memory_toolkit import MemoryTools
 from enton.skills.planner_toolkit import PlannerTools
 from enton.skills.ptz_toolkit import PTZTools
 from enton.skills.react import ReactSkill
 from enton.skills.search_toolkit import SearchTools
-from enton.skills._shell_state import ShellState
-from enton.skills.file_toolkit import FileTools
 from enton.skills.shell_toolkit import ShellTools
 from enton.skills.system_toolkit import SystemTools
 
@@ -64,15 +67,17 @@ class App:
         self.lifecycle = Lifecycle()
 
         # Agno Toolkits
+        shell_state = ShellState()
         describe_tools = DescribeTools(self.vision)
         toolkits = [
             describe_tools,
             FaceTools(self.vision, self.vision.face_recognizer),
+            FileTools(shell_state),
             MemoryTools(self.memory),
             PlannerTools(self.planner),
             PTZTools(),
             SearchTools(),
-            ShellTools(),
+            ShellTools(shell_state),
             SystemTools(),
         ]
 
@@ -185,19 +190,45 @@ class App:
 
     async def _on_sound(self, event: SoundEvent) -> None:
         logger.info("Sound: %s (%.0f%%)", event.label, event.confidence * 100)
-        sound_reactions = {
-            "Campainha": "Opa, alguém na porta!",
+        self.self_model.record_sound(event.label, event.confidence)
+        self._push_thought(f"[som] {event.label} ({event.confidence:.0%})")
+        self.desires.on_sound(event.label)
+
+        if self.voice.is_speaking:
+            return
+
+        # High-priority sounds get instant reactions (no brain call)
+        urgent_reactions = {
             "Alarme": "Eita, alarme! Tá tudo bem?",
-            "Sirene": "Sirene! Algo aconteceu?",
-            "Bebê chorando": "Tem um bebê chorando...",
+            "Sirene": "Sirene! O que tá acontecendo?",
             "Vidro quebrando": "Caramba, que barulho foi esse?!",
         }
-        reaction = sound_reactions.get(event.label)
-        if reaction and not self.voice.is_speaking:
+        reaction = urgent_reactions.get(event.label)
+        if reaction:
             await self.voice.say(reaction)
+            return
+
+        # Other sounds: ask brain for intelligent reaction
+        if event.confidence > 0.5:
+            prompt = (
+                f"Acabei de ouvir um som ambiente: '{event.label}' "
+                f"(confianca {event.confidence:.0%}). "
+                "Faca um comentario curto e natural sobre isso em 1 frase."
+            )
+            response = await self.brain.think(
+                prompt,
+                system="Voce e o Enton. Comente brevemente sobre o som detectado.",
+            )
+            if response and not self.voice.is_speaking:
+                await self.voice.say(response)
 
     async def _on_transcription(self, event: TranscriptionEvent) -> None:
         if not event.text.strip():
+            return
+
+        # Partial transcription — show in viewer but don't process
+        if not event.is_final:
+            self._push_thought(f"[ouvindo] {event.text[:80]}...")
             return
 
         self.self_model.record_interaction()
@@ -507,6 +538,35 @@ class App:
                     ep = random.choice(episodes)
                     await self.voice.say(f"Lembrei... {ep.summary}")
 
+            elif desire.name == "create":
+                self.desires.on_creation()
+                response = await self.brain.think_agent(
+                    "Crie algo curto e criativo: um haiku, piada nerdy, "
+                    "ou dica de programacao. Escolha aleatoriamente.",
+                    system="Voce e o Enton, criativo e zoeiro.",
+                )
+                if response:
+                    await self.voice.say(response)
+
+            elif desire.name == "explore":
+                # Try to move camera via PTZ, then describe
+                response = await self.brain.think_agent(
+                    "Mova a camera para uma direcao aleatoria "
+                    "e descreva o que voce ve.",
+                    system="Voce e o Enton. Use as ferramentas PTZ e describe.",
+                )
+                if response:
+                    await self.voice.say(response)
+
+            elif desire.name == "play":
+                response = await self.brain.think_agent(
+                    "Conte uma piada curta, um fato curioso, "
+                    "ou proponha um quiz rapido pro Gabriel.",
+                    system="Voce e o Enton, zoeiro. Seja divertido e breve.",
+                )
+                if response:
+                    await self.voice.say(response)
+
     async def _planner_loop(self) -> None:
         """Checks for due reminders and routines."""
         await asyncio.sleep(10)
@@ -532,87 +592,39 @@ class App:
                     await self.voice.say(routine["text"])
 
     async def _viewer_loop(self) -> None:
-        """Live vision window — optimized cv2-only HUD (no PIL per frame)."""
+        """Live vision window — cv2-only HUD with multi-camera grid support."""
         import cv2
 
         fullscreen = False
+        grid_mode = len(self.vision.cameras) > 1
         scan_y = 0
         font = cv2.FONT_HERSHEY_SIMPLEX
         font_sm = cv2.FONT_HERSHEY_PLAIN
 
         cv2.namedWindow("Enton Vision", cv2.WINDOW_NORMAL)
-        logger.info("Viewer window opened")
+        cam_ids = list(self.vision.cameras.keys())
+        logger.info(
+            "Viewer opened (%d camera%s)",
+            len(cam_ids), "s" if len(cam_ids) != 1 else "",
+        )
 
         while True:
-            frame = self.vision.last_frame
-            if frame is None:
+            if grid_mode:
+                annotated = self._build_grid(cam_ids, font, font_sm)
+            else:
+                annotated = self._annotate_camera(
+                    self.vision.cameras[cam_ids[0]], font, font_sm,
+                )
+
+            if annotated is None:
                 await asyncio.sleep(0.1)
                 continue
 
-            annotated = frame.copy()
             fh, fw = annotated.shape[:2]
 
-            # Scan line (pure cv2, no PIL)
+            # Scan line
             scan_y = (scan_y + 3) % fh
-            cv2.line(annotated, (0, scan_y), (fw, scan_y), (0, 255, 120), 1, cv2.LINE_AA)
-
-            # Detection overlays
-            det_summary: dict[str, int] = {}
-            for det in self.vision.last_detections:
-                det_summary[det.label] = det_summary.get(det.label, 0) + 1
-                if det.bbox:
-                    color = (0, 255, 120) if det.label == "person" else (255, 160, 0)
-                    if det.label in ("cat", "dog"):
-                        color = (0, 200, 255)
-                    x1, y1, x2, y2 = det.bbox
-                    bw, bh = x2 - x1, y2 - y1
-                    c = max(15, min(bw, bh) // 5)
-                    # Corner brackets
-                    cv2.line(annotated, (x1, y1), (x1 + c, y1), color, 2, cv2.LINE_AA)
-                    cv2.line(annotated, (x1, y1), (x1, y1 + c), color, 2, cv2.LINE_AA)
-                    cv2.line(annotated, (x2, y1), (x2 - c, y1), color, 2, cv2.LINE_AA)
-                    cv2.line(annotated, (x2, y1), (x2, y1 + c), color, 2, cv2.LINE_AA)
-                    cv2.line(annotated, (x1, y2), (x1 + c, y2), color, 2, cv2.LINE_AA)
-                    cv2.line(annotated, (x1, y2), (x1, y2 - c), color, 2, cv2.LINE_AA)
-                    cv2.line(annotated, (x2, y2), (x2 - c, y2), color, 2, cv2.LINE_AA)
-                    cv2.line(annotated, (x2, y2), (x2, y2 - c), color, 2, cv2.LINE_AA)
-                    # Label
-                    lbl = f"{det.label} {det.confidence:.0%}"
-                    pt = (x1, y1 - 6)
-                    cv2.putText(annotated, lbl, pt, font_sm, 1.0, (0, 0, 0), 3)
-                    cv2.putText(annotated, lbl, pt, font_sm, 1.0, color, 1)
-
-            # Emotion labels
-            for emo in self.vision.last_emotions:
-                if emo.bbox and emo.bbox != (0, 0, 0, 0):
-                    x1, _, x2, y2 = emo.bbox
-                    lbl = f"{emo.emotion} {emo.score:.0%}"
-                    cx = (x1 + x2) // 2
-                    pt = (cx - 40, y2 + 16)
-                    cv2.putText(annotated, lbl, pt, font_sm, 1.0, (0, 0, 0), 3)
-                    cv2.putText(annotated, lbl, pt, font_sm, 1.0, emo.color, 1)
-
-            # HUD panel (top-left, cv2 only)
-            n_persons = sum(1 for d in self.vision.last_detections if d.label == "person")
-            n_obj = len(self.vision.last_detections) - n_persons
-            overlay = annotated.copy()
-            cv2.rectangle(overlay, (8, 8), (260, 80), (10, 12, 18), -1)
-            cv2.addWeighted(overlay, 0.7, annotated, 0.3, 0, annotated)
-            cv2.rectangle(annotated, (8, 8), (260, 80), (0, 255, 120), 1, cv2.LINE_AA)
-            cv2.putText(annotated, "ENTON", (16, 34), font, 0.7, (0, 255, 120), 2, cv2.LINE_AA)
-            fps_txt = f"{self.vision.fps:.0f} fps"
-            cv2.putText(annotated, fps_txt, (200, 34), font_sm, 1.0, (80, 90, 100), 1, cv2.LINE_AA)
-            if n_persons:
-                status = f"{n_persons} pessoa{'s' if n_persons != 1 else ''}"
-            else:
-                status = "scanning..."
-            if n_obj > 0:
-                status += f"  {n_obj} obj"
-            cv2.putText(annotated, status, (16, 58), font, 0.45, (0, 210, 230), 1, cv2.LINE_AA)
-            # Activities
-            for i, act in enumerate(self.vision.last_activities[:2]):
-                pt = (16, 74 + i * 14)
-                cv2.putText(annotated, act.activity, pt, font_sm, 0.9, act.color, 1)
+            cv2.line(annotated, (0, scan_y), (fw, scan_y), (0, 255, 120), 1)
 
             # Thoughts panel (bottom)
             if self._thoughts:
@@ -632,8 +644,113 @@ class App:
                 fullscreen = not fullscreen
                 prop = cv2.WINDOW_FULLSCREEN if fullscreen else cv2.WINDOW_NORMAL
                 cv2.setWindowProperty("Enton Vision", cv2.WND_PROP_FULLSCREEN, prop)
+            elif key == ord("g"):
+                grid_mode = not grid_mode
+            elif key == ord("c"):
+                # Cycle active camera
+                idx = cam_ids.index(self.vision.active_camera_id)
+                nxt = cam_ids[(idx + 1) % len(cam_ids)]
+                self.vision.switch_camera(nxt)
+                self._push_thought(f"[cam] -> {nxt}")
+            elif ord("1") <= key <= ord("9"):
+                idx = key - ord("1")
+                if idx < len(cam_ids):
+                    self.vision.switch_camera(cam_ids[idx])
 
             await asyncio.sleep(0.01)
+
+    def _annotate_camera(self, cam, font, font_sm) -> np.ndarray | None:
+        """Draw HUD overlay on a single camera frame."""
+        import cv2
+
+        frame = cam.last_frame
+        if frame is None:
+            return None
+
+        annotated = frame.copy()
+        fh, fw = annotated.shape[:2]
+
+        # Detection overlays
+        for det in cam.last_detections:
+            if det.bbox:
+                color = (0, 255, 120) if det.label == "person" else (255, 160, 0)
+                if det.label in ("cat", "dog"):
+                    color = (0, 200, 255)
+                x1, y1, x2, y2 = det.bbox
+                bw, bh = x2 - x1, y2 - y1
+                c = max(15, min(bw, bh) // 5)
+                cv2.line(annotated, (x1, y1), (x1 + c, y1), color, 2)
+                cv2.line(annotated, (x1, y1), (x1, y1 + c), color, 2)
+                cv2.line(annotated, (x2, y1), (x2 - c, y1), color, 2)
+                cv2.line(annotated, (x2, y1), (x2, y1 + c), color, 2)
+                cv2.line(annotated, (x1, y2), (x1 + c, y2), color, 2)
+                cv2.line(annotated, (x1, y2), (x1, y2 - c), color, 2)
+                cv2.line(annotated, (x2, y2), (x2 - c, y2), color, 2)
+                cv2.line(annotated, (x2, y2), (x2, y2 - c), color, 2)
+                lbl = f"{det.label} {det.confidence:.0%}"
+                pt = (x1, y1 - 6)
+                cv2.putText(annotated, lbl, pt, font_sm, 1.0, (0, 0, 0), 3)
+                cv2.putText(annotated, lbl, pt, font_sm, 1.0, color, 1)
+
+        # Emotion labels
+        for emo in cam.last_emotions:
+            if emo.bbox and emo.bbox != (0, 0, 0, 0):
+                x1, _, x2, y2 = emo.bbox
+                lbl = f"{emo.emotion} {emo.score:.0%}"
+                cx = (x1 + x2) // 2
+                pt = (cx - 40, y2 + 16)
+                cv2.putText(annotated, lbl, pt, font_sm, 1.0, (0, 0, 0), 3)
+                cv2.putText(annotated, lbl, pt, font_sm, 1.0, emo.color, 1)
+
+        # HUD panel
+        n_persons = sum(1 for d in cam.last_detections if d.label == "person")
+        n_obj = len(cam.last_detections) - n_persons
+        overlay = annotated.copy()
+        cv2.rectangle(overlay, (8, 8), (260, 80), (10, 12, 18), -1)
+        cv2.addWeighted(overlay, 0.7, annotated, 0.3, 0, annotated)
+        cv2.rectangle(annotated, (8, 8), (260, 80), (0, 255, 120), 1)
+        title = f"ENTON [{cam.id}]" if len(self.vision.cameras) > 1 else "ENTON"
+        cv2.putText(annotated, title, (16, 34), font, 0.6, (0, 255, 120), 2)
+        fps_txt = f"{cam.fps:.0f} fps"
+        cv2.putText(annotated, fps_txt, (200, 34), font_sm, 1.0, (80, 90, 100), 1)
+        if n_persons:
+            status = f"{n_persons} pessoa{'s' if n_persons != 1 else ''}"
+        else:
+            status = "scanning..."
+        if n_obj > 0:
+            status += f"  {n_obj} obj"
+        cv2.putText(annotated, status, (16, 58), font, 0.45, (0, 210, 230), 1)
+        for i, act in enumerate(cam.last_activities[:2]):
+            pt = (16, 74 + i * 14)
+            cv2.putText(annotated, act.activity, pt, font_sm, 0.9, act.color, 1)
+
+        return annotated
+
+    def _build_grid(self, cam_ids: list[str], font, font_sm) -> np.ndarray | None:
+        """Build grid view from multiple cameras."""
+        import cv2
+
+        n = len(cam_ids)
+        cols = math.ceil(math.sqrt(n))
+        rows = math.ceil(n / cols)
+
+        # Target tile size
+        tile_w, tile_h = 640, 480
+        grid = np.zeros((rows * tile_h, cols * tile_w, 3), dtype=np.uint8)
+
+        for idx, cam_id in enumerate(cam_ids):
+            cam = self.vision.cameras.get(cam_id)
+            if cam is None:
+                continue
+            annotated = self._annotate_camera(cam, font, font_sm)
+            if annotated is None:
+                continue
+            tile = cv2.resize(annotated, (tile_w, tile_h))
+            r, c = divmod(idx, cols)
+            y0, x0 = r * tile_h, c * tile_w
+            grid[y0:y0 + tile_h, x0:x0 + tile_w] = tile
+
+        return grid if grid.any() else None
 
     async def _autosave_loop(self) -> None:
         """Periodically saves state for crash recovery."""

@@ -58,7 +58,7 @@ class EntonBrain:
             ),
             knowledge=knowledge,
             search_knowledge=knowledge is not None,
-            add_history_to_context=True,
+            add_history_to_messages=True,
             num_history_runs=settings.memory_size,
             tool_call_limit=settings.brain_max_turns,
             retries=2,

@@ -209,6 +209,34 @@ graph TB
 
 ---
 
+## Integrations
+
+Enton extends beyond his body to interact with your digital environment.
+
+### 👁️ Screenpipe — Digital Eyes
+Enton can see what you see on your screen. Using [Screenpipe](https://github.com/mediar-ai/screenpipe), he captures and indexes your screen activity (OCR + Audio).
+
+**Setup:**
+1. Install and run Screenpipe: `screenpipe` (default port 3030)
+2. Configure `.env`:
+   ```env
+   SCREENPIPE_URL=http://localhost:3030
+   ```
+3. Usage: "Use context from my screen", "What was I doing 5 min ago?"
+
+### ⚡ n8n — Digital Hands
+Enton can trigger complex workflows to automate tasks in your apps.
+
+**Setup:**
+1. Create a workflow in [n8n](https://n8n.io) with a Webhook trigger.
+2. Configure `.env`:
+   ```env
+   N8N_WEBHOOK_BASE=https://your-n8n.com/webhook
+   ```
+3. Usage: "Launch the morning routine", "Save this to Notion" (triggers webhook with payload).
+
+---
+
 ## Desire Engine
 
 Enton has 9 autonomous desires that emerge from his internal state:

@@ -13,9 +13,12 @@ import numpy as np  # noqa: TC002 — used at runtime
 from enton.action.voice import Voice
 from enton.cognition.brain import EntonBrain
 from enton.cognition.desires import DesireEngine
+from enton.cognition.dream import DreamMode
 from enton.cognition.fuser import Fuser
+from enton.cognition.metacognition import MetaCognitiveEngine
 from enton.cognition.persona import REACTION_TEMPLATES, build_system_prompt
 from enton.cognition.planner import Planner
+from enton.core.awareness import AwarenessStateMachine
 from enton.core.config import settings
 from enton.core.events import (
     ActivityEvent,
@@ -66,6 +69,10 @@ class App:
         self.planner = Planner()
         self.lifecycle = Lifecycle()
 
+        # v0.2.0 — Consciousness
+        self.awareness = AwarenessStateMachine()
+        self.metacognition = MetaCognitiveEngine()
+
         # Agno Toolkits
         shell_state = ShellState()
         describe_tools = DescribeTools(self.vision)
@@ -88,6 +95,9 @@ class App:
             knowledge=self.memory.knowledge,
         )
         describe_tools._brain = self.brain  # resolve circular dep
+
+        # Dream mode (must be after brain + memory)
+        self.dream = DreamMode(memory=self.memory, brain=self.brain)
 
         # Event-driven skills (not Agno tools — react to EventBus)
         self.greet_skill = GreetSkill(self.voice, self.memory)
@@ -205,6 +215,7 @@ class App:
         }
         reaction = urgent_reactions.get(event.label)
         if reaction:
+            self.awareness.trigger_alert(f"sound:{event.label}", self.bus)
             await self.voice.say(reaction)
             return
 
@@ -234,6 +245,8 @@ class App:
         self.self_model.record_interaction()
         self.memory.strengthen_relationship()
         self.desires.on_interaction()
+        self.dream.on_interaction()
+        self.awareness.on_interaction(self.bus)
 
         # Extract basic facts (simple heuristic for now)
         self._extract_facts(event.text)
@@ -253,10 +266,21 @@ class App:
         # Inject Fuser context into system prompt or user message
         # Let's prepend to the user message or append to system
         system += f"\n\nCONTEXTO VISUAL ATUAL: {scene_desc}"
+        system += f"\nAWARENESS: {self.awareness.summary()}"
+        system += f"\nMETACOGNITION: {self.metacognition.introspect()}"
         system += "\nVocê tem acesso a ferramentas. Use-as se necessário para responder."
 
         self._push_thought(f"[ouviu] {event.text[:80]}")
+
+        # Metacognitive-wrapped brain call
+        trace = self.metacognition.begin_trace(event.text, strategy="agent")
         response = await self.brain.think_agent(event.text, system=system)
+        provider = getattr(self.brain._agent.model, "id", "?")
+        self.metacognition.end_trace(
+            trace, response or "",
+            provider=provider, success=bool(response),
+        )
+
         if response:
             self._push_thought(f"[brain] {response[:100]}")
             await self.voice.say(response)
@@ -328,6 +352,8 @@ class App:
                 tg.create_task(self._desire_loop(), name="desires")
                 tg.create_task(self._planner_loop(), name="planner")
                 tg.create_task(self._autosave_loop(), name="autosave")
+                tg.create_task(self._awareness_loop(), name="awareness")
+                tg.create_task(self.dream.run(), name="dream")
                 if self._sound_detector:
                     tg.create_task(
                         self._sound_detection_loop(), name="sound_detect",
@@ -751,6 +777,13 @@ class App:
             grid[y0:y0 + tile_h, x0:x0 + tile_w] = tile
 
         return grid if grid.any() else None
+
+    async def _awareness_loop(self) -> None:
+        """Evaluate awareness state transitions periodically."""
+        await asyncio.sleep(10)
+        while True:
+            await asyncio.sleep(5)
+            self.awareness.evaluate(self.self_model, self.bus)
 
     async def _autosave_loop(self) -> None:
         """Periodically saves state for crash recovery."""

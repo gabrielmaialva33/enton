@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:00ff88,50:00d4ff,100:8b5cf6&height=200&section=header&text=🤖%20E%20N%20T%20O%20N&fontSize=60&fontColor=fff&animation=twinkling&fontAlignY=35&desc=Autonomous%20AI%20Robot%20—%20Vision%20%7C%20Voice%20%7C%20Soul&descSize=18&descAlignY=55" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:4f46e5,50:0891b2,100:059669&height=200&section=header&text=🤖%20E%20N%20T%20O%20N&fontSize=60&fontColor=fff&animation=twinkling&fontAlignY=35&desc=Autonomous%20AI%20Robot%20—%20Vision%20%7C%20Voice%20%7C%20Soul&descSize=18&descAlignY=55" width="100%"/>
 
 [![Python](https://img.shields.io/badge/Python_3.12+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![PyTorch](https://img.shields.io/badge/PyTorch_2.5+-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org)
 [![CUDA](https://img.shields.io/badge/CUDA-76B900?style=for-the-badge&logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
 [![Tests](https://img.shields.io/badge/tests-136_passing-00C853?style=for-the-badge)](./tests)
-[![License](https://img.shields.io/badge/license-MIT-8b5cf6?style=for-the-badge)](./LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-6366f1?style=for-the-badge)](./LICENSE)
 
 ---
 
@@ -26,7 +26,7 @@
 ## 🎯 Overview
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#00ff88', 'primaryTextColor': '#fff', 'primaryBorderColor': '#00d4ff', 'lineColor': '#8b5cf6'}}}%%
+%%{init: {'theme': 'neutral'}}%%
 flowchart LR
     subgraph Perception["👁️ Perception"]
         CAM[Camera<br/>YOLO + Pose]
@@ -119,7 +119,7 @@ OPENROUTER_API_KEY=
 ## 🏗️ Architecture
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#00ff88', 'primaryTextColor': '#fff', 'primaryBorderColor': '#00d4ff', 'lineColor': '#8b5cf6', 'secondaryColor': '#0a0a1a'}}}%%
+%%{init: {'theme': 'neutral'}}%%
 graph TB
     subgraph PERCEPTION["👁️ PERCEPTION"]
         V[Vision<br/>YOLO11s + Pose + Emotion]
@@ -271,6 +271,6 @@ uv run pytest tests/ -x -q      # 136 should pass
 
 *Built with obsession by [Gabriel Maia](https://github.com/gabrielmaialva33)*
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:8b5cf6,50:00d4ff,100:00ff88&height=100&section=footer" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:059669,50:0891b2,100:4f46e5&height=100&section=footer" width="100%"/>
 
 </div>

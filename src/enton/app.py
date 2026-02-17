@@ -530,13 +530,13 @@ class App:
                     await self.voice.say(routine["text"])
 
     async def _viewer_loop(self) -> None:
-        """Live vision window with cyberpunk HUD overlay + thoughts."""
+        """Live vision window — optimized cv2-only HUD (no PIL per frame)."""
         import cv2
 
-        from enton.perception.overlay import Overlay
-
-        hud = Overlay(font_size=18)
         fullscreen = False
+        scan_y = 0
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_sm = cv2.FONT_HERSHEY_PLAIN
 
         cv2.namedWindow("Enton Vision", cv2.WINDOW_NORMAL)
         logger.info("Viewer window opened")
@@ -548,9 +548,11 @@ class App:
                 continue
 
             annotated = frame.copy()
+            fh, fw = annotated.shape[:2]
 
-            # Scan line
-            annotated = hud.draw_scan_line(annotated)
+            # Scan line (pure cv2, no PIL)
+            scan_y = (scan_y + 3) % fh
+            cv2.line(annotated, (0, scan_y), (fw, scan_y), (0, 255, 120), 1, cv2.LINE_AA)
 
             # Detection overlays
             det_summary: dict[str, int] = {}
@@ -560,56 +562,65 @@ class App:
                     color = (0, 255, 120) if det.label == "person" else (255, 160, 0)
                     if det.label in ("cat", "dog"):
                         color = (0, 200, 255)
-                    annotated = hud.draw_target_brackets(annotated, det.bbox, color)
-                    annotated = hud.draw_confidence_badge(
-                        annotated, det.label, det.confidence, det.bbox,
-                    )
-
-            # Pose skeleton + activity labels
-            n_persons = 0
-            activities_hud: list[tuple[str, tuple[int, int, int]]] = []
-            # Use pose from vision if available — rerun pose on frame for skeleton
-            # Access vision's stored data (no recompute needed for labels)
-            for act in self.vision.last_activities:
-                activities_hud.append((act.activity, act.color or (0, 255, 120)))
+                    x1, y1, x2, y2 = det.bbox
+                    bw, bh = x2 - x1, y2 - y1
+                    c = max(15, min(bw, bh) // 5)
+                    # Corner brackets
+                    cv2.line(annotated, (x1, y1), (x1 + c, y1), color, 2, cv2.LINE_AA)
+                    cv2.line(annotated, (x1, y1), (x1, y1 + c), color, 2, cv2.LINE_AA)
+                    cv2.line(annotated, (x2, y1), (x2 - c, y1), color, 2, cv2.LINE_AA)
+                    cv2.line(annotated, (x2, y1), (x2, y1 + c), color, 2, cv2.LINE_AA)
+                    cv2.line(annotated, (x1, y2), (x1 + c, y2), color, 2, cv2.LINE_AA)
+                    cv2.line(annotated, (x1, y2), (x1, y2 - c), color, 2, cv2.LINE_AA)
+                    cv2.line(annotated, (x2, y2), (x2 - c, y2), color, 2, cv2.LINE_AA)
+                    cv2.line(annotated, (x2, y2), (x2, y2 - c), color, 2, cv2.LINE_AA)
+                    # Label
+                    lbl = f"{det.label} {det.confidence:.0%}"
+                    pt = (x1, y1 - 6)
+                    cv2.putText(annotated, lbl, pt, font_sm, 1.0, (0, 0, 0), 3)
+                    cv2.putText(annotated, lbl, pt, font_sm, 1.0, color, 1)
 
             # Emotion labels
             for emo in self.vision.last_emotions:
-                if emo.bbox:
-                    annotated = hud.draw_emotion_label(
-                        annotated, emo.emotion, emo.score,
-                        emo.bbox, emo.color or (0, 230, 255),
-                    )
+                if emo.bbox and emo.bbox != (0, 0, 0, 0):
+                    x1, _, x2, y2 = emo.bbox
+                    lbl = f"{emo.emotion} {emo.score:.0%}"
+                    cx = (x1 + x2) // 2
+                    pt = (cx - 40, y2 + 16)
+                    cv2.putText(annotated, lbl, pt, font_sm, 1.0, (0, 0, 0), 3)
+                    cv2.putText(annotated, lbl, pt, font_sm, 1.0, emo.color, 1)
 
-            # Main HUD panel
+            # HUD panel (top-left, cv2 only)
             n_persons = sum(1 for d in self.vision.last_detections if d.label == "person")
-            annotated = hud.draw_hud(
-                annotated,
-                fps=self.vision.fps,
-                n_objects=len(self.vision.last_detections),
-                n_persons=n_persons,
-                detections=det_summary,
-                activities=activities_hud,
-            )
+            n_obj = len(self.vision.last_detections) - n_persons
+            overlay = annotated.copy()
+            cv2.rectangle(overlay, (8, 8), (260, 80), (10, 12, 18), -1)
+            cv2.addWeighted(overlay, 0.7, annotated, 0.3, 0, annotated)
+            cv2.rectangle(annotated, (8, 8), (260, 80), (0, 255, 120), 1, cv2.LINE_AA)
+            cv2.putText(annotated, "ENTON", (16, 34), font, 0.7, (0, 255, 120), 2, cv2.LINE_AA)
+            fps_txt = f"{self.vision.fps:.0f} fps"
+            cv2.putText(annotated, fps_txt, (200, 34), font_sm, 1.0, (80, 90, 100), 1, cv2.LINE_AA)
+            if n_persons:
+                status = f"{n_persons} pessoa{'s' if n_persons != 1 else ''}"
+            else:
+                status = "scanning..."
+            if n_obj > 0:
+                status += f"  {n_obj} obj"
+            cv2.putText(annotated, status, (16, 58), font, 0.45, (0, 210, 230), 1, cv2.LINE_AA)
+            # Activities
+            for i, act in enumerate(self.vision.last_activities[:2]):
+                pt = (16, 74 + i * 14)
+                cv2.putText(annotated, act.activity, pt, font_sm, 0.9, act.color, 1)
 
-            # Thoughts panel — bottom of screen
+            # Thoughts panel (bottom)
             if self._thoughts:
-                fh, fw = annotated.shape[:2]
                 y_base = fh - 30
                 for thought in reversed(self._thoughts):
-                    cv2.putText(
-                        annotated, thought,
-                        (12, y_base), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5, (0, 0, 0), 3, cv2.LINE_AA,
-                    )
-                    cv2.putText(
-                        annotated, thought,
-                        (12, y_base), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5, (0, 255, 200), 1, cv2.LINE_AA,
-                    )
-                    y_base -= 22
+                    pt = (12, y_base)
+                    cv2.putText(annotated, thought, pt, font, 0.45, (0, 0, 0), 3)
+                    cv2.putText(annotated, thought, pt, font, 0.45, (0, 255, 200), 1)
+                    y_base -= 20
 
-            # Show
             cv2.imshow("Enton Vision", annotated)
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):

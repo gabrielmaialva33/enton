@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen2.5:14b"
     whisper_model: str = "large-v3-turbo"
     kokoro_lang: str = "p"  # pt-BR
-    kokoro_voice: str = "af_heart"
+    kokoro_voice: str = "am_onyx"
     
     # Brain
     brain_timeout: float = 30.0

@@ -79,7 +79,8 @@ class SoundDetector:
             text=texts, return_tensors="pt", padding=True
         )
         with torch.no_grad():
-            self._text_embeds = self._model.get_text_features(**inputs)
+            out = self._model.get_text_features(**inputs)
+            self._text_embeds = out if isinstance(out, torch.Tensor) else out.pooler_output
             self._text_embeds = self._text_embeds / self._text_embeds.norm(
                 dim=-1, keepdim=True
             )
@@ -99,10 +100,11 @@ class SoundDetector:
         self._ensure_model()
 
         inputs = self._processor(
-            audios=audio, sampling_rate=sample_rate, return_tensors="pt"
+            audio=audio, sampling_rate=sample_rate, return_tensors="pt"
         )
         with torch.no_grad():
-            audio_embeds = self._model.get_audio_features(**inputs)
+            out = self._model.get_audio_features(**inputs)
+            audio_embeds = out if isinstance(out, torch.Tensor) else out.pooler_output
             audio_embeds = audio_embeds / audio_embeds.norm(
                 dim=-1, keepdim=True
             )

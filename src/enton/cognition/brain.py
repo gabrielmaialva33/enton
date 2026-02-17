@@ -8,7 +8,6 @@ Fallback order: LOCAL → NVIDIA(×4) → HuggingFace → Groq → OpenRouter �
 """
 from __future__ import annotations
 
-import base64
 import logging
 import re
 from pathlib import Path
@@ -244,20 +243,26 @@ class EntonBrain:
 
     async def describe_scene(self, image: bytes, *, system: str = "") -> str:
         """Describe scene via VLM with fallback chain."""
+        from agno.media import Image as AgnoImage
+
         prompt = system or "Descreva brevemente o que você vê em português."
-        b64 = base64.b64encode(image).decode()
+        img = AgnoImage(content=image)
 
         for model in self._vision_models:
+            mid = getattr(model, "id", "?")
             try:
-                self._agent.model = model
-                response = await self._agent.arun(prompt, images=[b64])
+                vlm_agent = Agent(
+                    name="EntonVLM",
+                    model=model,
+                    markdown=False,
+                    telemetry=False,
+                )
+                response = await vlm_agent.arun(prompt, images=[img])
                 content = response.content or ""
-                mid = getattr(model, "id", "?")
                 logger.info("VLM [%s]: %s", mid, content[:80])
                 return self._clean(content)
-            except Exception:
-                mid = getattr(model, "id", "?")
-                logger.warning("VLM [%s] failed, trying next", mid)
+            except Exception as exc:
+                logger.warning("VLM [%s] failed: %s", mid, exc)
 
         # Last resort: local transformers VLM
         vlm = self._get_vlm()

@@ -60,7 +60,7 @@ class LocalTTS:
             import torch
             from kokoro import KPipeline
 
-            self._pipeline = KPipeline(lang_code=self._lang)
+            self._pipeline = KPipeline(lang_code=self._lang, repo_id="hexgrad/Kokoro-82M")
             if hasattr(self._pipeline, "model") and self._pipeline.model is not None:
                 self._pipeline.model = self._pipeline.model.to(torch.device("cpu"))
         return self._pipeline

@@ -47,6 +47,7 @@ from enton.skills._shell_state import ShellState
 from enton.skills.ai_delegate_toolkit import AIDelegateTools
 from enton.skills.android_toolkit import AndroidTools
 from enton.skills.blob_toolkit import BlobTools
+from enton.skills.coding_toolkit import CodingTools
 from enton.skills.describe_toolkit import DescribeTools
 from enton.skills.face_toolkit import FaceTools
 from enton.skills.file_toolkit import FileTools
@@ -55,9 +56,11 @@ from enton.skills.forge_toolkit import ForgeTools
 from enton.skills.greet import GreetSkill
 from enton.skills.knowledge_toolkit import KnowledgeTools
 from enton.skills.memory_toolkit import MemoryTools
+from enton.skills.n8n_toolkit import N8nTools
 from enton.skills.planner_toolkit import PlannerTools
 from enton.skills.ptz_toolkit import PTZTools
 from enton.skills.react import ReactSkill
+from enton.skills.screenpipe_toolkit import ScreenpipeTools
 from enton.skills.search_toolkit import SearchTools
 from enton.skills.shell_toolkit import ShellTools
 from enton.skills.skill_registry import SkillRegistry
@@ -116,8 +119,14 @@ class App:
             commonsense=self.commonsense,
         )
 
+        # v0.7.0 — Enton's personal workspace (sandbox)
+        self._workspace = Path(settings.workspace_root)
+        for subdir in ("code", "projects", "downloads", "tmp"):
+            (self._workspace / subdir).mkdir(parents=True, exist_ok=True)
+        logger.info("Workspace: %s", self._workspace)
+
         # Agno Toolkits
-        shell_state = ShellState()
+        shell_state = ShellState(cwd=self._workspace)
         describe_tools = DescribeTools(self.vision)
         toolkits = [
             describe_tools,
@@ -132,6 +141,9 @@ class App:
             VisualMemoryTools(self.visual_memory),
             KnowledgeTools(self.knowledge_crawler),
             BlobTools(self.blob_store),
+            CodingTools(workspace=self._workspace),
+            ScreenpipeTools(),
+            N8nTools(),
         ]
 
         # Agno-powered Brain with tool calling + fallback chain

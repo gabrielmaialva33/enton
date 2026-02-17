@@ -4,9 +4,21 @@ import argparse
 import asyncio
 import logging
 import os
+import torch
+
+try:
+    import uvloop
+except ImportError:
+    uvloop = None
+
+
+from enton.app import App
 
 
 def main() -> None:
+    if uvloop:
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+        
     parser = argparse.ArgumentParser(description="Enton — AI Robot Assistant")
     parser.add_argument("--webcam", action="store_true", help="Use local webcam instead of RTSP")
     parser.add_argument(
@@ -41,7 +53,8 @@ def main() -> None:
     try:
         asyncio.run(app.run())
     except KeyboardInterrupt:
-        logging.info("Enton shutting down.")
+        logger = logging.getLogger(__name__)
+        logger.info("Enton shutting down.")
 
 
 if __name__ == "__main__":

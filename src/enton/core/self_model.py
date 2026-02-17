@@ -5,6 +5,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import torch
+
 if TYPE_CHECKING:
     from enton.core.config import Settings
 

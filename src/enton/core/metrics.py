@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import asyncpg
+
 logger = logging.getLogger(__name__)
 
 _CREATE_TABLE = """
@@ -33,8 +35,6 @@ class MetricsCollector:
     async def _ensure_pool(self):
         if self._pool is not None:
             return self._pool
-
-        import asyncpg
 
         self._pool = await asyncpg.create_pool(self._dsn, min_size=1, max_size=3)
         async with self._pool.acquire() as conn:

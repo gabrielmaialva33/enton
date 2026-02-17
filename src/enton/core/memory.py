@@ -11,6 +11,10 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from agno.knowledge import Knowledge as AgentKnowledge
+from agno.knowledge.embedder.ollama import OllamaEmbedder
+from agno.vectordb.qdrant import Qdrant
+
 from enton.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -39,10 +43,6 @@ class UserProfile:
 def create_knowledge():
     """Create Agno Knowledge backed by Qdrant + Ollama embeddings."""
     try:
-        from agno.embedder.ollama import OllamaEmbedder
-        from agno.knowledge import AgentKnowledge
-        from agno.vectordb.qdrant import Qdrant
-
         vector_db = Qdrant(
             collection="enton_episodes",
             embedder=OllamaEmbedder(id="nomic-embed-text", dimensions=768),

@@ -11,6 +11,12 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import httpx
+from agno.knowledge.embedder.ollama import OllamaEmbedder
+from bs4 import BeautifulSoup
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, PointStruct, VectorParams
+
 if TYPE_CHECKING:
     from enton.cognition.brain import EntonBrain
 
@@ -53,9 +59,6 @@ class KnowledgeCrawler:
         if self._qdrant is not None:
             return True
         try:
-            from qdrant_client import QdrantClient
-            from qdrant_client.models import Distance, VectorParams
-
             client = QdrantClient(url=self._qdrant_url, timeout=5)
             collections = [c.name for c in client.get_collections().collections]
             if KNOWLEDGE_COLLECTION not in collections:
@@ -77,8 +80,6 @@ class KnowledgeCrawler:
         if self._embedder is not None:
             return self._embedder
         try:
-            from agno.embedder.ollama import OllamaEmbedder
-
             self._embedder = OllamaEmbedder(
                 id="nomic-embed-text", dimensions=EMBED_DIM,
             )
@@ -92,9 +93,6 @@ class KnowledgeCrawler:
     async def crawl_url(self, url: str) -> str:
         """Fetch URL content, extract text via BeautifulSoup."""
         try:
-            import httpx
-            from bs4 import BeautifulSoup
-
             async with httpx.AsyncClient(
                 timeout=15, follow_redirects=True,
             ) as client:
@@ -190,9 +188,6 @@ class KnowledgeCrawler:
     async def _search_web(self, query: str) -> list[str]:
         """DuckDuckGo HTML search — returns list of URLs."""
         try:
-            import httpx
-            from bs4 import BeautifulSoup
-
             async with httpx.AsyncClient(
                 timeout=10, follow_redirects=True,
             ) as client:
@@ -225,8 +220,6 @@ class KnowledgeCrawler:
             return
 
         try:
-            from qdrant_client.models import PointStruct
-
             points = []
             for triple in triples:
                 text = f"{triple.subject} {triple.predicate} {triple.obj}"

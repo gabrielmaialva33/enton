@@ -16,7 +16,7 @@ def test_init():
 def test_not_available_by_default():
     kb = CommonsenseKB()
     # Without Qdrant running, should be unavailable
-    with patch("qdrant_client.QdrantClient", side_effect=Exception):
+    with patch("enton.core.commonsense.QdrantClient", side_effect=Exception):
         assert kb.available is False
 
 
@@ -27,7 +27,7 @@ def test_available_when_collection_exists():
     mock_collection.name = COMMONSENSE_COLLECTION
     mock_client.get_collections.return_value.collections = [mock_collection]
 
-    with patch("qdrant_client.QdrantClient", return_value=mock_client):
+    with patch("enton.core.commonsense.QdrantClient", return_value=mock_client):
         assert kb.available is True
 
 
@@ -36,7 +36,7 @@ def test_not_available_when_collection_missing():
     mock_client = MagicMock()
     mock_client.get_collections.return_value.collections = []
 
-    with patch("qdrant_client.QdrantClient", return_value=mock_client):
+    with patch("enton.core.commonsense.QdrantClient", return_value=mock_client):
         assert kb.available is False
 
 

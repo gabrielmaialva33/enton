@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from enum import IntEnum, auto
 from typing import TYPE_CHECKING, Any
 
+import torch
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 

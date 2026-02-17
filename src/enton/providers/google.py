@@ -5,6 +5,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from google.cloud.speech_v2 import SpeechAsyncClient
+from google.cloud.speech_v2.types import cloud_speech
+from google.cloud import texttospeech_v1 as tts
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
@@ -15,9 +19,6 @@ logger = logging.getLogger(__name__)
 
 class GoogleSTT:
     def __init__(self, settings: Settings) -> None:
-        from google.cloud.speech_v2 import SpeechAsyncClient
-        from google.cloud.speech_v2.types import cloud_speech
-
         self._client = SpeechAsyncClient()
         self._project = settings.google_project
         self._recognizer = f"projects/{settings.google_project}/locations/global/recognizers/_"
@@ -29,8 +30,6 @@ class GoogleSTT:
         self._sample_rate = settings.sample_rate
 
     async def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> str:
-        from google.cloud.speech_v2.types import cloud_speech
-
         audio_bytes = (audio * 32767).astype(np.int16).tobytes()
 
         request = cloud_speech.RecognizeRequest(
@@ -52,8 +51,6 @@ class GoogleSTT:
 
 class GoogleTTS:
     def __init__(self, settings: Settings) -> None:
-        from google.cloud import texttospeech_v1 as tts
-
         self._client = tts.TextToSpeechAsyncClient()
         self._voice = tts.VoiceSelectionParams(
             language_code="pt-BR",
@@ -65,8 +62,6 @@ class GoogleTTS:
         )
 
     async def synthesize(self, text: str) -> np.ndarray:
-        from google.cloud import texttospeech_v1 as tts
-
         request = tts.SynthesizeSpeechRequest(
             input=tts.SynthesisInput(text=text),
             voice=self._voice,

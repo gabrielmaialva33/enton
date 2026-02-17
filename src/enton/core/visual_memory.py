@@ -12,6 +12,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import cv2
+import open_clip
+import torch
+from PIL import Image
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, PointStruct, VectorParams
+
 if TYPE_CHECKING:
     import numpy as np
 
@@ -66,9 +73,6 @@ class VisualMemory:
         if self._qdrant is not None:
             return True
         try:
-            from qdrant_client import QdrantClient
-            from qdrant_client.models import Distance, VectorParams
-
             client = QdrantClient(url=self._qdrant_url, timeout=5)
             collections = [c.name for c in client.get_collections().collections]
             if VISUAL_COLLECTION not in collections:
@@ -90,9 +94,6 @@ class VisualMemory:
         if self._model is not None:
             return True
         try:
-            import open_clip
-            import torch
-
             device = "cuda" if torch.cuda.is_available() else "cpu"
             model, _, preprocess = open_clip.create_model_and_transforms(
                 self._siglip_model_name,
@@ -118,9 +119,6 @@ class VisualMemory:
         if not self._load_model():
             return []
         try:
-            import torch
-            from PIL import Image
-
             # BGR → RGB → PIL
             rgb = frame_bgr[:, :, ::-1]
             img = Image.fromarray(rgb)
@@ -141,8 +139,6 @@ class VisualMemory:
         if not self._load_model():
             return []
         try:
-            import torch
-
             tokens = self._tokenizer([text])
             device = next(self._model.parameters()).device
             tokens = tokens.to(device)
@@ -204,8 +200,6 @@ class VisualMemory:
         # Store in Qdrant
         if self._init_qdrant():
             try:
-                from qdrant_client.models import PointStruct
-
                 self._qdrant.upsert(
                     collection_name=VISUAL_COLLECTION,
                     points=[PointStruct(
@@ -231,8 +225,6 @@ class VisualMemory:
     def _save_thumbnail(self, frame_bgr: np.ndarray, timestamp: float) -> str:
         """Save JPEG thumbnail, return path string."""
         try:
-            import cv2
-
             self._ensure_frames_dir()
             fname = f"{int(timestamp * 1000)}.jpg"
             path = self._frames_dir / fname

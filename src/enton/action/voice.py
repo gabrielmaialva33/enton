@@ -8,6 +8,9 @@ import numpy as np
 import sounddevice as sd
 
 from enton.core.config import Provider
+from enton.providers.google import GoogleTTS
+from enton.providers.local import LocalTTS
+from enton.providers.nvidia import NvidiaTTS
 
 if TYPE_CHECKING:
     from enton.core.config import Settings
@@ -29,25 +32,21 @@ class Voice:
     def _init_providers(self, s: Settings) -> None:
         if s.nvidia_api_key:
             try:
-                from enton.providers.nvidia import NvidiaTTS
-
                 self._providers[Provider.NVIDIA] = NvidiaTTS(s)
             except Exception:
                 logger.warning("NVIDIA TTS unavailable")
 
-        try:
-            from enton.providers.google import GoogleTTS
+        if s.google_project:
+            try:
+                self._providers[Provider.GOOGLE] = GoogleTTS(s)
+            except Exception:
+                logger.warning("Google TTS unavailable")
 
-            self._providers[Provider.GOOGLE] = GoogleTTS(s)
-        except Exception:
-            logger.warning("Google TTS unavailable")
-
-        try:
-            from enton.providers.local import LocalTTS
-
-            self._providers[Provider.LOCAL] = LocalTTS(s)
-        except Exception:
-            logger.warning("Local TTS unavailable")
+        if s.kokoro_voice:
+            try:
+                self._providers[Provider.LOCAL] = LocalTTS(s)
+            except Exception:
+                logger.warning("Local TTS unavailable")
 
     def _get_provider(self) -> tuple[Provider, TTSProvider]:
         if self._primary in self._providers:

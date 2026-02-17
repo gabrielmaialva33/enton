@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import cv2
+import torch
 from PIL import Image
+from transformers import pipeline
 
 if TYPE_CHECKING:
     import numpy as np
@@ -59,9 +61,6 @@ class EmotionRecognizer:
 
     def _ensure_pipeline(self):
         if self._pipeline is None:
-            import torch
-            from transformers import pipeline
-
             self._pipeline = pipeline(
                 "image-classification",
                 model=_MODEL_ID,

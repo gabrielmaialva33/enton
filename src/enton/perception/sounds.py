@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
-import numpy as np  # noqa: TC002 — used at runtime
+import numpy as np
+import torch
+from transformers import ClapModel, ClapProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +59,6 @@ class SoundDetector:
         if self._model is not None:
             return
 
-        from transformers import ClapModel, ClapProcessor
-
         model_id = "laion/clap-htsat-unfused"
         logger.info("Loading CLAP model: %s", model_id)
         self._processor = ClapProcessor.from_pretrained(model_id)
@@ -72,8 +72,6 @@ class SoundDetector:
         )
 
     def _precompute_text_embeddings(self):
-        import torch
-
         texts = list(self._classes.keys())
         inputs = self._processor(
             text=texts, return_tensors="pt", padding=True
@@ -95,8 +93,6 @@ class SoundDetector:
         Returns:
             List of detected sounds above threshold.
         """
-        import torch
-
         self._ensure_model()
 
         inputs = self._processor(

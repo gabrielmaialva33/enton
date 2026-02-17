@@ -7,7 +7,7 @@ authors = [{ name = "Gabriel Maia", email = "gabrielmaialva33@gmail.com" }]
 requires-python = ">=3.12"
 dependencies = [
     # Agno framework (core + provider extras)
-    "agno[ollama,groq,google,nvidia,openrouter,qdrant]>=1.4,<2.0",
+    "agno[ollama,groq,google,nvidia,openrouter,qdrant]>=2.0",
     # Google Cloud (STT/TTS only — LLM via Agno)
     "google-genai>=1.0",
     "google-cloud-speech>=2.28",
@@ -49,6 +49,7 @@ dependencies = [
     # Required by Agno
     "openai>=1.50",
     "sqlalchemy>=2.0",
+    "uvloop>=0.22.1",
 ]
 
 [dependency-groups]
@@ -69,7 +70,10 @@ target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "UP", "B", "SIM", "TCH"]
+select = [
+    "E", "F", "I", "N", "UP", "B", "SIM", "TCH", "PL", "RUF", "A", "C4", "ISC", "LOG"
+]
+ignore = ["PLR0913", "PLR2004", "RUF012"]  # Ignore too many args, magic numbers, mutable class defaults (for now)
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

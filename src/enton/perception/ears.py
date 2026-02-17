@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
+import sounddevice as sd
+import torch
 
 from enton.core.config import Provider
 from enton.core.events import EventBus, TranscriptionEvent
+from enton.providers.google import GoogleSTT
+from enton.providers.local import LocalSTT
+from enton.providers.nvidia import NvidiaSTT
 
 if TYPE_CHECKING:
     from enton.core.config import Settings
@@ -39,25 +45,24 @@ class Ears:
     def _init_providers(self, s: Settings) -> None:
         if s.nvidia_api_key:
             try:
-                from enton.providers.nvidia import NvidiaSTT
-
-                self._providers[Provider.NVIDIA] = NvidiaSTT(s)
+                NvidiaSTT_instance = NvidiaSTT(s)
+                self._providers[Provider.NVIDIA] = NvidiaSTT_instance
             except Exception:
                 logger.warning("NVIDIA STT unavailable")
 
-        try:
-            from enton.providers.google import GoogleSTT
+        if s.google_project:
+            try:
+                GoogleSTT_instance = GoogleSTT(s)
+                self._providers[Provider.GOOGLE] = GoogleSTT_instance
+            except Exception:
+                logger.warning("Google STT unavailable")
 
-            self._providers[Provider.GOOGLE] = GoogleSTT(s)
-        except Exception:
-            logger.warning("Google STT unavailable")
-
-        try:
-            from enton.providers.local import LocalSTT
-
-            self._providers[Provider.LOCAL] = LocalSTT(s)
-        except Exception:
-            logger.warning("Local STT unavailable")
+        if s.whisper_model:
+            try:
+                LocalSTT_instance = LocalSTT(s)
+                self._providers[Provider.LOCAL] = LocalSTT_instance
+            except Exception:
+                logger.warning("Local STT unavailable")
 
     def _get_provider(self) -> tuple[Provider, STTProvider]:
         if self._primary in self._providers:
@@ -99,12 +104,7 @@ class Ears:
 
     async def run(self) -> None:
         """Continuous mic capture loop with VAD + streaming partial transcription."""
-        import asyncio
-
-        import sounddevice as sd
-        import torch
-
-        logger.info("Loading silero-vad...")
+        # logger.info("Loading silero-vad...")
         model, utils = torch.hub.load(
             repo_or_dir="snakers4/silero-vad", model="silero_vad", force_reload=False
         )

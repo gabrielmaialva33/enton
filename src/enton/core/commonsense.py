@@ -8,6 +8,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from agno.knowledge.embedder.ollama import OllamaEmbedder
+from qdrant_client import QdrantClient
+
 logger = logging.getLogger(__name__)
 
 COMMONSENSE_COLLECTION = "enton_commonsense"
@@ -28,8 +31,6 @@ class CommonsenseKB:
         if self._qdrant is not None:
             return self._available or False
         try:
-            from qdrant_client import QdrantClient
-
             client = QdrantClient(url=self._qdrant_url, timeout=5)
             collections = [c.name for c in client.get_collections().collections]
             if COMMONSENSE_COLLECTION in collections:
@@ -55,8 +56,6 @@ class CommonsenseKB:
         if self._embedder is not None:
             return self._embedder
         try:
-            from agno.embedder.ollama import OllamaEmbedder
-
             self._embedder = OllamaEmbedder(
                 id="nomic-embed-text", dimensions=EMBED_DIM,
             )

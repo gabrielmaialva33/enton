@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
+import riva.client
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -19,8 +21,6 @@ class NvidiaSTT:
     """NVIDIA Riva Canary/Parakeet STT via gRPC API."""
 
     def __init__(self, settings: Settings) -> None:
-        import riva.client
-
         auth = riva.client.Auth(
             ssl_cert=None,
             use_ssl=True,
@@ -42,8 +42,6 @@ class NvidiaSTT:
         return ids.get(model, model)
 
     async def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> str:
-        import asyncio
-
         audio_bytes = (audio * 32767).astype(np.int16).tobytes()
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(
@@ -64,8 +62,6 @@ class NvidiaTTS:
     """NVIDIA Riva Magpie TTS via gRPC API."""
 
     def __init__(self, settings: Settings) -> None:
-        import riva.client
-
         auth = riva.client.Auth(
             ssl_cert=None,
             use_ssl=True,
@@ -80,8 +76,6 @@ class NvidiaTTS:
         self._sample_rate = settings.sample_rate
 
     async def synthesize(self, text: str) -> np.ndarray:
-        import asyncio
-
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(
             None,

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
+import torch
+from faster_whisper import WhisperModel
+from kokoro import KPipeline
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -22,8 +26,6 @@ class LocalSTT:
 
     def _ensure_model(self):
         if self._model is None:
-            from faster_whisper import WhisperModel
-
             self._model = WhisperModel(
                 self._model_name,
                 device="cuda",
@@ -32,8 +34,6 @@ class LocalSTT:
         return self._model
 
     async def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> str:
-        import asyncio
-
         model = self._ensure_model()
         loop = asyncio.get_running_loop()
 
@@ -57,17 +57,12 @@ class LocalTTS:
 
     def _ensure_pipeline(self):
         if self._pipeline is None:
-            import torch
-            from kokoro import KPipeline
-
             self._pipeline = KPipeline(lang_code=self._lang, repo_id="hexgrad/Kokoro-82M")
             if hasattr(self._pipeline, "model") and self._pipeline.model is not None:
                 self._pipeline.model = self._pipeline.model.to(torch.device("cpu"))
         return self._pipeline
 
     async def synthesize(self, text: str) -> np.ndarray:
-        import asyncio
-
         pipeline = self._ensure_pipeline()
         loop = asyncio.get_running_loop()
 

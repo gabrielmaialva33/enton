@@ -154,6 +154,15 @@ class Settings(BaseSettings):
     phone_wifi_host: str = ""  # phone WiFi/Tailscale IP for wireless ADB
     phone_wifi_port: int = 5555  # ADB TCP port (default 5555)
 
+    # Channels (v0.9.0 — multi-platform messaging)
+    telegram_bot_token: str = ""
+    telegram_allowed_users: str = ""  # comma-separated user IDs
+    discord_bot_token: str = ""
+    discord_allowed_guilds: str = ""  # comma-separated guild IDs
+    web_channel_enabled: bool = True
+    web_channel_host: str = "0.0.0.0"
+    web_channel_port: int = 8765
+
     # Integrations (Screenpipe + n8n)
     screenpipe_url: str = "http://localhost:3030"
     n8n_webhook_base: str = ""  # e.g. https://n8n.example.com/webhook

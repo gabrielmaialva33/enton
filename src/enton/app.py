@@ -336,6 +336,60 @@ class App:
         if self.ears._providers:
             sm.active_providers["stt"] = str(self.ears._primary)
 
+    def _init_channels(self) -> None:
+        """Register messaging channels based on config."""
+        # Voice channel (bridge existing STT/TTS)
+        from enton.channels.voice import VoiceChannel
+
+        voice_ch = VoiceChannel(self.bus, self.voice)
+        self.channel_manager.register(voice_ch)
+
+        # Telegram
+        if settings.telegram_bot_token:
+            from enton.channels.telegram import TelegramChannel
+
+            allowed = [
+                u.strip()
+                for u in settings.telegram_allowed_users.split(",")
+                if u.strip()
+            ]
+            tg = TelegramChannel(
+                self.bus,
+                token=settings.telegram_bot_token,
+                allowed_users=allowed or None,
+            )
+            self.channel_manager.register(tg)
+            logger.info("Telegram channel configured")
+
+        # Discord
+        if settings.discord_bot_token:
+            from enton.channels.discord import DiscordChannel
+
+            guilds = [
+                g.strip()
+                for g in settings.discord_allowed_guilds.split(",")
+                if g.strip()
+            ]
+            dc = DiscordChannel(
+                self.bus,
+                token=settings.discord_bot_token,
+                allowed_guilds=guilds or None,
+            )
+            self.channel_manager.register(dc)
+            logger.info("Discord channel configured")
+
+        # Web (WebSocket)
+        if settings.web_channel_enabled:
+            from enton.channels.web import WebChannel
+
+            web = WebChannel(
+                self.bus,
+                host=settings.web_channel_host,
+                port=settings.web_channel_port,
+            )
+            self.channel_manager.register(web)
+            logger.info("Web channel configured on port %d", settings.web_channel_port)
+
     def _register_handlers(self) -> None:
         self.bus.on(DetectionEvent, self._on_detection)
         self.bus.on(ActivityEvent, self._on_activity)
@@ -565,6 +619,10 @@ class App:
                     tg.create_task(
                         self._phone_monitor_loop(), name="phone_monitor",
                     )
+                # v0.9.0 — Multi-platform channels
+                tg.create_task(
+                    self.channel_manager.run(), name="channels",
+                )
         finally:
             # Graceful shutdown — persist state
             self.lifecycle.on_shutdown(self.self_model, self.desires)

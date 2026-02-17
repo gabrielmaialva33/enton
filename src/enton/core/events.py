@@ -95,6 +95,20 @@ class SkillEvent(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class ChannelMessageEvent(Event):
+    """Emitted when a message arrives from any channel (Telegram, Discord, etc.)."""
+    message: object = None  # ChannelMessage (avoid circular import)
+
+    @property
+    def channel_name(self) -> str:
+        return getattr(self.message, "channel", "unknown") if self.message else "unknown"
+
+    @property
+    def text(self) -> str:
+        return getattr(self.message, "text", "") if self.message else ""
+
+
+@dataclass(frozen=True, slots=True)
 class SystemEvent(Event):
     kind: str = ""  # startup, shutdown, error, camera_lost, etc.
     detail: str = ""

@@ -38,6 +38,8 @@ from enton.skills.planner_toolkit import PlannerTools
 from enton.skills.ptz_toolkit import PTZTools
 from enton.skills.react import ReactSkill
 from enton.skills.search_toolkit import SearchTools
+from enton.skills._shell_state import ShellState
+from enton.skills.file_toolkit import FileTools
 from enton.skills.shell_toolkit import ShellTools
 from enton.skills.system_toolkit import SystemTools
 

@@ -74,7 +74,7 @@ class KnowledgeTools(Toolkit):
 
     async def deep_research(self, topic: str) -> str:
         """Realiza uma pesquisa profunda sobre um tema (Deep Research).
-        
+
         Busca em multiplas fontes, le o conteudo completo e sintetiza um conhecimento denso.
         Use isso quando precisar de informacoes detalhadas ou complexas.
 

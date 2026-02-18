@@ -191,21 +191,21 @@ class KnowledgeCrawler:
         """Deep research: Search web, parallel crawl, extract knowledge."""
         urls = await self._search_web(topic)
         target_urls = urls[:max_pages]
-        
+
         if not target_urls:
             return []
 
         logger.info(f"Deep researching '{topic}' across {len(target_urls)} pages...")
-        
+
         # Parallel crawl with Crawl4AI
         results = await self._engine.crawl_many(target_urls)
-        
+
         all_triples: list[KnowledgeTriple] = []
-        
+
         for res in results:
             url = res.get("url", "")
             markdown = res.get("markdown", "")
-            
+
             if res.get("error") or not markdown:
                 logger.warning(f"Failed to learn from {url}: {res.get('error')}")
                 continue

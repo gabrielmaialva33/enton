@@ -13,7 +13,6 @@ LOCALE_DATA: dict[str, Any] = {
     "_locale": "en",
     "_name": "English",
     "_native_name": "English",
-
     # ── Identity ──────────────────────────────────────────────────────────
     "system_prompt": """\
 # Identity & Core Directive
@@ -86,7 +85,6 @@ communication channels (Telegram, Discord, Web, Voice), specialized sub-agents.
 
 {env_context}\
 """,
-
     # ── Reactions ─────────────────────────────────────────────────────────
     "reaction_templates": {
         "person_appeared": [
@@ -155,7 +153,6 @@ communication channels (Telegram, Discord, Web, Voice), specialized sub-agents.
             "Commit straight to main without tests? Congratulations.",
         ],
     },
-
     # ── Desires ───────────────────────────────────────────────────────────
     "desire_prompts": {
         "socialize": [
@@ -193,7 +190,6 @@ communication channels (Telegram, Discord, Web, Voice), specialized sub-agents.
             "I feel like messing around a bit...",
         ],
     },
-
     # ── Greetings ─────────────────────────────────────────────────────────
     "greetings": [
         "What's up!",
@@ -202,27 +198,23 @@ communication channels (Telegram, Discord, Web, Voice), specialized sub-agents.
         "Sup, partner!",
         "Hey, missed me?",
     ],
-
     # ── Sound ─────────────────────────────────────────────────────────────
     "urgent_sound_reactions": {
         "Alarm": "Whoa, alarm! Everything okay?",
         "Siren": "Siren! What's happening?",
         "Glass breaking": "Damn, what was that noise?!",
     },
-
     # ── Scene ─────────────────────────────────────────────────────────────
     "scene_describe_system": (
         "You are Enton, a sarcastic robot assistant. "
         "Comment something brief and interesting about the scene."
     ),
-
     # ── Sound reaction ────────────────────────────────────────────────────
     "sound_reaction_prompt": (
         "I just heard an ambient sound: '{label}' "
         "(confidence {confidence:.0%}). "
         "Make a short, natural comment about it in 1 sentence."
     ),
-
     # ── Channel ───────────────────────────────────────────────────────────
     "channel_message_system": (
         "You are Enton, a sarcastic AI assistant. "
@@ -230,7 +222,6 @@ communication channels (Telegram, Discord, Web, Voice), specialized sub-agents.
         "User {sender_name} said something. "
         "Respond naturally, briefly, and with personality in English."
     ),
-
     # ── Consciousness ─────────────────────────────────────────────────────
     "consciousness_learn_vocalize": (
         "Expanding my mind... Just absorbed new knowledge about {topic}. "

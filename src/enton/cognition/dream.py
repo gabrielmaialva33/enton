@@ -11,6 +11,7 @@ activates and runs consolidation cycles:
 Inspired by: Letta/MemGPT "Sleep-time Compute" (arXiv 2504.13171),
 SimNap (Dreaming AI Whitepaper).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -31,8 +32,8 @@ logger = logging.getLogger(__name__)
 class DreamMode:
     """Background processing during idle time."""
 
-    IDLE_THRESHOLD = 120.0   # seconds before entering dream mode
-    DREAM_INTERVAL = 300.0   # seconds between dream cycles
+    IDLE_THRESHOLD = 120.0  # seconds before entering dream mode
+    DREAM_INTERVAL = 300.0  # seconds between dream cycles
     MAX_DREAM_DURATION = 300  # max seconds per cycle
 
     def __init__(
@@ -95,7 +96,8 @@ class DreamMode:
         self._last_dream = time.time()
         logger.info(
             "Dream cycle #%d starting (idle %.0fs)",
-            self._dream_count, self.idle_seconds,
+            self._dream_count,
+            self.idle_seconds,
         )
 
         try:
@@ -145,11 +147,14 @@ class DreamMode:
 
         if result and len(result) > 10:
             from enton.core.memory import Episode
-            self._memory.remember(Episode(
-                kind="consolidation",
-                summary=f"[Dream #{self._dream_count}] {result}",
-                tags=["dream", "consolidation"],
-            ))
+
+            self._memory.remember(
+                Episode(
+                    kind="consolidation",
+                    summary=f"[Dream #{self._dream_count}] {result}",
+                    tags=["dream", "consolidation"],
+                )
+            )
             logger.info("Dream insight: %s", result[:100])
             return result
 
@@ -176,12 +181,15 @@ class DreamMode:
 
         if patterns:
             from enton.core.memory import Episode
+
             summary = f"[Dream] Patterns: {'; '.join(patterns[:3])}"
-            self._memory.remember(Episode(
-                kind="pattern",
-                summary=summary,
-                tags=["dream", "pattern"],
-            ))
+            self._memory.remember(
+                Episode(
+                    kind="pattern",
+                    summary=summary,
+                    tags=["dream", "pattern"],
+                )
+            )
 
         return patterns
 

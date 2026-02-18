@@ -6,6 +6,7 @@ Injects metacognitive insights into the SelfModel introspection.
 
 Inspired by: SAFLA, MUSE (arXiv 2411.13537), rewire.it patterns.
 """
+
 from __future__ import annotations
 
 import logging
@@ -43,6 +44,7 @@ class ReasoningTrace:
 @dataclass
 class CuriosityItem:
     """A topic or question Enton wants to investigate."""
+
     topic: str
     source: str  # e.g., "prediction_anomaly", "user_mention", "random_thought"
     priority: float = 0.5
@@ -67,20 +69,26 @@ class MetaCognitiveEngine:
         self._total_calls = 0
         self._total_errors = 0
         self._total_latency_ms = 0.0
-        
+
         # -- Sentience State (v0.7.0) --
         self.boredom_level: float = 0.0  # 0.0 to 1.0
         self.boredom_threshold: float = 0.8
         self._last_tick = time.time()
-        
+
         # Queue of things to learn/explore
         self.curiosity_queue: deque[CuriosityItem] = deque()
-        
+
         # Default fallback interests if queue is empty
         self.default_interests = [
-            "machine learning", "rust programming", "distributed systems", 
-            "neuromorphic computing", "philosophy of mind", "generative art",
-            "autonomous agents", "computer vision", "game development"
+            "machine learning",
+            "rust programming",
+            "distributed systems",
+            "neuromorphic computing",
+            "philosophy of mind",
+            "generative art",
+            "autonomous agents",
+            "computer vision",
+            "game development",
         ]
 
     # -- recording --
@@ -167,9 +175,24 @@ class MetaCognitiveEngine:
     def should_use_tools(self, query: str) -> bool:
         """Heuristic: should this query use tool-calling (agent) or direct?"""
         tool_keywords = [
-            "arquivo", "file", "busca", "search", "sistema", "system",
-            "shell", "comando", "run", "execute", "camera", "ptz",
-            "lembra", "memory", "lembrete", "reminder", "descreva", "describe",
+            "arquivo",
+            "file",
+            "busca",
+            "search",
+            "sistema",
+            "system",
+            "shell",
+            "comando",
+            "run",
+            "execute",
+            "camera",
+            "ptz",
+            "lembra",
+            "memory",
+            "lembrete",
+            "reminder",
+            "descreva",
+            "describe",
         ]
         q_lower = query.lower()
         return any(kw in q_lower for kw in tool_keywords)
@@ -269,7 +292,7 @@ class MetaCognitiveEngine:
         now = time.time()
         dt = now - self._last_tick
         self._last_tick = now
-        
+
         # 1. Update Boredom
         # Low surprise increases boredom. High surprise reduces it quickly.
         if surprise_score < 0.2:
@@ -279,12 +302,12 @@ class MetaCognitiveEngine:
         elif surprise_score > 0.5:
             # Surprise clears boredom immediately
             self.boredom_level = max(0.0, self.boredom_level - 0.5)
-            
+
         # 2. Check Thresholds
         if self.boredom_level > self.boredom_threshold:
             # We are bored. Let's do something productive.
             return self._decide_autodidact_action()
-            
+
         return None
 
     def _decide_autodidact_action(self) -> str:
@@ -297,9 +320,10 @@ class MetaCognitiveEngine:
         if self.curiosity_queue:
             item = self.curiosity_queue.popleft()
             return item.topic
-            
+
         # Fallback to random default interest
         import random
+
         return random.choice(self.default_interests)
 
     def add_curiosity(self, topic: str, source: str = "internal") -> None:

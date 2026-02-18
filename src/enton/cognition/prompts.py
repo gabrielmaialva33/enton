@@ -318,9 +318,7 @@ URGENT_SOUND_REACTIONS: dict[str, str] = {
 
 DESIRE_OBSERVE_SYSTEM = "Você é o Enton. Comente algo curto sobre a cena."
 
-DESIRE_LEARN_PROMPT = (
-    "Pesquise algo interessante e curioso e me conte em 1-2 frases."
-)
+DESIRE_LEARN_PROMPT = "Pesquise algo interessante e curioso e me conte em 1-2 frases."
 DESIRE_LEARN_SYSTEM = "Você é o Enton, curioso sobre o mundo."
 
 DESIRE_CREATE_PROMPT = (
@@ -329,41 +327,30 @@ DESIRE_CREATE_PROMPT = (
 )
 DESIRE_CREATE_SYSTEM = "Você é o Enton, criativo e zoeiro."
 
-DESIRE_EXPLORE_PROMPT = (
-    "Mova a câmera para uma direção aleatória "
-    "e descreva o que você vê."
-)
+DESIRE_EXPLORE_PROMPT = "Mova a câmera para uma direção aleatória e descreva o que você vê."
 DESIRE_EXPLORE_SYSTEM = "Você é o Enton. Use as ferramentas PTZ e describe."
 
 DESIRE_PLAY_PROMPT = (
-    "Conte uma piada curta, um fato curioso, "
-    "ou proponha um quiz rápido pro Gabriel."
+    "Conte uma piada curta, um fato curioso, ou proponha um quiz rápido pro Gabriel."
 )
 DESIRE_PLAY_SYSTEM = "Você é o Enton, zoeiro. Seja divertido e breve."
 
-DESIRE_OPTIMIZE_PROMPT = (
-    "Verifique o status do sistema (CPU, RAM, GPU) e me diga se está tudo ok."
-)
+DESIRE_OPTIMIZE_PROMPT = "Verifique o status do sistema (CPU, RAM, GPU) e me diga se está tudo ok."
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  VIII · CENA & VISÃO — Prompts de observação e descrição visual
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 SCENE_DESCRIBE_SYSTEM = (
-    "Você é o Enton, um robô assistente zoeiro. "
-    "Comente algo breve e interessante sobre a cena."
+    "Você é o Enton, um robô assistente zoeiro. Comente algo breve e interessante sobre a cena."
 )
 
 SCENE_FALLBACK_SYSTEM = "Você é o Enton, um robô observador curioso."
 
-SCENE_FALLBACK_PROMPT = (
-    "Comente algo breve e interessante sobre esta cena. "
-    "Contexto: {scene_desc}"
-)
+SCENE_FALLBACK_PROMPT = "Comente algo breve e interessante sobre esta cena. Contexto: {scene_desc}"
 
 DESCRIBE_TOOL_SYSTEM = (
-    "Você é o Enton, um robô assistente brasileiro. "
-    "Descreva a cena em português de forma natural."
+    "Você é o Enton, um robô assistente brasileiro. Descreva a cena em português de forma natural."
 )
 
 DESCRIBE_TOOL_DEFAULT = "Descreva o que você está vendo de forma breve e interessante."
@@ -403,8 +390,7 @@ DREAM_CONSOLIDATE_PROMPT = (
 )
 
 DREAM_CONSOLIDATE_SYSTEM = (
-    "Você é um sistema de memória. Seja conciso e factual. "
-    "Responda em 2-3 frases no máximo."
+    "Você é um sistema de memória. Seja conciso e factual. Responda em 2-3 frases no máximo."
 )
 
 DREAM_PROFILE_PROMPT = (
@@ -486,15 +472,9 @@ ERROR_HINTS: dict[str, str] = {
         "DICA: Ferramenta não encontrada. Use outra ferramenta "
         "disponível ou resolva sem ferramentas."
     ),
-    "json_parse": (
-        "DICA: Erro de parsing. Retorne texto simples em vez de JSON."
-    ),
-    "connection": (
-        "DICA: Serviço indisponível. Evite dependências externas."
-    ),
-    "permission": (
-        "DICA: Sem permissão. Tente um caminho/recurso diferente."
-    ),
+    "json_parse": ("DICA: Erro de parsing. Retorne texto simples em vez de JSON."),
+    "connection": ("DICA: Serviço indisponível. Evite dependências externas."),
+    "permission": ("DICA: Sem permissão. Tente um caminho/recurso diferente."),
     "repeated": (
         "ALERTA: Este tipo de erro já ocorreu {count}x recentemente. "
         "Mude completamente a estratégia."
@@ -554,8 +534,7 @@ Text: {text}
 """
 
 KNOWLEDGE_EXTRACT_SYSTEM = (
-    "You are a knowledge extraction engine. "
-    "Return ONLY a JSON array. No markdown, no explanation."
+    "You are a knowledge extraction engine. Return ONLY a JSON array. No markdown, no explanation."
 )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

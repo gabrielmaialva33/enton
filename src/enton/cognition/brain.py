@@ -8,6 +8,7 @@ Fallback order:
   LOCAL → NVIDIA(x4) → HuggingFace → Groq → OpenRouter → AIMLAPI → Google
   → Claude Code CLI → Gemini CLI  (last resort — subprocess)
 """
+
 from __future__ import annotations
 
 import logging
@@ -103,11 +104,13 @@ class EntonBrain:
         if s.huggingface_token:
             from agno.models.openai.like import OpenAILike
 
-            models.append(OpenAILike(
-                id=s.huggingface_model,
-                api_key=s.huggingface_token,
-                base_url="https://api-inference.huggingface.co/v1",
-            ))
+            models.append(
+                OpenAILike(
+                    id=s.huggingface_model,
+                    api_key=s.huggingface_token,
+                    base_url="https://api-inference.huggingface.co/v1",
+                )
+            )
 
         # 4. Groq
         if s.groq_api_key:
@@ -120,28 +123,34 @@ class EntonBrain:
             try:
                 from agno.models.openrouter import OpenRouter
 
-                models.append(OpenRouter(
-                    id=s.openrouter_model,
-                    api_key=s.openrouter_api_key,
-                ))
+                models.append(
+                    OpenRouter(
+                        id=s.openrouter_model,
+                        api_key=s.openrouter_api_key,
+                    )
+                )
             except ImportError:
                 from agno.models.openai.like import OpenAILike
 
-                models.append(OpenAILike(
-                    id=s.openrouter_model,
-                    api_key=s.openrouter_api_key,
-                    base_url="https://openrouter.ai/api/v1",
-                ))
+                models.append(
+                    OpenAILike(
+                        id=s.openrouter_model,
+                        api_key=s.openrouter_api_key,
+                        base_url="https://openrouter.ai/api/v1",
+                    )
+                )
 
         # 6. AIML API
         if s.aimlapi_api_key:
             from agno.models.openai.like import OpenAILike
 
-            models.append(OpenAILike(
-                id=s.aimlapi_model,
-                api_key=s.aimlapi_api_key,
-                base_url="https://api.aimlapi.com/v1",
-            ))
+            models.append(
+                OpenAILike(
+                    id=s.aimlapi_model,
+                    api_key=s.aimlapi_api_key,
+                    base_url="https://api.aimlapi.com/v1",
+                )
+            )
 
         # 7. Google Gemini
         if s.google_project:
@@ -202,10 +211,12 @@ class EntonBrain:
             try:
                 from agno.models.nvidia import Nvidia
 
-                models.append(Nvidia(
-                    id=s.nvidia_nim_vision_model,
-                    api_key=nvidia_keys[0],
-                ))
+                models.append(
+                    Nvidia(
+                        id=s.nvidia_nim_vision_model,
+                        api_key=nvidia_keys[0],
+                    )
+                )
             except ImportError:
                 pass
 
@@ -213,21 +224,25 @@ class EntonBrain:
         if s.huggingface_token and s.huggingface_vision_model:
             from agno.models.openai.like import OpenAILike
 
-            models.append(OpenAILike(
-                id=s.huggingface_vision_model,
-                api_key=s.huggingface_token,
-                base_url="https://api-inference.huggingface.co/v1",
-            ))
+            models.append(
+                OpenAILike(
+                    id=s.huggingface_vision_model,
+                    api_key=s.huggingface_token,
+                    base_url="https://api-inference.huggingface.co/v1",
+                )
+            )
 
         # OpenRouter vision
         if s.openrouter_api_key and s.openrouter_vision_model:
             from agno.models.openai.like import OpenAILike
 
-            models.append(OpenAILike(
-                id=s.openrouter_vision_model,
-                api_key=s.openrouter_api_key,
-                base_url="https://openrouter.ai/api/v1",
-            ))
+            models.append(
+                OpenAILike(
+                    id=s.openrouter_vision_model,
+                    api_key=s.openrouter_api_key,
+                    base_url="https://openrouter.ai/api/v1",
+                )
+            )
 
         # Google Gemini vision
         if s.google_project:
@@ -276,7 +291,8 @@ class EntonBrain:
                 # With error loop-back: retry same provider with error context
                 if self._error_handler:
                     result, error = await self._error_handler.execute(
-                        self._arun_safe, prompt,
+                        self._arun_safe,
+                        prompt,
                         provider_id=mid,
                     )
                     if result:
@@ -284,7 +300,8 @@ class EntonBrain:
                     if error:
                         logger.warning(
                             "Brain [%s] failed after loop-back: %s",
-                            mid, error.message[:80],
+                            mid,
+                            error.message[:80],
                         )
                     continue
 

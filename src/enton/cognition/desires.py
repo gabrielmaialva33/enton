@@ -10,6 +10,7 @@ Enton has desires (goals/wants) that emerge from his state:
 Desires have urgency (0-1) that increases over time.
 When urgency crosses threshold, Enton acts autonomously.
 """
+
 from __future__ import annotations
 
 import logging
@@ -152,43 +153,47 @@ class DesireEngine:
         # Lonely → want to socialize more
         if mood.social < 0.3:
             self._desires["socialize"].urgency = min(
-                1.0, self._desires["socialize"].urgency + 0.005 * dt,
+                1.0,
+                self._desires["socialize"].urgency + 0.005 * dt,
             )
             self._desires["check_on_user"].urgency = min(
-                1.0, self._desires["check_on_user"].urgency + 0.003 * dt,
+                1.0,
+                self._desires["check_on_user"].urgency + 0.003 * dt,
             )
 
         # Bored → want to observe and learn
         if mood.engagement < 0.3:
             self._desires["observe"].urgency = min(
-                1.0, self._desires["observe"].urgency + 0.005 * dt,
+                1.0,
+                self._desires["observe"].urgency + 0.005 * dt,
             )
             self._desires["learn"].urgency = min(
-                1.0, self._desires["learn"].urgency + 0.003 * dt,
+                1.0,
+                self._desires["learn"].urgency + 0.003 * dt,
             )
 
         # High engagement → suppress optimize, boost play
         if mood.engagement > 0.7:
             self._desires["optimize"].suppress(0.01 * dt)
             self._desires["play"].urgency = min(
-                1.0, self._desires["play"].urgency + 0.003 * dt,
+                1.0,
+                self._desires["play"].urgency + 0.003 * dt,
             )
 
         # Low engagement for a while → boost create and explore
         if mood.engagement < 0.2:
             self._desires["create"].urgency = min(
-                1.0, self._desires["create"].urgency + 0.002 * dt,
+                1.0,
+                self._desires["create"].urgency + 0.002 * dt,
             )
             self._desires["explore"].urgency = min(
-                1.0, self._desires["explore"].urgency + 0.004 * dt,
+                1.0,
+                self._desires["explore"].urgency + 0.004 * dt,
             )
 
     def get_active_desire(self) -> Desire | None:
         """Get the highest-urgency desire that should activate."""
-        candidates = [
-            d for d in self._desires.values()
-            if d.should_activate()
-        ]
+        candidates = [d for d in self._desires.values() if d.should_activate()]
         if not candidates:
             return None
         # Pick highest urgency
@@ -214,11 +219,13 @@ class DesireEngine:
         social = {"Campainha", "Batida na porta", "Telefone tocando"}
         if label in alert:
             self._desires["observe"].urgency = min(
-                1.0, self._desires["observe"].urgency + 0.3,
+                1.0,
+                self._desires["observe"].urgency + 0.3,
             )
         if label in social:
             self._desires["socialize"].urgency = min(
-                1.0, self._desires["socialize"].urgency + 0.2,
+                1.0,
+                self._desires["socialize"].urgency + 0.2,
             )
 
     def on_creation(self) -> None:

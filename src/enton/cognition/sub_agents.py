@@ -23,6 +23,7 @@ Pattern:
     3. Sub-agent executes with focused context
     4. Result flows back to main brain
 """
+
 from __future__ import annotations
 
 import logging
@@ -69,7 +70,9 @@ ROLE_CONFIGS: dict[str, dict[str, Any]] = {
         "name": "EntonVision",
         "system": SUBAGENT_PROMPTS["vision"],
         "toolkit_names": [
-            "describe_tools", "face_tools", "visual_memory_tools",
+            "describe_tools",
+            "face_tools",
+            "visual_memory_tools",
             "ptz_tools",
         ],
         "description": "Análise de cenas, objetos, faces e atividades visuais.",
@@ -78,8 +81,11 @@ ROLE_CONFIGS: dict[str, dict[str, Any]] = {
         "name": "EntonCoder",
         "system": SUBAGENT_PROMPTS["coding"],
         "toolkit_names": [
-            "coding_tools", "shell_tools", "file_tools",
-            "workspace_tools", "process_tools",
+            "coding_tools",
+            "shell_tools",
+            "file_tools",
+            "workspace_tools",
+            "process_tools",
         ],
         "description": "Programação multi-linguagem, review, debug e execução.",
     },
@@ -87,7 +93,9 @@ ROLE_CONFIGS: dict[str, dict[str, Any]] = {
         "name": "EntonResearch",
         "system": SUBAGENT_PROMPTS["research"],
         "toolkit_names": [
-            "search_tools", "knowledge_tools", "memory_tools",
+            "search_tools",
+            "knowledge_tools",
+            "memory_tools",
         ],
         "description": "Pesquisa web, knowledge crawling e síntese de informações.",
     },
@@ -95,8 +103,11 @@ ROLE_CONFIGS: dict[str, dict[str, Any]] = {
         "name": "EntonSysAdmin",
         "system": SUBAGENT_PROMPTS["system"],
         "toolkit_names": [
-            "system_tools", "workspace_tools", "process_tools",
-            "gcp_tools", "shell_tools",
+            "system_tools",
+            "workspace_tools",
+            "process_tools",
+            "gcp_tools",
+            "shell_tools",
         ],
         "description": "Monitoramento de hardware, processos, GCP e infraestrutura.",
     },
@@ -147,6 +158,7 @@ class SubAgent:
                 content = response.content or ""
                 # Strip <think> tags
                 import re
+
                 content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
 
                 elapsed = (time.time() - start) * 1000
@@ -215,7 +227,8 @@ class SubAgentOrchestrator:
             )
             logger.info(
                 "SubAgent initialized: %s (%d tools)",
-                role, len(agent_toolkits),
+                role,
+                len(agent_toolkits),
             )
 
     async def delegate(self, role: str, task: str) -> AgentResult:
@@ -243,25 +256,56 @@ class SubAgentOrchestrator:
 
         # Vision keywords
         vision_kw = [
-            "camera", "imagem", "foto", "cena", "vendo", "olha",
-            "rosto", "face", "visual", "descreva", "observ",
+            "camera",
+            "imagem",
+            "foto",
+            "cena",
+            "vendo",
+            "olha",
+            "rosto",
+            "face",
+            "visual",
+            "descreva",
+            "observ",
         ]
         if any(kw in t for kw in vision_kw):
             return "vision"
 
         # Coding keywords
         code_kw = [
-            "codigo", "code", "python", "rust", "programar", "debug",
-            "compilar", "script", "funcao", "classe", "bug", "implementar",
-            "refatorar", "rodar", "executar codigo",
+            "codigo",
+            "code",
+            "python",
+            "rust",
+            "programar",
+            "debug",
+            "compilar",
+            "script",
+            "funcao",
+            "classe",
+            "bug",
+            "implementar",
+            "refatorar",
+            "rodar",
+            "executar codigo",
         ]
         if any(kw in t for kw in code_kw):
             return "coding"
 
         # System keywords
         sys_kw = [
-            "cpu", "gpu", "ram", "disco", "processo", "hardware",
-            "gcp", "vm", "cloud", "deploy", "sistema", "monitor",
+            "cpu",
+            "gpu",
+            "ram",
+            "disco",
+            "processo",
+            "hardware",
+            "gcp",
+            "vm",
+            "cloud",
+            "deploy",
+            "sistema",
+            "monitor",
         ]
         if any(kw in t for kw in sys_kw):
             return "system"
@@ -289,7 +333,4 @@ class SubAgentOrchestrator:
 
     def summary(self) -> str:
         total = sum(a._total_calls for a in self._agents.values())
-        return (
-            f"SubAgents: {len(self._agents)} roles, "
-            f"{total} total calls"
-        )
+        return f"SubAgents: {len(self._agents)} roles, {total} total calls"

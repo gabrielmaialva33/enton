@@ -213,7 +213,7 @@ def _format_value(value: Any, kwargs: dict[str, Any]) -> Any:
 
 def _fallback(key: str, kwargs: dict[str, Any]) -> Any:
     """Fallback pro prompts.py original."""
-    import enton.cognition.prompts as prompts
+    from enton.cognition import prompts
 
     # Mapeia keys i18n → constantes do prompts.py
     _KEY_MAP = {

@@ -6,6 +6,7 @@ Manages:
 - Todo list that Enton can manage via tools
 - Persisted to JSON file
 """
+
 from __future__ import annotations
 
 import json
@@ -72,7 +73,8 @@ class Planner:
                 self._next_id = data.get("next_id", 1)
                 logger.info(
                     "Planner loaded: %d reminders, %d todos",
-                    len(self._reminders), len(self._todos),
+                    len(self._reminders),
+                    len(self._todos),
                 )
             except Exception:
                 logger.warning("Failed to load planner data")

@@ -5,6 +5,7 @@ detection/activity/emotion data to the Brain, the Fuser produces a human-readabl
 paragraph that captures the full scene, making the LLM's job easier and responses
 more contextual.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING

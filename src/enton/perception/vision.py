@@ -62,7 +62,8 @@ class CameraFeed:
                 self.cap = cv2.VideoCapture(self.source)
             else:
                 self.cap = cv2.VideoCapture(
-                    self.source, cv2.CAP_FFMPEG,
+                    self.source,
+                    cv2.CAP_FFMPEG,
                     [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000],
                 )
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -93,9 +94,7 @@ class Vision:
         from enton.perception.emotion import EmotionRecognizer
         from enton.perception.faces import FaceRecognizer
 
-        self._emotion_recognizer = EmotionRecognizer(
-            device=settings.yolo_device, interval_frames=5
-        )
+        self._emotion_recognizer = EmotionRecognizer(device=settings.yolo_device, interval_frames=5)
         self.face_recognizer = FaceRecognizer(device=settings.yolo_device)
         self._face_interval = 30  # Run face rec every 30 frames
 
@@ -116,6 +115,7 @@ class Vision:
     def _ensure_det_model(self):
         if self._det_model is None:
             from ultralytics import YOLO
+
             self._det_model = YOLO(self._settings.yolo_model)
             self._det_model.to(self._settings.yolo_device)
             logger.info("YOLO detection model loaded: %s", self._settings.yolo_model)
@@ -124,6 +124,7 @@ class Vision:
     def _ensure_pose_model(self):
         if self._pose_model is None:
             from ultralytics import YOLO
+
             self._pose_model = YOLO(self._settings.yolo_pose_model)
             self._pose_model.to(self._settings.yolo_pose_device)
             logger.info("YOLO pose model loaded: %s", self._settings.yolo_pose_model)
@@ -185,22 +186,18 @@ class Vision:
 
         while True:
             loop_start = time.monotonic()
-            
+
             cap = cam.ensure_capture()
             if not cap.isOpened():
                 if cam._was_connected:
-                    self._bus.emit_nowait(
-                        SystemEvent(kind="camera_lost", detail=cam.id)
-                    )
+                    self._bus.emit_nowait(SystemEvent(kind="camera_lost", detail=cam.id))
                     cam._was_connected = False
                 await asyncio.sleep(10.0)
                 cam.cap = None
                 continue
-            
+
             if not cam._was_connected:
-                self._bus.emit_nowait(
-                    SystemEvent(kind="camera_connected", detail=cam.id)
-                )
+                self._bus.emit_nowait(SystemEvent(kind="camera_connected", detail=cam.id))
                 cam._was_connected = True
 
             try:
@@ -273,7 +270,10 @@ class Vision:
                     kpts_list.extend(r.keypoints.data)
             if kpts_list:
                 face_emotions = await loop.run_in_executor(
-                    None, self._emotion_recognizer.classify, frame, kpts_list,
+                    None,
+                    self._emotion_recognizer.classify,
+                    frame,
+                    kpts_list,
                 )
                 for i, fe in enumerate(face_emotions):
                     emo = EmotionEvent(
@@ -295,7 +295,9 @@ class Vision:
                 fr = self.face_recognizer
                 if fr is not None:
                     face_results = await loop.run_in_executor(
-                        None, fr.identify, frame,
+                        None,
+                        fr.identify,
+                        frame,
                     )
                     for f_res in face_results:
                         faces.append(

@@ -3,6 +3,7 @@
 Detects and identifies faces by comparing embeddings against a persistent
 database stored at ~/.enton/faces.pkl.
 """
+
 from __future__ import annotations
 
 import logging
@@ -20,9 +21,7 @@ _SIMILARITY_THRESHOLD = 0.45  # cosine similarity threshold for match
 class FaceResult:
     __slots__ = ("bbox", "confidence", "identity")
 
-    def __init__(
-        self, identity: str, confidence: float, bbox: tuple[int, int, int, int]
-    ) -> None:
+    def __init__(self, identity: str, confidence: float, bbox: tuple[int, int, int, int]) -> None:
         self.identity = identity
         self.confidence = confidence
         self.bbox = bbox
@@ -61,9 +60,7 @@ class FaceRecognizer:
             try:
                 with open(_DB_PATH, "rb") as f:
                     self._db = pickle.load(f)
-                logger.info(
-                    "Face DB loaded: %d identities", len(self._db)
-                )
+                logger.info("Face DB loaded: %d identities", len(self._db))
             except Exception:
                 logger.exception("Failed to load face DB")
                 self._db = {}
@@ -81,10 +78,7 @@ class FaceRecognizer:
         if not faces:
             return "Nenhum rosto detectado no frame."
         if len(faces) > 1:
-            return (
-                f"{len(faces)} rostos detectados. "
-                "Mostre apenas 1 rosto para cadastrar."
-            )
+            return f"{len(faces)} rostos detectados. Mostre apenas 1 rosto para cadastrar."
 
         face = faces[0]
         embedding = face.normed_embedding

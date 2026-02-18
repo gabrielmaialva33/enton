@@ -34,7 +34,8 @@ class Viewer:
         cam_ids = list(self.vision.cameras.keys())
         logger.info(
             "Viewer opened (%d camera%s)",
-            len(cam_ids), "s" if len(cam_ids) != 1 else "",
+            len(cam_ids),
+            "s" if len(cam_ids) != 1 else "",
         )
         self.running = True
 
@@ -42,13 +43,12 @@ class Viewer:
             while self.running:
                 # Update camera list dynamically if needed, though usually static
                 cam_ids = list(self.vision.cameras.keys())
-                
+
                 if self._grid_mode and len(cam_ids) > 1:
                     annotated = self._build_grid(cam_ids)
                 else:
                     active_cam = self.vision.cameras.get(
-                        self.vision.active_camera_id, 
-                        next(iter(self.vision.cameras.values()), None)
+                        self.vision.active_camera_id, next(iter(self.vision.cameras.values()), None)
                     )
                     if active_cam:
                         annotated = self._annotate_camera(active_cam)
@@ -79,7 +79,7 @@ class Viewer:
                         y_base -= 20
 
                 cv2.imshow("Enton Vision", annotated)
-                
+
                 # Handle key inputs
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
@@ -124,17 +124,17 @@ class Viewer:
 
         # Create a writable copy
         annotated = frame.copy()
-        
+
         # Detection overlays
         for det in cam.last_detections:
             if det.bbox:
                 color = (0, 255, 120) if det.label == "person" else (255, 160, 0)
                 if det.label in ("cat", "dog"):
                     color = (0, 200, 255)
-                
+
                 x1, y1, x2, y2 = det.bbox
                 bw, bh = x2 - x1, y2 - y1
-                
+
                 # Draw corner brackets instead of full box for cleaner look
                 c = max(15, min(bw, bh) // 5)
                 cv2.line(annotated, (x1, y1), (x1 + c, y1), color, 2)
@@ -145,7 +145,7 @@ class Viewer:
                 cv2.line(annotated, (x1, y2), (x1, y2 - c), color, 2)
                 cv2.line(annotated, (x2, y2), (x2 - c, y2), color, 2)
                 cv2.line(annotated, (x2, y2), (x2, y2 - c), color, 2)
-                
+
                 lbl = f"{det.label} {det.confidence:.0%}"
                 pt = (x1, y1 - 6)
                 cv2.putText(annotated, lbl, pt, self._font_sm, 1.0, (0, 0, 0), 3)
@@ -164,28 +164,28 @@ class Viewer:
         # HUD panel (top left)
         n_persons = sum(1 for d in cam.last_detections if d.label == "person")
         n_obj = len(cam.last_detections) - n_persons
-        
+
         # Semi-transparent background for HUD
         overlay = annotated.copy()
         cv2.rectangle(overlay, (8, 8), (260, 80), (10, 12, 18), -1)
         cv2.addWeighted(overlay, 0.7, annotated, 0.3, 0, annotated)
         cv2.rectangle(annotated, (8, 8), (260, 80), (0, 255, 120), 1)
-        
+
         title = f"ENTON [{cam.id}]" if len(self.vision.cameras) > 1 else "ENTON"
         cv2.putText(annotated, title, (16, 34), self._font, 0.6, (0, 255, 120), 2)
-        
+
         fps_txt = f"{cam.fps:.0f} fps"
         cv2.putText(annotated, fps_txt, (200, 34), self._font_sm, 1.0, (80, 90, 100), 1)
-        
+
         if n_persons:
             status = f"{n_persons} pessoa{'s' if n_persons != 1 else ''}"
         else:
             status = "scanning..."
         if n_obj > 0:
             status += f"  {n_obj} obj"
-            
+
         cv2.putText(annotated, status, (16, 58), self._font, 0.45, (0, 210, 230), 1)
-        
+
         # Activity log in HUD
         for i, act in enumerate(cam.last_activities[:2]):
             pt = (16, 74 + i * 14)
@@ -198,7 +198,7 @@ class Viewer:
         n = len(cam_ids)
         if n == 0:
             return None
-            
+
         cols = math.ceil(math.sqrt(n))
         rows = math.ceil(n / cols)
 
@@ -211,15 +211,15 @@ class Viewer:
             cam = self.vision.cameras.get(cam_id)
             if cam is None:
                 continue
-                
+
             annotated = self._annotate_camera(cam)
             if annotated is None:
                 continue
-                
+
             has_frame = True
             tile = cv2.resize(annotated, (tile_w, tile_h))
             r, c = divmod(idx, cols)
             y0, x0 = r * tile_h, c * tile_w
-            grid[y0:y0 + tile_h, x0:x0 + tile_w] = tile
+            grid[y0 : y0 + tile_h, x0 : x0 + tile_w] = tile
 
         return grid if has_frame else None

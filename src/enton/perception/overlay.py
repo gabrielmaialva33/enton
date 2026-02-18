@@ -1,4 +1,5 @@
 """Cyberpunk HUD overlay — PIL TrueType + neon glow + sparkline graphs."""
+
 from __future__ import annotations
 
 import time
@@ -41,10 +42,10 @@ def _composite(frame: np.ndarray, overlay_rgba: np.ndarray, x: int, y: int) -> n
     r, g, b, a = cv2.split(overlay_rgba[:rh, :rw])
     bgr = cv2.merge([b, g, r])
     alpha = a.astype(np.float32) / 255.0
-    roi = frame[y:y + rh, x:x + rw]
+    roi = frame[y : y + rh, x : x + rw]
     alpha3 = alpha[:, :, np.newaxis]
     blended = bgr.astype(np.float32) * alpha3 + roi.astype(np.float32) * (1 - alpha3)
-    frame[y:y + rh, x:x + rw] = blended.astype(np.uint8)
+    frame[y : y + rh, x : x + rw] = blended.astype(np.uint8)
     return frame
 
 
@@ -102,7 +103,10 @@ class Overlay:
     # ---- targeting brackets on persons ----
 
     def draw_target_brackets(
-        self, frame: np.ndarray, bbox: tuple[int, int, int, int], color: tuple[int, int, int],
+        self,
+        frame: np.ndarray,
+        bbox: tuple[int, int, int, int],
+        color: tuple[int, int, int],
     ) -> np.ndarray:
         """Draw sci-fi targeting corner brackets around a bounding box."""
         x1, y1, x2, y2 = bbox
@@ -142,8 +146,11 @@ class Overlay:
         olen = y_end - y_start
         if olen > 0:
             cv2.addWeighted(
-                frame[y_start:y_end], 0.85,
-                overlay[:olen, :w], 0.15, 0,
+                frame[y_start:y_end],
+                0.85,
+                overlay[:olen, :w],
+                0.15,
+                0,
                 frame[y_start:y_end],
             )
         return frame
@@ -190,8 +197,12 @@ class Overlay:
         draw.text((padding, y), "ENTON", font=self._font_big, fill=(0, 255, 120, 230))
         fps_text = f"{fps:.0f} fps"
         fps_bbox = self._font_medium.getbbox(fps_text)
-        draw.text((panel_w - padding - (fps_bbox[2] - fps_bbox[0]), y + 8),
-                  fps_text, font=self._font_medium, fill=(80, 90, 100, 180))
+        draw.text(
+            (panel_w - padding - (fps_bbox[2] - fps_bbox[0]), y + 8),
+            fps_text,
+            font=self._font_medium,
+            fill=(80, 90, 100, 180),
+        )
         y += int(self._size * 1.5) + 6
 
         # Status line
@@ -244,8 +255,7 @@ class Overlay:
         # Glow behind label
         glow_img = Image.new("RGBA", (label_w + 20, label_h + 20), (0, 0, 0, 0))
         gd = ImageDraw.Draw(glow_img)
-        gd.rounded_rectangle([(10, 10), (label_w + 9, label_h + 9)], radius=10,
-                             fill=(r, g, b, 80))
+        gd.rounded_rectangle([(10, 10), (label_w + 9, label_h + 9)], radius=10, fill=(r, g, b, 80))
         glow_img = glow_img.filter(ImageFilter.GaussianBlur(8))
         glow_np = np.array(glow_img)
         frame = _composite(frame, glow_np, lx - 10, ly - 10)
@@ -337,8 +347,9 @@ class Overlay:
 
         badge = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
         bd = ImageDraw.Draw(badge)
-        bd.rounded_rectangle([(0, 0), (bw - 1, bh - 1)], radius=5,
-                             fill=(10, 10, 15, 180), outline=(*c, 150), width=1)
+        bd.rounded_rectangle(
+            [(0, 0), (bw - 1, bh - 1)], radius=5, fill=(10, 10, 15, 180), outline=(*c, 150), width=1
+        )
         bd.text((6, 1), text, font=self._font_small, fill=(*c, 230))
 
         badge_np = np.array(badge)

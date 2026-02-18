@@ -97,9 +97,7 @@ class Ears:
         try:
             text = await provider.transcribe(audio, self._settings.sample_rate)
             if text.strip():
-                await self._bus.emit(
-                    TranscriptionEvent(text=text, is_final=False)
-                )
+                await self._bus.emit(TranscriptionEvent(text=text, is_final=False))
                 logger.debug("Ears partial [%s]: %s", name, text[:60])
             return text
         except Exception:
@@ -193,9 +191,7 @@ class Ears:
                         audio_so_far = np.concatenate(buffer)
                         duration = len(audio_so_far) / self._settings.sample_rate
                         if duration >= _MIN_PARTIAL_AUDIO:
-                            asyncio.create_task(
-                                self._transcribe_partial(audio_so_far)
-                            )
+                            asyncio.create_task(self._transcribe_partial(audio_so_far))
                         chunks_since_partial = 0
 
                 elif is_speaking:

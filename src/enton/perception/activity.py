@@ -1,4 +1,5 @@
 """Activity recognition from COCO 17-keypoint pose data."""
+
 from __future__ import annotations
 
 import math
@@ -63,9 +64,7 @@ def classify(kpts) -> tuple[str, tuple[int, int, int]]:
 
     # Torso angle relative to vertical (0° = upright)
     torso_angle = abs(
-        math.degrees(
-            math.atan2(mid_hip[0] - mid_shoulder[0], mid_hip[1] - mid_shoulder[1])
-        )
+        math.degrees(math.atan2(mid_hip[0] - mid_shoulder[0], mid_hip[1] - mid_shoulder[1]))
     )
 
     # --- lying down ---

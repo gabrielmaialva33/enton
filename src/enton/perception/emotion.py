@@ -1,4 +1,5 @@
 """Facial emotion recognition using ViT (dima806/facial_emotions_image_detection)."""
+
 from __future__ import annotations
 
 import logging
@@ -71,7 +72,10 @@ class EmotionRecognizer:
         return self._pipeline
 
     def _crop_face(
-        self, frame: np.ndarray, kpts, margin: float = 0.6,
+        self,
+        frame: np.ndarray,
+        kpts,
+        margin: float = 0.6,
     ) -> tuple[np.ndarray, tuple[int, int, int, int]] | None:
         """Crop face region from keypoints (eyes, nose, ears)."""
         # Use eye/nose/ear keypoints to estimate face bbox
@@ -103,7 +107,9 @@ class EmotionRecognizer:
         return crop, (x1, y1, x2, y2)
 
     def classify(
-        self, frame: np.ndarray, keypoints_list: list,
+        self,
+        frame: np.ndarray,
+        keypoints_list: list,
     ) -> list[FaceEmotion]:
         """Classify emotions for all detected persons.
 
@@ -133,13 +139,15 @@ class EmotionRecognizer:
                 preds = pipe(pil_img)
                 top = preds[0]
                 label_en = top["label"]
-                results.append(FaceEmotion(
-                    label=_LABEL_MAP.get(label_en, label_en),
-                    label_en=label_en,
-                    score=top["score"],
-                    bbox=bbox,
-                    color=_COLOR_MAP.get(label_en, (180, 180, 180)),
-                ))
+                results.append(
+                    FaceEmotion(
+                        label=_LABEL_MAP.get(label_en, label_en),
+                        label_en=label_en,
+                        score=top["score"],
+                        bbox=bbox,
+                        color=_COLOR_MAP.get(label_en, (180, 180, 180)),
+                    )
+                )
             except Exception:
                 logger.debug("Emotion inference failed for face crop", exc_info=True)
 

@@ -1,4 +1,5 @@
 """Greet skill — reacts when a person appears in camera."""
+
 from __future__ import annotations
 
 import random

@@ -7,12 +7,14 @@ import psutil
 
 logger = logging.getLogger(__name__)
 
+
 class GodModeToolkit:
     """
     Ditador do Kernel Toolkit.
     Permite ao Enton monitorar e controlar processos e sistema.
     USE COM CAUTELA.
     """
+
     def __init__(self):
         self.name = "god_mode_toolkit"
 
@@ -24,10 +26,18 @@ class GodModeToolkit:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "limit": {"type": "integer", "description": "Número de processos para listar (default 5)", "default": 5},
-                        "sort_by": {"type": "string", "enum": ["cpu", "memory"], "default": "memory"}
-                    }
-                }
+                        "limit": {
+                            "type": "integer",
+                            "description": "Número de processos para listar (default 5)",
+                            "default": 5,
+                        },
+                        "sort_by": {
+                            "type": "string",
+                            "enum": ["cpu", "memory"],
+                            "default": "memory",
+                        },
+                    },
+                },
             },
             {
                 "name": "kill_process",
@@ -35,28 +45,35 @@ class GodModeToolkit:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "pid": {"type": "integer", "description": "Process ID (opcional se nome for dado)"},
-                        "name": {"type": "string", "description": "Nome do processo (opcional se PID for dado)"},
-                        "reason": {"type": "string", "description": "Motivo do assassinato (para logs e consciência)"}
+                        "pid": {
+                            "type": "integer",
+                            "description": "Process ID (opcional se nome for dado)",
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "Nome do processo (opcional se PID for dado)",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Motivo do assassinato (para logs e consciência)",
+                        },
                     },
-                    "required": ["reason"]
-                }
+                    "required": ["reason"],
+                },
             },
             {
                 "name": "judge_process",
                 "description": "Analisa um processo e decide se ele merece viver baseado em heurísticas.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "pid": {"type": "integer", "description": "PID do réu"}
-                    },
-                    "required": ["pid"]
-                }
+                    "properties": {"pid": {"type": "integer", "description": "PID do réu"}},
+                    "required": ["pid"],
+                },
             },
             {
                 "name": "system_stats",
                 "description": "Retorna estatísticas vitais do sistema (Carga, Temp, Uptime).",
-                "parameters": {"type": "object", "properties": {}}
+                "parameters": {"type": "object", "properties": {}},
             },
             {
                 "name": "manage_network",
@@ -64,10 +81,14 @@ class GodModeToolkit:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "action": {"type": "string", "enum": ["on", "off"], "description": "Ligar ou Desligar a internet inteira."}
+                        "action": {
+                            "type": "string",
+                            "enum": ["on", "off"],
+                            "description": "Ligar ou Desligar a internet inteira.",
+                        }
                     },
-                    "required": ["action"]
-                }
+                    "required": ["action"],
+                },
             },
             {
                 "name": "manage_service",
@@ -75,51 +96,62 @@ class GodModeToolkit:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "service": {"type": "string", "description": "Nome do serviço (ex: docker, ssh)"},
-                        "action": {"type": "string", "enum": ["start", "stop", "restart", "status"], "default": "status"}
+                        "service": {
+                            "type": "string",
+                            "description": "Nome do serviço (ex: docker, ssh)",
+                        },
+                        "action": {
+                            "type": "string",
+                            "enum": ["start", "stop", "restart", "status"],
+                            "default": "status",
+                        },
                     },
-                    "required": ["service"]
-                }
-            }
+                    "required": ["service"],
+                },
+            },
         ]
 
     def list_heavy_processes(self, limit: int = 5, sort_by: str = "memory") -> str:
         procs = []
-        for p in psutil.process_iter(['pid', 'name', 'username', 'cpu_percent', 'memory_percent']):
+        for p in psutil.process_iter(["pid", "name", "username", "cpu_percent", "memory_percent"]):
             try:
-                p.cpu_percent() # First call is 0.0
+                p.cpu_percent()  # First call is 0.0
             except:
                 pass
-        
-        # Espera minima para CPU stats fazerem sentido se fosse real-time, 
+
+        # Espera minima para CPU stats fazerem sentido se fosse real-time,
         # mas aqui pegamos o acumulado ou snapshot.
-        # psutil.cpu_percent retora 0 na primeira chamada se interval=None. 
+        # psutil.cpu_percent retora 0 na primeira chamada se interval=None.
         # Vamos confiar no que tem ou iterar com interval (lento).
         # Melhor abordagem toolkit: snapshot iterativo.
-        
-        for p in psutil.process_iter(['pid', 'name', 'username', 'cpu_percent', 'memory_info']):
+
+        for p in psutil.process_iter(["pid", "name", "username", "cpu_percent", "memory_info"]):
             try:
-                mem = p.info['memory_info'].rss / (1024 * 1024) # MB
-                procs.append({
-                    "pid": p.info['pid'],
-                    "name": p.info['name'],
-                    "user": p.info['username'],
-                    "cpu": p.info['cpu_percent'],
-                    "mem_mb": mem
-                })
+                mem = p.info["memory_info"].rss / (1024 * 1024)  # MB
+                procs.append(
+                    {
+                        "pid": p.info["pid"],
+                        "name": p.info["name"],
+                        "user": p.info["username"],
+                        "cpu": p.info["cpu_percent"],
+                        "mem_mb": mem,
+                    }
+                )
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 pass
 
         if sort_by == "cpu":
-            procs.sort(key=lambda x: x['cpu'], reverse=True)
+            procs.sort(key=lambda x: x["cpu"], reverse=True)
         else:
-            procs.sort(key=lambda x: x['mem_mb'], reverse=True)
+            procs.sort(key=lambda x: x["mem_mb"], reverse=True)
 
         top = procs[:limit]
         output = [f"TOP {limit} PROCESSOS POR {sort_by.upper()}:"]
         for p in top:
-            output.append(f"PID: {p['pid']} | {p['name']} | CPU: {p['cpu']}% | MEM: {p['mem_mb']:.1f}MB | User: {p['user']}")
-        
+            output.append(
+                f"PID: {p['pid']} | {p['name']} | CPU: {p['cpu']}% | MEM: {p['mem_mb']:.1f}MB | User: {p['user']}"
+            )
+
         return "\n".join(output)
 
     def kill_process(self, reason: str, pid: int = None, name: str = None) -> str:
@@ -132,8 +164,8 @@ class GodModeToolkit:
                 return f"Erro: Processo PID {pid} não encontrado."
             target_proc = psutil.Process(pid)
         else:
-            for p in psutil.process_iter(['pid', 'name']):
-                if p.info['name'] == name:
+            for p in psutil.process_iter(["pid", "name"]):
+                if p.info["name"] == name:
                     target_proc = p
                     break
             if not target_proc:
@@ -142,7 +174,7 @@ class GodModeToolkit:
         try:
             p_name = target_proc.name()
             p_pid = target_proc.pid
-            
+
             # Proteção contra suicídio
             if p_pid == os.getpid():
                 return "Erro: Tentativa de suicídio detectada e bloqueada pelo instinto de autopreservação."
@@ -153,11 +185,13 @@ class GodModeToolkit:
             except psutil.TimeoutExpired:
                 target_proc.kill()
                 return f"Processo {p_name} ({p_pid}) foi assassinado brutalmente (SIGKILL). Motivo: {reason}"
-            
+
             return f"Processo {p_name} ({p_pid}) encerrado pacificamente. Motivo: {reason}"
 
         except psutil.AccessDenied:
-            return f"Erro: Permissão negada para matar {p_name} ({p_pid}). Eu preciso de PODER (sudo)."
+            return (
+                f"Erro: Permissão negada para matar {p_name} ({p_pid}). Eu preciso de PODER (sudo)."
+            )
         except Exception as e:
             return f"Erro ao matar processo: {e!s}"
 
@@ -170,22 +204,29 @@ class GodModeToolkit:
             # Análise de consumo
             mem = p.memory_info().rss / (1024 * 1024)
             cpu = p.cpu_percent(interval=0.1)
-            
-            if mem > 1000: # 1GB
+
+            if mem > 1000:  # 1GB
                 score += 5
                 verdict.append("Gordo (usa muita RAM)")
             if cpu > 50:
                 score += 5
                 verdict.append("Fominha (usa muita CPU)")
-            
+
             # Análise de utilidade
             if p.username() == "root":
                 score -= 10
                 verdict.append("Digno de respeito (Root)")
-            
+
             name = p.name().lower()
-            whitelist = ["enton", "python", "code", "cursor", "chrome", "firefox"] # Browsers são sagrados pro usuário geralmente
-            
+            whitelist = [
+                "enton",
+                "python",
+                "code",
+                "cursor",
+                "chrome",
+                "firefox",
+            ]  # Browsers são sagrados pro usuário geralmente
+
             if any(w in name for w in whitelist):
                 score -= 5
                 verdict.append("Protegido pela Lei")
@@ -212,13 +253,13 @@ class GodModeToolkit:
     def system_stats(self) -> str:
         load = os.getloadavg()
         mem = psutil.virtual_memory()
-        disk = psutil.disk_usage('/')
-        
+        disk = psutil.disk_usage("/")
+
         # Tenta pegar temperatura (pode falhar em VMs/Containers)
         temp_str = "N/A"
         try:
             temps = psutil.sensors_temperatures()
-            if 'coretemp' in temps:
+            if "coretemp" in temps:
                 temp_str = f"{temps['coretemp'][0].current}°C"
         except:
             pass
@@ -237,6 +278,7 @@ class GodModeToolkit:
         NetworkOverlord: Liga/Desliga a internet.
         """
         import subprocess
+
         try:
             # nmcli networking {on|off}
             cmd = ["nmcli", "networking", action]
@@ -254,13 +296,14 @@ class GodModeToolkit:
         ServiceControl: Mexe nos daemons.
         """
         import subprocess
+
         try:
             # sudo systemctl {action} {service}
             cmd = ["sudo", "systemctl", action, service]
-            
+
             # Executa e captura output
             res = subprocess.run(cmd, capture_output=True, text=True)
-            
+
             if res.returncode == 0:
                 return f"Service {service} [{action}]: SUCESSO.\n{res.stdout.strip()}"
             else:

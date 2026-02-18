@@ -4,6 +4,7 @@ Inspired by wcgw's persistent shell sessions. Enton can run long commands
 in background, track their progress, retry on failure, and manage multiple
 concurrent tasks without blocking conversation.
 """
+
 from __future__ import annotations
 
 import logging

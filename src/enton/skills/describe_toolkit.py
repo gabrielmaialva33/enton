@@ -75,15 +75,12 @@ class DescribeTools(Toolkit):
             parts.append(f"Objetos: {obj_str}")
 
         if activities:
-            act_str = ", ".join(
-                f"pessoa {a.person_index}: {a.activity}" for a in activities
-            )
+            act_str = ", ".join(f"pessoa {a.person_index}: {a.activity}" for a in activities)
             parts.append(f"Atividades: {act_str}")
 
         if emotions:
             emo_str = ", ".join(
-                f"pessoa {e.person_index}: {e.emotion} ({e.score:.0%})"
-                for e in emotions
+                f"pessoa {e.person_index}: {e.emotion} ({e.score:.0%})" for e in emotions
             )
             parts.append(f"Emocoes: {emo_str}")
 

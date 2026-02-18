@@ -1,4 +1,5 @@
 """BlobTools — Agno Toolkit for brain access to BlobStore."""
+
 from __future__ import annotations
 
 import json
@@ -32,8 +33,7 @@ class BlobTools(Toolkit):
         if not results:
             return "Nenhum blob encontrado."
         return "\n".join(
-            f"- [{m.blob_type.value}] {m.blob_id} ({m.size_bytes}B) tags={m.tags}"
-            for m in results
+            f"- [{m.blob_type.value}] {m.blob_id} ({m.size_bytes}B) tags={m.tags}" for m in results
         )
 
     async def recent_blobs(self, n: int = 5, blob_type: str = "") -> str:
@@ -47,10 +47,7 @@ class BlobTools(Toolkit):
         results = await self._store.recent(blob_type=bt, n=min(n, 20))
         if not results:
             return "Nenhum blob recente."
-        return "\n".join(
-            f"- [{m.blob_type.value}] {m.blob_id} ({m.size_bytes}B)"
-            for m in results
-        )
+        return "\n".join(f"- [{m.blob_type.value}] {m.blob_id} ({m.size_bytes}B)" for m in results)
 
     async def blob_stats(self) -> str:
         """Mostra estatisticas do armazenamento de blobs no HD externo."""

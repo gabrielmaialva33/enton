@@ -52,9 +52,13 @@ class MediaTools(Toolkit):
         try:
             result = subprocess.run(
                 [
-                    "yt-dlp", "-f", fmt,
-                    "--merge-output-format", "mp4",
-                    "-o", str(self._downloads / "%(title)s.%(ext)s"),
+                    "yt-dlp",
+                    "-f",
+                    fmt,
+                    "--merge-output-format",
+                    "mp4",
+                    "-o",
+                    str(self._downloads / "%(title)s.%(ext)s"),
                     "--no-playlist",
                     "--restrict-filenames",
                     url,
@@ -88,9 +92,12 @@ class MediaTools(Toolkit):
         try:
             result = subprocess.run(
                 [
-                    "yt-dlp", "-x",
-                    "--audio-format", audio_format,
-                    "-o", str(self._downloads / "%(title)s.%(ext)s"),
+                    "yt-dlp",
+                    "-x",
+                    "--audio-format",
+                    audio_format,
+                    "-o",
+                    str(self._downloads / "%(title)s.%(ext)s"),
                     "--no-playlist",
                     "--restrict-filenames",
                     url,
@@ -115,10 +122,13 @@ class MediaTools(Toolkit):
             try:
                 result = subprocess.run(
                     ["yt-dlp", "--dump-json", "--no-download", url_or_path],
-                    timeout=30, capture_output=True, text=True,
+                    timeout=30,
+                    capture_output=True,
+                    text=True,
                 )
                 if result.returncode == 0:
                     import json
+
                     info = json.loads(result.stdout)
                     return (
                         f"Titulo: {info.get('title', '?')}\n"
@@ -134,13 +144,21 @@ class MediaTools(Toolkit):
             try:
                 result = subprocess.run(
                     [
-                        "ffprobe", "-v", "quiet", "-print_format", "json",
-                        "-show_format", url_or_path,
+                        "ffprobe",
+                        "-v",
+                        "quiet",
+                        "-print_format",
+                        "json",
+                        "-show_format",
+                        url_or_path,
                     ],
-                    timeout=10, capture_output=True, text=True,
+                    timeout=10,
+                    capture_output=True,
+                    text=True,
                 )
                 if result.returncode == 0:
                     import json
+
                     info = json.loads(result.stdout).get("format", {})
                     duration = float(info.get("duration", 0))
                     mins, secs = divmod(int(duration), 60)
@@ -163,7 +181,8 @@ class MediaTools(Toolkit):
         try:
             subprocess.Popen(
                 ["mpv", "--no-terminal", path],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             return f"Reproduzindo: {path}"
         except Exception as e:
@@ -178,17 +197,23 @@ class MediaTools(Toolkit):
         try:
             result = subprocess.run(
                 ["playerctl", action],
-                timeout=3, capture_output=True, text=True,
+                timeout=3,
+                capture_output=True,
+                text=True,
             )
             if result.returncode == 0:
                 # Get current status
                 status = subprocess.run(
                     ["playerctl", "status"],
-                    timeout=3, capture_output=True, text=True,
+                    timeout=3,
+                    capture_output=True,
+                    text=True,
                 ).stdout.strip()
                 metadata = subprocess.run(
                     ["playerctl", "metadata", "--format", "{{artist}} - {{title}}"],
-                    timeout=3, capture_output=True, text=True,
+                    timeout=3,
+                    capture_output=True,
+                    text=True,
                 ).stdout.strip()
                 return f"Player: {status} | {metadata}"
             return f"Erro: {result.stderr.strip()}"
@@ -200,11 +225,15 @@ class MediaTools(Toolkit):
         try:
             result = subprocess.run(
                 ["pactl", "get-sink-volume", "@DEFAULT_SINK@"],
-                timeout=3, capture_output=True, text=True,
+                timeout=3,
+                capture_output=True,
+                text=True,
             )
             mute = subprocess.run(
                 ["pactl", "get-sink-mute", "@DEFAULT_SINK@"],
-                timeout=3, capture_output=True, text=True,
+                timeout=3,
+                capture_output=True,
+                text=True,
             ).stdout.strip()
             return f"Volume: {result.stdout.strip()}\n{mute}"
         except Exception as e:
@@ -221,19 +250,22 @@ class MediaTools(Toolkit):
                 val = "1" if level == "mute" else "0"
                 subprocess.run(
                     ["pactl", "set-sink-mute", "@DEFAULT_SINK@", val],
-                    timeout=3, check=True,
+                    timeout=3,
+                    check=True,
                 )
                 return f"Volume: {level}"
             elif level == "toggle-mute":
                 subprocess.run(
                     ["pactl", "set-sink-mute", "@DEFAULT_SINK@", "toggle"],
-                    timeout=3, check=True,
+                    timeout=3,
+                    check=True,
                 )
                 return "Volume: mute toggled"
             else:
                 subprocess.run(
                     ["pactl", "set-sink-volume", "@DEFAULT_SINK@", level],
-                    timeout=3, check=True,
+                    timeout=3,
+                    check=True,
                 )
                 return f"Volume ajustado para {level}"
         except Exception as e:
@@ -244,7 +276,9 @@ class MediaTools(Toolkit):
         try:
             result = subprocess.run(
                 ["pactl", "list", "short", "sinks"],
-                timeout=5, capture_output=True, text=True,
+                timeout=5,
+                capture_output=True,
+                text=True,
             )
             return result.stdout.strip() or "Nenhum sink encontrado."
         except Exception as e:
@@ -260,7 +294,8 @@ class MediaTools(Toolkit):
         try:
             subprocess.Popen(
                 ["espeak-ng", "-v", lang, "-s", "150", text],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             return f"Falando: {text[:50]}..."
         except Exception as e:

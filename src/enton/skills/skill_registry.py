@@ -8,6 +8,7 @@ as Agno Toolkits on-the-fly.  A valid skill module must either:
 
 Uses ``watchfiles.awatch`` (Rust-backed inotify) for near-zero overhead.
 """
+
 from __future__ import annotations
 
 import logging
@@ -168,11 +169,7 @@ class SkillRegistry:
         # Method 2: scan for Toolkit subclass
         for attr_name in dir(module):
             attr = getattr(module, attr_name, None)
-            if (
-                isinstance(attr, type)
-                and issubclass(attr, Toolkit)
-                and attr is not Toolkit
-            ):
+            if isinstance(attr, type) and issubclass(attr, Toolkit) and attr is not Toolkit:
                 try:
                     return attr()
                 except Exception:

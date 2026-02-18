@@ -5,6 +5,7 @@ Exposes the SubAgentOrchestrator to the LLM so Enton can:
 - List available sub-agents and their capabilities
 - Run consensus across multiple agents
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -45,10 +46,7 @@ class SubAgentTools(Toolkit):
         parts = [f"[{result.agent_role}]"]
         if result.content:
             parts.append(result.content)
-        parts.append(
-            f"\n(confianca: {result.confidence:.0%}, "
-            f"tempo: {result.elapsed_ms:.0f}ms)"
-        )
+        parts.append(f"\n(confianca: {result.confidence:.0%}, tempo: {result.elapsed_ms:.0f}ms)")
 
         return "\n".join(parts)
 
@@ -69,8 +67,7 @@ class SubAgentTools(Toolkit):
         parts = [
             f"[auto → {result.agent_role}]",
             result.content,
-            f"\n(confianca: {result.confidence:.0%}, "
-            f"tempo: {result.elapsed_ms:.0f}ms)",
+            f"\n(confianca: {result.confidence:.0%}, tempo: {result.elapsed_ms:.0f}ms)",
         ]
 
         return "\n".join(parts)
@@ -94,8 +91,7 @@ class SubAgentTools(Toolkit):
                 parts.append(f"[{role}] ERRO: {result}\n")
             else:
                 parts.append(
-                    f"[{result.agent_role}] (conf={result.confidence:.0%})\n"
-                    f"{result.content}\n"
+                    f"[{result.agent_role}] (conf={result.confidence:.0%})\n{result.content}\n"
                 )
 
         return "\n---\n".join(parts)
@@ -114,9 +110,6 @@ class SubAgentTools(Toolkit):
             rate = info.get("success_rate", 1.0)
             calls = info.get("total_calls", 0)
             desc = info.get("description", "")
-            lines.append(
-                f"  [{role}] {desc} "
-                f"(sucesso: {rate:.0%}, calls: {calls})"
-            )
+            lines.append(f"  [{role}] {desc} (sucesso: {rate:.0%}, calls: {calls})")
 
         return "\n".join(lines)

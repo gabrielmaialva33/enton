@@ -97,7 +97,10 @@ class DesktopTools(Toolkit):
         path = tempfile.mktemp(suffix=".png", prefix="enton_ss_")
         try:
             subprocess.run(
-                ["maim", path], timeout=5, capture_output=True, check=True,
+                ["maim", path],
+                timeout=5,
+                capture_output=True,
+                check=True,
             )
             img_bytes = Path(path).read_bytes()
             size_kb = len(img_bytes) / 1024
@@ -127,7 +130,9 @@ class DesktopTools(Toolkit):
                     x, y, w, h = parts
                     subprocess.run(
                         ["maim", "-g", f"{w}x{h}+{x}+{y}", path],
-                        timeout=5, capture_output=True, check=True,
+                        timeout=5,
+                        capture_output=True,
+                        check=True,
                     )
                 else:
                     return "Formato invalido. Use: x,y,w,h"
@@ -136,7 +141,9 @@ class DesktopTools(Toolkit):
 
             result = subprocess.run(
                 ["tesseract", path, "stdout", "-l", lang],
-                timeout=15, capture_output=True, text=True,
+                timeout=15,
+                capture_output=True,
+                text=True,
             )
             text = result.stdout.strip()
             return text if text else "Nenhum texto detectado."
@@ -160,7 +167,8 @@ class DesktopTools(Toolkit):
         try:
             subprocess.run(
                 ["xdotool", "mousemove", str(x), str(y), "click", str(button)],
-                timeout=3, check=True,
+                timeout=3,
+                check=True,
             )
             return f"Click em ({x}, {y}) button={button}"
         except Exception as e:
@@ -178,7 +186,8 @@ class DesktopTools(Toolkit):
         try:
             subprocess.run(
                 ["xdotool", "type", "--delay", str(delay_ms), "--", text],
-                timeout=30, check=True,
+                timeout=30,
+                check=True,
             )
             return f"Digitado: {text[:50]}..."
         except Exception as e:
@@ -195,7 +204,8 @@ class DesktopTools(Toolkit):
         try:
             subprocess.run(
                 ["xdotool", "key", keys],
-                timeout=3, check=True,
+                timeout=3,
+                check=True,
             )
             return f"Tecla: {keys}"
         except Exception as e:
@@ -208,7 +218,9 @@ class DesktopTools(Toolkit):
         try:
             result = subprocess.run(
                 ["xclip", "-selection", "clipboard", "-o"],
-                timeout=3, capture_output=True, text=True,
+                timeout=3,
+                capture_output=True,
+                text=True,
             )
             text = result.stdout
             if len(text) > 2000:
@@ -242,15 +254,21 @@ class DesktopTools(Toolkit):
         try:
             wid = subprocess.run(
                 ["xdotool", "getactivewindow"],
-                capture_output=True, text=True, timeout=3,
+                capture_output=True,
+                text=True,
+                timeout=3,
             ).stdout.strip()
             name = subprocess.run(
                 ["xdotool", "getactivewindow", "getwindowname"],
-                capture_output=True, text=True, timeout=3,
+                capture_output=True,
+                text=True,
+                timeout=3,
             ).stdout.strip()
             geom = subprocess.run(
                 ["xdotool", "getactivewindow", "getwindowgeometry"],
-                capture_output=True, text=True, timeout=3,
+                capture_output=True,
+                text=True,
+                timeout=3,
             ).stdout.strip()
             return f"Window ID: {wid}\nNome: {name}\n{geom}"
         except Exception as e:
@@ -263,13 +281,17 @@ class DesktopTools(Toolkit):
         try:
             result = subprocess.run(
                 ["wmctrl", "-l"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if result.returncode != 0:
                 # Fallback to xdotool
                 result = subprocess.run(
                     ["xdotool", "search", "--onlyvisible", "--name", ""],
-                    capture_output=True, text=True, timeout=5,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 wids = result.stdout.strip().split("\n")[:20]
                 lines = []
@@ -278,7 +300,9 @@ class DesktopTools(Toolkit):
                         continue
                     name = subprocess.run(
                         ["xdotool", "getwindowname", wid],
-                        capture_output=True, text=True, timeout=2,
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
                     ).stdout.strip()
                     lines.append(f"  {wid}: {name}")
                 return "\n".join(lines) if lines else "Nenhuma janela encontrada."
@@ -297,14 +321,17 @@ class DesktopTools(Toolkit):
         try:
             result = subprocess.run(
                 ["xdotool", "search", "--name", window_name],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             wids = result.stdout.strip().split("\n")
             if not wids or not wids[0]:
                 return f"Janela '{window_name}' nao encontrada."
             subprocess.run(
                 ["xdotool", "windowactivate", wids[0]],
-                timeout=3, check=True,
+                timeout=3,
+                check=True,
             )
             return f"Foco na janela: {wids[0]} ({window_name})"
         except Exception as e:
@@ -341,7 +368,8 @@ class DesktopTools(Toolkit):
         try:
             subprocess.run(
                 ["xdotool", "mousemove", str(x), str(y)],
-                timeout=3, check=True,
+                timeout=3,
+                check=True,
             )
             return f"Mouse movido para ({x}, {y})"
         except Exception as e:
@@ -354,7 +382,9 @@ class DesktopTools(Toolkit):
         try:
             result = subprocess.run(
                 ["xdotool", "getdisplaygeometry"],
-                capture_output=True, text=True, timeout=3,
+                capture_output=True,
+                text=True,
+                timeout=3,
             )
             return f"Resolucao: {result.stdout.strip()}"
         except Exception as e:

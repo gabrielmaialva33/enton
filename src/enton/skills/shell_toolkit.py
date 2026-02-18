@@ -15,32 +15,125 @@ from enton.skills._shell_state import BackgroundProcess, ShellState
 logger = logging.getLogger(__name__)
 
 # Permission levels for commands
-SAFE_COMMANDS = frozenset({
-    "ls", "cat", "head", "tail", "pwd", "date", "uptime", "df", "free",
-    "ps", "whoami", "id", "groups", "hostname", "which", "echo", "wc",
-    "du", "file", "stat", "uname", "lsb_release", "ip", "ss", "ping",
-    "dig", "nslookup", "curl", "wget", "env", "printenv", "locale",
-    "docker", "systemctl", "journalctl", "top", "htop", "nvtop",
-    "nvidia-smi", "sensors", "lsblk", "lsusb", "lspci", "lscpu",
-    "git", "python", "pip", "uv", "ollama", "ruff", "pytest",
-    "find", "grep", "rg", "sort", "uniq", "cut", "tr", "awk", "sed",
-    "xdg-open", "code", "flatpak", "cd", "mkdir", "touch", "cp", "mv",
-    "less", "more", "tree", "realpath", "dirname", "basename",
-})
+SAFE_COMMANDS = frozenset(
+    {
+        "ls",
+        "cat",
+        "head",
+        "tail",
+        "pwd",
+        "date",
+        "uptime",
+        "df",
+        "free",
+        "ps",
+        "whoami",
+        "id",
+        "groups",
+        "hostname",
+        "which",
+        "echo",
+        "wc",
+        "du",
+        "file",
+        "stat",
+        "uname",
+        "lsb_release",
+        "ip",
+        "ss",
+        "ping",
+        "dig",
+        "nslookup",
+        "curl",
+        "wget",
+        "env",
+        "printenv",
+        "locale",
+        "docker",
+        "systemctl",
+        "journalctl",
+        "top",
+        "htop",
+        "nvtop",
+        "nvidia-smi",
+        "sensors",
+        "lsblk",
+        "lsusb",
+        "lspci",
+        "lscpu",
+        "git",
+        "python",
+        "pip",
+        "uv",
+        "ollama",
+        "ruff",
+        "pytest",
+        "find",
+        "grep",
+        "rg",
+        "sort",
+        "uniq",
+        "cut",
+        "tr",
+        "awk",
+        "sed",
+        "xdg-open",
+        "code",
+        "flatpak",
+        "cd",
+        "mkdir",
+        "touch",
+        "cp",
+        "mv",
+        "less",
+        "more",
+        "tree",
+        "realpath",
+        "dirname",
+        "basename",
+    }
+)
 
-ELEVATED_COMMANDS = frozenset({
-    "apt", "apt-get", "dpkg", "snap", "kill", "killall", "pkill",
-    "service", "mount", "umount", "chown", "chmod",
-    "pip install", "uv add", "npm install",
-    "crontab", "at", "nohup",
-})
+ELEVATED_COMMANDS = frozenset(
+    {
+        "apt",
+        "apt-get",
+        "dpkg",
+        "snap",
+        "kill",
+        "killall",
+        "pkill",
+        "service",
+        "mount",
+        "umount",
+        "chown",
+        "chmod",
+        "pip install",
+        "uv add",
+        "npm install",
+        "crontab",
+        "at",
+        "nohup",
+    }
+)
 
-DANGEROUS_PATTERNS = frozenset({
-    "rm -rf /", "rm -rf /*", "mkfs", "dd if=", "fdisk",
-    "shutdown", "reboot", "poweroff", "halt",
-    "> /dev/sd", "wipefs", "shred",
-    ":(){ :|:& };:",  # fork bomb
-})
+DANGEROUS_PATTERNS = frozenset(
+    {
+        "rm -rf /",
+        "rm -rf /*",
+        "mkfs",
+        "dd if=",
+        "fdisk",
+        "shutdown",
+        "reboot",
+        "poweroff",
+        "halt",
+        "> /dev/sd",
+        "wipefs",
+        "shred",
+        ":(){ :|:& };:",  # fork bomb
+    }
+)
 
 _MAX_OUTPUT = 4000
 _TIMEOUT = 30.0
@@ -114,9 +207,7 @@ class ShellTools(Toolkit):
 
     def _parse_cwd(self, output: str) -> str:
         """Extract and update CWD from output, return cleaned output."""
-        pattern = re.compile(
-            re.escape(_CWD_MARKER) + r"(.+?)" + re.escape(_CWD_MARKER)
-        )
+        pattern = re.compile(re.escape(_CWD_MARKER) + r"(.+?)" + re.escape(_CWD_MARKER))
         match = pattern.search(output)
         if match:
             from pathlib import Path
@@ -140,10 +231,7 @@ class ShellTools(Toolkit):
 
         if level == "dangerous":
             logger.warning("BLOCKED dangerous command: %s", command)
-            return (
-                f"BLOQUEADO: Comando '{command}' e perigoso demais. "
-                "Recuso executar isso."
-            )
+            return f"BLOQUEADO: Comando '{command}' e perigoso demais. Recuso executar isso."
 
         if level == "elevated":
             logger.warning("Elevated command: %s", command)
@@ -156,9 +244,7 @@ class ShellTools(Toolkit):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=_TIMEOUT
-            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_TIMEOUT)
 
             output = stdout.decode(errors="replace").strip()
             output = self._parse_cwd(output)
@@ -174,7 +260,9 @@ class ShellTools(Toolkit):
             result = "\n".join(result_parts)
             logger.info(
                 "Shell [%s] (%s): exit %d",
-                level, command[:60], proc.returncode,
+                level,
+                command[:60],
+                proc.returncode,
             )
             return result
 

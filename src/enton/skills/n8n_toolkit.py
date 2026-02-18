@@ -51,13 +51,13 @@ class N8nTools(Toolkit):
         url = f"{base}/{workflow_id}"
 
         payload = data or {}
-        
+
         try:
             with httpx.Client(timeout=10.0) as client:
                 # n8n webhooks usually accept POST with JSON body
                 resp = client.post(url, json=payload)
                 resp.raise_for_status()
-                
+
                 # Check if response has content
                 if resp.status_code == 200:
                     try:
@@ -65,7 +65,7 @@ class N8nTools(Toolkit):
                     except Exception:
                         return f"Workflow '{workflow_id}' disparado com sucesso."
                 else:
-                     return f"Workflow '{workflow_id}' disparado. Status: {resp.status_code}"
+                    return f"Workflow '{workflow_id}' disparado. Status: {resp.status_code}"
 
         except httpx.HTTPStatusError as e:
             logger.error("n8n webhook failed: %s", e)

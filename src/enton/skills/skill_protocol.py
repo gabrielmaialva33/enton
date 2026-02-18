@@ -1,4 +1,5 @@
 """Protocol and metadata for dynamic skills."""
+
 from __future__ import annotations
 
 import time

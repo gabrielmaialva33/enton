@@ -53,7 +53,9 @@ class BrowserTools(Toolkit):
         """
         try:
             subprocess.Popen(
-                ["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                ["xdg-open", url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             return f"Abrindo no browser: {url}"
         except Exception as e:
@@ -107,7 +109,8 @@ class BrowserTools(Toolkit):
         try:
             subprocess.Popen(
                 ["xdg-open", url],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             return f"Pesquisando: {query}"
         except Exception as e:
@@ -136,6 +139,7 @@ class BrowserTools(Toolkit):
             html = result.stdout
             # Simple HTML to text (strip tags)
             import re
+
             text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL)
             text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
             text = re.sub(r"<[^>]+>", " ", text)

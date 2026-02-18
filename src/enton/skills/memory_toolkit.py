@@ -73,9 +73,7 @@ class MemoryTools(Toolkit):
             parts.append(f"Fatos conhecidos:\n{facts}")
 
         if profile.preferences:
-            prefs = "\n".join(
-                f"  - {k}: {v}" for k, v in profile.preferences.items()
-            )
+            prefs = "\n".join(f"  - {k}: {v}" for k, v in profile.preferences.items())
             parts.append(f"Preferencias:\n{prefs}")
 
         return "\n".join(parts)

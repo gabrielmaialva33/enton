@@ -6,6 +6,7 @@ and monitor GCP resources. Uses gcloud CLI (already authenticated).
 GCP Project: project-42631060-20da-4fdf-814
 APIs: Compute Engine, Cloud Run, Vertex AI, Notebooks, Cloud Build
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -70,7 +71,9 @@ class GcpTools(Toolkit):
         self.register(self.gcp_billing)
 
     async def _exec(
-        self, *args: str, timeout: float = 60.0,
+        self,
+        *args: str,
+        timeout: float = 60.0,
     ) -> tuple[str, str, int]:
         """Execute gcloud command."""
         cmd = [self._gcloud]
@@ -84,7 +87,8 @@ class GcpTools(Toolkit):
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout,
+            proc.communicate(),
+            timeout=timeout,
         )
         return (
             stdout.decode(errors="replace").strip(),
@@ -93,7 +97,9 @@ class GcpTools(Toolkit):
         )
 
     async def _exec_raw(
-        self, cmd: str, timeout: float = 60.0,
+        self,
+        cmd: str,
+        timeout: float = 60.0,
     ) -> tuple[str, str, int]:
         """Execute raw shell command (for SSH, etc.)."""
         proc = await asyncio.create_subprocess_shell(
@@ -102,7 +108,8 @@ class GcpTools(Toolkit):
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout,
+            proc.communicate(),
+            timeout=timeout,
         )
         return (
             stdout.decode(errors="replace").strip(),
@@ -143,7 +150,9 @@ class GcpTools(Toolkit):
 
         # Check active VMs
         vout, _, vrc = await self._exec(
-            "compute", "instances", "list",
+            "compute",
+            "instances",
+            "list",
             f"--project={self._project}" if self._project else "",
         )
         if vrc == 0:
@@ -195,7 +204,10 @@ class GcpTools(Toolkit):
 
         spec = _VM_PRESETS[preset]
         args = [
-            "compute", "instances", "create", name,
+            "compute",
+            "instances",
+            "create",
+            name,
             f"--zone={zone}",
             f"--machine-type={spec['machine_type']}",
             f"--boot-disk-size={spec['disk_size']}GB",
@@ -278,7 +290,10 @@ class GcpTools(Toolkit):
         return "\n".join(lines)
 
     async def gcp_vm_ssh(
-        self, name: str, command: str, zone: str = "us-central1-a",
+        self,
+        name: str,
+        command: str,
+        zone: str = "us-central1-a",
     ) -> str:
         """Executa um comando via SSH numa VM do GCP.
 
@@ -299,7 +314,8 @@ class GcpTools(Toolkit):
         if err:
             # SSH prints warnings to stderr, filter noise
             useful_err = "\n".join(
-                line for line in err.splitlines()
+                line
+                for line in err.splitlines()
                 if "WARNING" not in line and "banner" not in line.lower()
             )
             if useful_err:
@@ -309,7 +325,9 @@ class GcpTools(Toolkit):
         return result or "(sem output)"
 
     async def gcp_vm_delete(
-        self, name: str, zone: str = "us-central1-a",
+        self,
+        name: str,
+        zone: str = "us-central1-a",
     ) -> str:
         """Deleta uma VM do GCP (cuidado: irreversivel!).
 
@@ -318,7 +336,10 @@ class GcpTools(Toolkit):
             zone: Zona da VM (default: us-central1-a).
         """
         _out, err, rc = await self._exec(
-            "compute", "instances", "delete", name,
+            "compute",
+            "instances",
+            "delete",
+            name,
             f"--zone={zone}",
         )
         if rc != 0:
@@ -326,7 +347,9 @@ class GcpTools(Toolkit):
         return f"VM '{name}' deletada com sucesso."
 
     async def gcp_vm_start(
-        self, name: str, zone: str = "us-central1-a",
+        self,
+        name: str,
+        zone: str = "us-central1-a",
     ) -> str:
         """Liga uma VM parada.
 
@@ -335,7 +358,10 @@ class GcpTools(Toolkit):
             zone: Zona da VM (default: us-central1-a).
         """
         _, err, rc = await self._exec(
-            "compute", "instances", "start", name,
+            "compute",
+            "instances",
+            "start",
+            name,
             f"--zone={zone}",
         )
         if rc != 0:
@@ -343,7 +369,9 @@ class GcpTools(Toolkit):
         return f"VM '{name}' iniciada."
 
     async def gcp_vm_stop(
-        self, name: str, zone: str = "us-central1-a",
+        self,
+        name: str,
+        zone: str = "us-central1-a",
     ) -> str:
         """Desliga uma VM (economiza custo quando nao esta usando).
 
@@ -352,7 +380,10 @@ class GcpTools(Toolkit):
             zone: Zona da VM (default: us-central1-a).
         """
         _, err, rc = await self._exec(
-            "compute", "instances", "stop", name,
+            "compute",
+            "instances",
+            "stop",
+            name,
             f"--zone={zone}",
         )
         if rc != 0:
@@ -383,9 +414,7 @@ class GcpTools(Toolkit):
             if rc == 0:
                 try:
                     vms = json.loads(out) if out else []
-                    running = [
-                        v for v in vms if v.get("status") == "RUNNING"
-                    ]
+                    running = [v for v in vms if v.get("status") == "RUNNING"]
                     if running:
                         vm_name = running[0]["name"]
                         zone = running[0].get("zone", "").rsplit("/", 1)[-1]
@@ -419,7 +448,9 @@ class GcpTools(Toolkit):
         # gcloud billing doesn't have great CLI support,
         # use budgets API or compute instances cost estimate
         out, err, rc = await self._exec(
-            "compute", "instances", "list",
+            "compute",
+            "instances",
+            "list",
         )
         if rc != 0:
             return f"Erro: {err}"
@@ -441,8 +472,10 @@ class GcpTools(Toolkit):
 
         # Estimate hourly cost based on machine types
         cost_map = {
-            "e2-micro": 0.008, "e2-standard-4": 0.134,
-            "e2-standard-16": 0.538, "n1-standard-4": 0.190,
+            "e2-micro": 0.008,
+            "e2-standard-4": 0.134,
+            "e2-standard-16": 0.538,
+            "n1-standard-4": 0.190,
             "g2-standard-4": 0.560,
         }
         total_hourly = 0.0
@@ -454,17 +487,15 @@ class GcpTools(Toolkit):
             cost = base_cost * 0.3 if is_spot else base_cost  # Spot ~70% off
             total_hourly += cost
             lines.append(
-                f"  {vm['name']}: ~${cost:.3f}/hr "
-                f"({'SPOT' if is_spot else 'on-demand'})",
+                f"  {vm['name']}: ~${cost:.3f}/hr ({'SPOT' if is_spot else 'on-demand'})",
             )
 
         if total_hourly > 0:
-            lines.append(f"\nTotal estimado: ~${total_hourly:.3f}/hr "
-                         f"(~${total_hourly * 24:.2f}/dia)")
+            lines.append(
+                f"\nTotal estimado: ~${total_hourly:.3f}/hr (~${total_hourly * 24:.2f}/dia)"
+            )
         else:
             lines.append("\nSem VMs rodando — custo zero de compute.")
 
-        lines.append(
-            "\nDica: Use Spot VMs e desligue quando nao precisar!"
-        )
+        lines.append("\nDica: Use Spot VMs e desligue quando nao precisar!")
         return "\n".join(lines)

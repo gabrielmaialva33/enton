@@ -48,9 +48,7 @@ class PTZTools(Toolkit):
         self.register(self.camera_move)
         self.register(self.camera_motor_move)
 
-    async def _onvif_continuous_move(
-        self, pan: float, tilt: float, duration: float = 1.0
-    ) -> str:
+    async def _onvif_continuous_move(self, pan: float, tilt: float, duration: float = 1.0) -> str:
         """Send ONVIF ContinuousMove then Stop after duration."""
         soap_move = f"""<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
@@ -84,10 +82,17 @@ class PTZTools(Toolkit):
         try:
             # Send move command
             proc = await asyncio.create_subprocess_exec(
-                "curl", "-s", "-X", "POST", url,
-                "-H", f"Content-Type: {content_type}",
-                "-d", soap_move,
-                "--connect-timeout", "3",
+                "curl",
+                "-s",
+                "-X",
+                "POST",
+                url,
+                "-H",
+                f"Content-Type: {content_type}",
+                "-d",
+                soap_move,
+                "--connect-timeout",
+                "3",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -98,10 +103,17 @@ class PTZTools(Toolkit):
 
             # Send stop command
             proc = await asyncio.create_subprocess_exec(
-                "curl", "-s", "-X", "POST", url,
-                "-H", f"Content-Type: {content_type}",
-                "-d", soap_stop,
-                "--connect-timeout", "3",
+                "curl",
+                "-s",
+                "-X",
+                "POST",
+                url,
+                "-H",
+                f"Content-Type: {content_type}",
+                "-d",
+                soap_stop,
+                "--connect-timeout",
+                "3",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -163,9 +175,7 @@ class PTZTools(Toolkit):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=10.0
-            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
             output = stdout.decode(errors="replace").strip()
             return f"Motor movido H={h_steps} V={v_steps}. Output: {output or 'ok'}"
         except TimeoutError:

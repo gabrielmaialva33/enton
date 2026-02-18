@@ -1,4 +1,5 @@
 """Knowledge toolkit — web learning and knowledge search."""
+
 from __future__ import annotations
 
 import logging
@@ -32,12 +33,10 @@ class KnowledgeTools(Toolkit):
         if not triples:
             return "Nao consegui extrair conhecimento desta URL."
 
-        lines = [
-            f"- {t.subject} {t.predicate} {t.obj}"
-            for t in triples[:5]
-        ]
+        lines = [f"- {t.subject} {t.predicate} {t.obj}" for t in triples[:5]]
         return (
-            f"Aprendi {len(triples)} fatos:\n" + "\n".join(lines)
+            f"Aprendi {len(triples)} fatos:\n"
+            + "\n".join(lines)
             + (f"\n... e mais {len(triples) - 5}" if len(triples) > 5 else "")
         )
 
@@ -69,11 +68,5 @@ class KnowledgeTools(Toolkit):
         if not triples:
             return f"Nao consegui aprender sobre '{topic}' agora."
 
-        lines = [
-            f"- {t.subject} {t.predicate} {t.obj}"
-            for t in triples[:8]
-        ]
-        return (
-            f"Aprendi {len(triples)} fatos sobre '{topic}':\n"
-            + "\n".join(lines)
-        )
+        lines = [f"- {t.subject} {t.predicate} {t.obj}" for t in triples[:8]]
+        return f"Aprendi {len(triples)} fatos sobre '{topic}':\n" + "\n".join(lines)

@@ -6,6 +6,7 @@ All without root on the phone.
 
 Requires: ADB connected (USB or WiFi) to the target device.
 """
+
 from __future__ import annotations
 
 import logging
@@ -420,9 +421,7 @@ class AndroidTools(Toolkit):
                 return "Nenhuma chamada no historico (pode precisar de permissao)."
             lines = []
             for c in calls:
-                lines.append(
-                    f"  {c['type']}: {c['name']} ({c['number']}) — {c['duration']}"
-                )
+                lines.append(f"  {c['type']}: {c['name']} ({c['number']}) — {c['duration']}")
             return f"Chamadas recentes ({len(calls)}):\n" + "\n".join(lines)
         except Exception as e:
             return f"Erro: {e}"

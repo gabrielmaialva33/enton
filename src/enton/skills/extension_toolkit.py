@@ -6,6 +6,7 @@ Exposes the ExtensionRegistry to the LLM so Enton can:
 - Install new extensions from git repos
 - View extension stats and health
 """
+
 from __future__ import annotations
 
 import logging
@@ -54,9 +55,11 @@ class ExtensionTools(Toolkit):
 
         exts = self._registry.list_extensions(state=state)
         if not exts:
-            return "Nenhuma extensao encontrada" + (
-                f" com estado '{filter_state}'" if filter_state else ""
-            ) + "."
+            return (
+                "Nenhuma extensao encontrada"
+                + (f" com estado '{filter_state}'" if filter_state else "")
+                + "."
+            )
 
         lines = [f"Extensoes ({len(exts)}):"]
         for ext in exts:

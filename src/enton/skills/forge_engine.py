@@ -8,6 +8,7 @@ References:
 - LATM (arXiv 2305.17126) — Large Language Models as Tool Makers
 - ToolMaker (arXiv 2502.11705, ACL 2025)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -91,27 +92,37 @@ class ForgeEngine:
         test_code = spec["test_code"]
 
         passed, output = await self._sandbox_test(
-            name, spec["params"], code, test_code,
+            name,
+            spec["params"],
+            code,
+            test_code,
         )
 
         # Self-correction loop
         if not passed and self._max_retries > 0:
             logger.info("ToolForge: first attempt failed, self-correcting...")
             corrected = await self._self_correct(
-                task_description, code, test_code, output,
+                task_description,
+                code,
+                test_code,
+                output,
             )
             if corrected:
                 spec = corrected
                 code = corrected["code"]
                 test_code = corrected["test_code"]
                 passed, output = await self._sandbox_test(
-                    name, spec["params"], code, test_code,
+                    name,
+                    spec["params"],
+                    code,
+                    test_code,
                 )
 
         if not passed:
             self._record_outcome(name, success=False)
             return {
-                "success": False, "name": name,
+                "success": False,
+                "name": name,
                 "error": f"Test failed: {output[:200]}",
             }
 
@@ -145,13 +156,15 @@ class ForgeEngine:
         results = []
         for name, stat in self._stats.items():
             total = stat["success"] + stat["failure"]
-            results.append({
-                "name": name,
-                "success_count": stat["success"],
-                "failure_count": stat["failure"],
-                "success_rate": stat["success"] / total if total else 1.0,
-                "created_at": stat.get("created_at", 0),
-            })
+            results.append(
+                {
+                    "name": name,
+                    "success_count": stat["success"],
+                    "failure_count": stat["failure"],
+                    "success_rate": stat["success"] / total if total else 1.0,
+                    "created_at": stat.get("created_at", 0),
+                }
+            )
         return results
 
     # -- code generation ----------------------------------------------------
@@ -161,7 +174,8 @@ class ForgeEngine:
         prompt = f"Create a tool for the following task:\n\n{task}"
         try:
             response = await self._brain.think(
-                prompt, system=FORGE_SYSTEM_PROMPT,
+                prompt,
+                system=FORGE_SYSTEM_PROMPT,
             )
             return self._parse_json(response)
         except Exception:
@@ -169,15 +183,23 @@ class ForgeEngine:
             return None
 
     async def _self_correct(
-        self, task: str, code: str, test_code: str, error: str,
+        self,
+        task: str,
+        code: str,
+        test_code: str,
+        error: str,
     ) -> dict | None:
         """Send error back to LLM for correction (1 retry)."""
         prompt = CORRECTION_PROMPT.format(
-            task=task, code=code, test_code=test_code, error=error[:500],
+            task=task,
+            code=code,
+            test_code=test_code,
+            error=error[:500],
         )
         try:
             response = await self._brain.think(
-                prompt, system=FORGE_SYSTEM_PROMPT,
+                prompt,
+                system=FORGE_SYSTEM_PROMPT,
             )
             return self._parse_json(response)
         except Exception:
@@ -187,7 +209,11 @@ class ForgeEngine:
     # -- sandbox ------------------------------------------------------------
 
     async def _sandbox_test(
-        self, name: str, params: str, code: str, test_code: str,
+        self,
+        name: str,
+        params: str,
+        code: str,
+        test_code: str,
     ) -> tuple[bool, str]:
         """Run generated code + test in subprocess sandbox."""
         # Build standalone test script
@@ -196,12 +222,15 @@ class ForgeEngine:
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-c", script,
+                sys.executable,
+                "-c",
+                script,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=self._sandbox_timeout,
+                proc.communicate(),
+                timeout=self._sandbox_timeout,
             )
             output = (stdout or b"").decode() + (stderr or b"").decode()
             passed = proc.returncode == 0 and "PASS" in output
@@ -214,14 +243,16 @@ class ForgeEngine:
     # -- deploy -------------------------------------------------------------
 
     def _deploy(
-        self, name: str, description: str, params: str, code: str,
+        self,
+        name: str,
+        description: str,
+        params: str,
+        code: str,
     ) -> Path:
         """Write validated code to skills_dir as .py file."""
         self._skills_dir.mkdir(parents=True, exist_ok=True)
 
-        class_name = "".join(
-            word.capitalize() for word in name.split("_")
-        ) + "Tools"
+        class_name = "".join(word.capitalize() for word in name.split("_")) + "Tools"
 
         # Build args docstring
         args_doc = "\n            ".join(
@@ -230,9 +261,7 @@ class ForgeEngine:
 
         # Ensure code is indented properly (8 spaces for method body)
         code_lines = code.strip().split("\n")
-        indented_code = "\n".join(
-            f"        {line}" for line in code_lines
-        )
+        indented_code = "\n".join(f"        {line}" for line in code_lines)
 
         content = SKILL_TEMPLATE.format(
             name=name,
@@ -271,7 +300,9 @@ class ForgeEngine:
         """Track success/failure for tool quality metrics."""
         if name not in self._stats:
             self._stats[name] = {
-                "success": 0, "failure": 0, "created_at": time.time(),
+                "success": 0,
+                "failure": 0,
+                "created_at": time.time(),
             }
         if success:
             self._stats[name]["success"] += 1

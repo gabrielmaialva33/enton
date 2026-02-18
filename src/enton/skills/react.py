@@ -1,4 +1,5 @@
 """React skill — responds to interesting detections (cats, unusual objects)."""
+
 from __future__ import annotations
 
 import random

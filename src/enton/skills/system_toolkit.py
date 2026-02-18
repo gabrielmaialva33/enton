@@ -112,10 +112,7 @@ class SystemTools(Toolkit):
             if result.returncode == 0 and result.stdout.strip():
                 parts = [p.strip() for p in result.stdout.strip().split(",")]
                 if len(parts) >= 4:
-                    return (
-                        f"GPU: {parts[0]} — {parts[1]}% util, "
-                        f"{parts[2]}MB / {parts[3]}MB VRAM"
-                    )
+                    return f"GPU: {parts[0]} — {parts[1]}% util, {parts[2]}MB / {parts[3]}MB VRAM"
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
         return None

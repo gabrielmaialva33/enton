@@ -6,6 +6,7 @@ of advanced patterns for each language.
 
 Inspired by OpenClaw skills + polyglot systems programming expertise.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -186,7 +187,10 @@ class CodingTools(Toolkit):
         self.register(self.code_benchmark)
 
     async def _exec(
-        self, cmd: str, timeout: float = 30.0, cwd: str | None = None,
+        self,
+        cmd: str,
+        timeout: float = 30.0,
+        cwd: str | None = None,
     ) -> tuple[str, str, int]:
         """Run a shell command and return (stdout, stderr, returncode)."""
         proc = await asyncio.create_subprocess_shell(
@@ -196,7 +200,8 @@ class CodingTools(Toolkit):
             cwd=cwd,
         )
         stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout,
+            proc.communicate(),
+            timeout=timeout,
         )
         return (
             stdout.decode(errors="replace").strip(),
@@ -246,7 +251,10 @@ class CodingTools(Toolkit):
             compile_cmd = str(spec["compile"])
             if compile_cmd:
                 cmd = compile_cmd.format(
-                    src=q_src, out=q_out, dir=q_dir, module=module,
+                    src=q_src,
+                    out=q_out,
+                    dir=q_dir,
+                    module=module,
                 )
                 compiler = compile_cmd.split(maxsplit=1)[0]
                 if not shutil.which(compiler):
@@ -257,7 +265,10 @@ class CodingTools(Toolkit):
 
             # Run step
             run_cmd = str(spec["run"]).format(
-                src=q_src, out=q_out, dir=q_dir, module=module,
+                src=q_src,
+                out=q_out,
+                dir=q_dir,
+                module=module,
             )
             # For interpreted langs, check if runtime exists
             if not compile_cmd:
@@ -290,10 +301,7 @@ class CodingTools(Toolkit):
         if topic:
             # Filter lines matching the topic
             topic_lower = topic.lower()
-            lines = [
-                line for line in kb.splitlines()
-                if topic_lower in line.lower()
-            ]
+            lines = [line for line in kb.splitlines() if topic_lower in line.lower()]
             if lines:
                 return f"Patterns de {lang} sobre '{topic}':\n" + "\n".join(lines)
             return f"Nenhum pattern de {lang} sobre '{topic}'. Knowledge completo:\n{kb}"
@@ -353,7 +361,10 @@ class CodingTools(Toolkit):
             compile_cmd = str(spec["compile"])
             if compile_cmd:
                 cmd = compile_cmd.format(
-                    src=q_src, out=q_out, dir=q_dir, module=module,
+                    src=q_src,
+                    out=q_out,
+                    dir=q_dir,
+                    module=module,
                 )
                 _, cerr, crc = await self._exec(cmd, cwd=tmpdir)
                 if crc != 0:
@@ -361,7 +372,10 @@ class CodingTools(Toolkit):
 
             # Benchmark
             run_cmd = str(spec["run"]).format(
-                src=q_src, out=q_out, dir=q_dir, module=module,
+                src=q_src,
+                out=q_out,
+                dir=q_dir,
+                module=module,
             )
             times: list[float] = []
             last_output = ""
@@ -377,8 +391,8 @@ class CodingTools(Toolkit):
             worst = max(times)
             return (
                 f"Benchmark {spec['name']} ({runs} runs):\n"
-                f"  media: {avg*1000:.1f}ms\n"
-                f"  melhor: {best*1000:.1f}ms\n"
-                f"  pior: {worst*1000:.1f}ms\n"
+                f"  media: {avg * 1000:.1f}ms\n"
+                f"  melhor: {best * 1000:.1f}ms\n"
+                f"  pior: {worst * 1000:.1f}ms\n"
                 f"  output: {last_output[:200]}"
             )

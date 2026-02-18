@@ -8,6 +8,7 @@ Gives Enton the ability to:
 
 This is meta-AI: an AI that uses other AIs as tools.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -200,14 +201,12 @@ class AIDelegateTools(Toolkit):
 
         claude_ok = self._claude.available
         lines.append(
-            f"Claude Code CLI: {'DISPONIVEL' if claude_ok else 'NAO INSTALADO'}"
-            f" ({self._claude.id})"
+            f"Claude Code CLI: {'DISPONIVEL' if claude_ok else 'NAO INSTALADO'} ({self._claude.id})"
         )
 
         gemini_ok = self._gemini.available
         lines.append(
-            f"Gemini CLI: {'DISPONIVEL' if gemini_ok else 'NAO INSTALADO'}"
-            f" ({self._gemini.id})"
+            f"Gemini CLI: {'DISPONIVEL' if gemini_ok else 'NAO INSTALADO'} ({self._gemini.id})"
         )
 
         total = sum([claude_ok, gemini_ok])

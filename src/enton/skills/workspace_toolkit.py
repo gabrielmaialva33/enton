@@ -7,6 +7,7 @@ to the system when needed.
 
 Architecture inspired by OpenHands workspace abstraction + wcgw MCP.
 """
+
 from __future__ import annotations
 
 import logging
@@ -56,9 +57,7 @@ class WorkspaceTools(Toolkit):
         except OSError:
             free_gb = total_gb = 0.0
 
-        subdirs = sorted(
-            d.name for d in ws.iterdir() if d.is_dir()
-        ) if ws.exists() else []
+        subdirs = sorted(d.name for d in ws.iterdir() if d.is_dir()) if ws.exists() else []
 
         lines = [
             f"Workspace: {ws}",
@@ -128,17 +127,18 @@ class WorkspaceTools(Toolkit):
 
         lines = []
         for g in self._hardware.gpus:
-            lines.extend([
-                f"GPU {g.index}: {g.name}",
-                f"  VRAM: {g.vram_used_mb}MB / {g.vram_total_mb}MB "
-                f"({g.vram_free_mb}MB livre)",
-                f"  Utilizacao: {g.utilization_pct}%",
-                f"  Temperatura: {g.temperature_c}C",
-                f"  Potencia: {g.power_draw_w:.0f}W / {g.power_limit_w:.0f}W",
-                f"  Driver: {g.driver_version}",
-                f"  CUDA: {g.cuda_version}",
-                f"  Compute Capability: {g.compute_capability}",
-            ])
+            lines.extend(
+                [
+                    f"GPU {g.index}: {g.name}",
+                    f"  VRAM: {g.vram_used_mb}MB / {g.vram_total_mb}MB ({g.vram_free_mb}MB livre)",
+                    f"  Utilizacao: {g.utilization_pct}%",
+                    f"  Temperatura: {g.temperature_c}C",
+                    f"  Potencia: {g.power_draw_w:.0f}W / {g.power_limit_w:.0f}W",
+                    f"  Driver: {g.driver_version}",
+                    f"  CUDA: {g.cuda_version}",
+                    f"  Compute Capability: {g.compute_capability}",
+                ]
+            )
         return "\n".join(lines)
 
     async def hardware_full(self) -> str:
@@ -165,23 +165,24 @@ class WorkspaceTools(Toolkit):
             f"  Freq: {hw.cpu_freq_current_mhz:.0f} / {hw.cpu_freq_max_mhz:.0f} MHz",
             f"  Usage: {hw.cpu_percent:.1f}%",
             "",
-            f"RAM: {hw.ram_used_gb:.1f}GB / {hw.ram_total_gb:.1f}GB "
-            f"({hw.ram_percent:.0f}%)",
+            f"RAM: {hw.ram_used_gb:.1f}GB / {hw.ram_total_gb:.1f}GB ({hw.ram_percent:.0f}%)",
             f"  Available: {hw.ram_available_gb:.1f}GB",
         ]
 
         if hw.gpus:
             lines.append("")
             for g in hw.gpus:
-                lines.extend([
-                    f"GPU {g.index}: {g.name}",
-                    f"  VRAM: {g.vram_used_mb}/{g.vram_total_mb}MB "
-                    f"| Util: {g.utilization_pct}%"
-                    f" | Temp: {g.temperature_c}C"
-                    f" | Power: {g.power_draw_w:.0f}/{g.power_limit_w:.0f}W",
-                    f"  CUDA {g.cuda_version} | CC {g.compute_capability}"
-                    f" | Driver {g.driver_version}",
-                ])
+                lines.extend(
+                    [
+                        f"GPU {g.index}: {g.name}",
+                        f"  VRAM: {g.vram_used_mb}/{g.vram_total_mb}MB "
+                        f"| Util: {g.utilization_pct}%"
+                        f" | Temp: {g.temperature_c}C"
+                        f" | Power: {g.power_draw_w:.0f}/{g.power_limit_w:.0f}W",
+                        f"  CUDA {g.cuda_version} | CC {g.compute_capability}"
+                        f" | Driver {g.driver_version}",
+                    ]
+                )
 
         if hw.disks:
             lines.append("")
@@ -197,11 +198,13 @@ class WorkspaceTools(Toolkit):
             for iface, ip in hw.ip_addresses.items():
                 lines.append(f"Net {iface}: {ip}")
 
-        lines.extend([
-            "",
-            f"Workspace: {hw.workspace_path}",
-            f"  Free: {hw.workspace_free_gb:.0f}GB",
-        ])
+        lines.extend(
+            [
+                "",
+                f"Workspace: {hw.workspace_path}",
+                f"  Free: {hw.workspace_free_gb:.0f}GB",
+            ]
+        )
 
         return "\n".join(lines)
 

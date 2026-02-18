@@ -41,7 +41,9 @@ class NetworkTools(Toolkit):
         try:
             result = subprocess.run(
                 ["nmap", "-sn", "-T4", subnet],
-                timeout=30, capture_output=True, text=True,
+                timeout=30,
+                capture_output=True,
+                text=True,
             )
             return result.stdout.strip() or "Nenhum host encontrado."
         except subprocess.TimeoutExpired:
@@ -59,7 +61,9 @@ class NetworkTools(Toolkit):
         try:
             result = subprocess.run(
                 ["nmap", "-T4", "-p", ports, host],
-                timeout=60, capture_output=True, text=True,
+                timeout=60,
+                capture_output=True,
+                text=True,
             )
             return result.stdout.strip()
         except subprocess.TimeoutExpired:
@@ -77,7 +81,9 @@ class NetworkTools(Toolkit):
         try:
             result = subprocess.run(
                 ["ping", "-c", str(min(count, 10)), "-W", "2", host],
-                timeout=15, capture_output=True, text=True,
+                timeout=15,
+                capture_output=True,
+                text=True,
             )
             # Extract summary
             lines = result.stdout.strip().split("\n")
@@ -92,11 +98,12 @@ class NetworkTools(Toolkit):
         try:
             result = subprocess.run(
                 ["ip", "-br", "addr"],
-                timeout=3, capture_output=True, text=True,
+                timeout=3,
+                capture_output=True,
+                text=True,
             )
             lines = [
-                line for line in result.stdout.strip().split("\n")
-                if not line.startswith("lo ")
+                line for line in result.stdout.strip().split("\n") if not line.startswith("lo ")
             ]
             return "\n".join(lines) if lines else "Nenhuma interface de rede."
         except Exception as e:
@@ -108,13 +115,17 @@ class NetworkTools(Toolkit):
             # Paired devices
             paired = subprocess.run(
                 ["bluetoothctl", "devices"],
-                timeout=5, capture_output=True, text=True,
+                timeout=5,
+                capture_output=True,
+                text=True,
             ).stdout.strip()
 
             # Connected devices
             connected = subprocess.run(
                 ["bluetoothctl", "devices", "Connected"],
-                timeout=5, capture_output=True, text=True,
+                timeout=5,
+                capture_output=True,
+                text=True,
             ).stdout.strip()
 
             result = "Pareados:\n" + (paired or "  (nenhum)")
@@ -133,7 +144,9 @@ class NetworkTools(Toolkit):
         try:
             result = subprocess.run(
                 ["bluetoothctl", "connect", mac],
-                timeout=15, capture_output=True, text=True,
+                timeout=15,
+                capture_output=True,
+                text=True,
             )
             return result.stdout.strip() or result.stderr.strip()
         except subprocess.TimeoutExpired:
@@ -150,7 +163,9 @@ class NetworkTools(Toolkit):
         try:
             result = subprocess.run(
                 ["bluetoothctl", "disconnect", mac],
-                timeout=10, capture_output=True, text=True,
+                timeout=10,
+                capture_output=True,
+                text=True,
             )
             return result.stdout.strip() or result.stderr.strip()
         except Exception as e:
@@ -161,7 +176,9 @@ class NetworkTools(Toolkit):
         try:
             result = subprocess.run(
                 ["tailscale", "status"],
-                timeout=10, capture_output=True, text=True,
+                timeout=10,
+                capture_output=True,
+                text=True,
             )
             return result.stdout.strip() or "Tailscale nao conectado."
         except Exception as e:
@@ -172,7 +189,9 @@ class NetworkTools(Toolkit):
         try:
             result = subprocess.run(
                 ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list"],
-                timeout=15, capture_output=True, text=True,
+                timeout=15,
+                capture_output=True,
+                text=True,
             )
             lines = result.stdout.strip().split("\n")
             formatted = ["  SSID | Signal | Security"]
@@ -195,7 +214,9 @@ class NetworkTools(Toolkit):
         try:
             result = subprocess.run(
                 ["dig", "+short", domain],
-                timeout=10, capture_output=True, text=True,
+                timeout=10,
+                capture_output=True,
+                text=True,
             )
             return result.stdout.strip() or f"Nenhum registro para {domain}"
         except Exception as e:
@@ -203,7 +224,9 @@ class NetworkTools(Toolkit):
             try:
                 result = subprocess.run(
                     ["nslookup", domain],
-                    timeout=10, capture_output=True, text=True,
+                    timeout=10,
+                    capture_output=True,
+                    text=True,
                 )
                 return result.stdout.strip()
             except Exception:

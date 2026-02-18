@@ -4,6 +4,7 @@ Implements LATM (LLM-as-Tool-Maker): expensive model creates tools,
 cheap model uses them. The Brain can invoke these functions via
 native Agno tool-calling.
 """
+
 from __future__ import annotations
 
 import logging
@@ -64,10 +65,7 @@ class ForgeTools(Toolkit):
         for name, meta in skills.items():
             total = meta.success_count + meta.failure_count
             rate = f"{meta.success_rate:.0%}" if total > 0 else "n/a"
-            lines.append(
-                f"- {name}: {meta.description} "
-                f"(v{meta.version}, taxa sucesso: {rate})"
-            )
+            lines.append(f"- {name}: {meta.description} (v{meta.version}, taxa sucesso: {rate})")
         return "\n".join(lines)
 
     def retire_tool(self, tool_name: str) -> str:

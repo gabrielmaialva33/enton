@@ -1,4 +1,5 @@
 """Face recognition toolkit -- Agno-compatible Enton face enrollment tools."""
+
 from __future__ import annotations
 
 import logging

@@ -50,7 +50,7 @@ class ScreenpipeTools(Toolkit):
                 "limit": limit,
                 "content_type": content_type if content_type != "all" else None,
             }
-            
+
             if minutes_back:
                 # Screenpipe expects ISO formatted start_time if filtering by time
                 start_time = (datetime.now() - timedelta(minutes=minutes_back)).isoformat()
@@ -60,7 +60,7 @@ class ScreenpipeTools(Toolkit):
             # Remove trailing slash from base if present to avoid double slash
             base_url = settings.screenpipe_url.rstrip("/")
             url = f"{base_url}/search"
-            
+
             with httpx.Client(timeout=10.0) as client:
                 resp = client.get(url, params=params)
                 resp.raise_for_status()
@@ -77,12 +77,12 @@ class ScreenpipeTools(Toolkit):
                 content_obj = item.get("content", {})
                 # Try to get text or transcription
                 text = content_obj.get("text") or content_obj.get("transcription") or ""
-                
+
                 meta = item.get("meta", {})
                 app_name = meta.get("app_name", "unknown")
                 window_name = meta.get("window_name", "unknown")
                 timestamp = item.get("timestamp", "unknown")
-                
+
                 formatted.append(
                     f"- [{timestamp}] [{app_name}] {window_name}: {text[:200].replace('\n', ' ')}..."
                 )

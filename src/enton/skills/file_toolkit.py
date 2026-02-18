@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from pathlib import Path  # noqa: TC003 — used at runtime
+from pathlib import Path
 
 from agno.tools import Toolkit
 
@@ -19,13 +19,25 @@ _MAX_OUTPUT = 8000
 _MAX_SEARCH_RESULTS = 50
 
 # Paths blocked from reading
-_READ_BLOCKED = frozenset({
-    "/etc/shadow", "/etc/gshadow", "/proc/kcore", "/dev/mem", "/dev/kmem",
-})
+_READ_BLOCKED = frozenset(
+    {
+        "/etc/shadow",
+        "/etc/gshadow",
+        "/proc/kcore",
+        "/dev/mem",
+        "/dev/kmem",
+    }
+)
 
 # Path prefixes blocked from writing
 _WRITE_BLOCKED_PREFIXES = (
-    "/etc/", "/usr/", "/bin/", "/sbin/", "/boot/", "/proc/", "/sys/",
+    "/etc/",
+    "/usr/",
+    "/bin/",
+    "/sbin/",
+    "/boot/",
+    "/proc/",
+    "/sys/",
 )
 
 # Paths that generate warnings (sensitive but not blocked)
@@ -71,9 +83,7 @@ class FileTools(Toolkit):
     # read_file
     # ------------------------------------------------------------------
 
-    async def read_file(
-        self, path: str, start_line: int = 0, end_line: int = 0
-    ) -> str:
+    async def read_file(self, path: str, start_line: int = 0, end_line: int = 0) -> str:
         """Le o conteudo de um arquivo com numeros de linha.
 
         Args:

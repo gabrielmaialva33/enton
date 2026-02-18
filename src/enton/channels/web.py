@@ -110,12 +110,14 @@ class WebChannel(BaseChannel):
     async def send(self, message: ChannelMessage) -> None:
         ws_id = message.metadata.get("ws_id") or message.metadata.get("target_id")
 
-        payload = json.dumps({
-            "sender": message.sender_name,
-            "text": message.text,
-            "channel": message.channel,
-            "timestamp": message.timestamp,
-        })
+        payload = json.dumps(
+            {
+                "sender": message.sender_name,
+                "text": message.text,
+                "channel": message.channel,
+                "timestamp": message.timestamp,
+            }
+        )
 
         if ws_id and ws_id in self._connections:
             try:

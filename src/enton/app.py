@@ -67,6 +67,7 @@ from enton.skills.ai_delegate_toolkit import AIDelegateTools
 from enton.skills.android_toolkit import AndroidTools
 from enton.skills.blob_toolkit import BlobTools
 from enton.skills.coding_toolkit import CodingTools
+from enton.skills.crypto_toolkit import CryptoToolkit
 from enton.skills.describe_toolkit import DescribeTools
 from enton.skills.extension_toolkit import ExtensionTools
 from enton.skills.face_toolkit import FaceTools
@@ -76,12 +77,11 @@ from enton.skills.forge_toolkit import ForgeTools
 from enton.skills.gcp_toolkit import GcpTools
 from enton.skills.github_learner import GitHubLearner
 from enton.skills.god_mode_toolkit import GodModeToolkit
-from enton.skills.neurosurgeon_toolkit import NeurosurgeonToolkit
-from enton.skills.crypto_toolkit import CryptoToolkit
 from enton.skills.greet import GreetSkill
 from enton.skills.knowledge_toolkit import KnowledgeTools
 from enton.skills.memory_toolkit import MemoryTools
 from enton.skills.n8n_toolkit import N8nTools
+from enton.skills.neurosurgeon_toolkit import NeurosurgeonToolkit
 from enton.skills.planner_toolkit import PlannerTools
 from enton.skills.process_toolkit import ProcessTools
 from enton.skills.ptz_toolkit import PTZTools
@@ -102,11 +102,11 @@ class App:
     def __init__(self, viewer: bool = False) -> None:
         self._viewer = viewer
         self._thoughts: deque[str] = deque(maxlen=6)
-        
+
         # Sencience Metrics
         self._current_fps = 5.0
         self._attention_energy = 0.0
-        
+
         self.bus = EventBus()
         self.self_model = SelfModel(settings)
         self.memory = Memory()
@@ -119,7 +119,7 @@ class App:
         self.ears = Ears(settings, self.bus, blob_store=self.blob_store)
         self.voice = Voice(settings, ears=self.ears)
         self.fuser = Fuser()
-        
+
         # UI
         self.viewer = Viewer(self.vision, self._thoughts) if viewer else None
 
@@ -132,7 +132,7 @@ class App:
         self.awareness = AwarenessStateMachine()
         self.metacognition = MetaCognitiveEngine()
         self.prediction = PredictionEngine()
-        
+
         # v0.8.0 — Global Workspace
         self.workspace: GlobalWorkspace | None = None
         self.perception_module: PerceptionModule | None = None
@@ -185,12 +185,17 @@ class App:
         )
         # Seed context with hardware awareness
         self.context_engine.set(
-            "hardware", self.hardware.summary(),
-            category="system", priority=0.8, ttl=300.0,
+            "hardware",
+            self.hardware.summary(),
+            category="system",
+            priority=0.8,
+            ttl=300.0,
         )
         self.context_engine.set(
-            "workspace", f"Workspace: {self._workspace} ({self._disk_free()} free)",
-            category="system", priority=0.6,
+            "workspace",
+            f"Workspace: {self._workspace} ({self._disk_free()} free)",
+            category="system",
+            priority=0.6,
         )
 
         # Agno Toolkits
@@ -262,11 +267,13 @@ class App:
             name = getattr(tk, "name", type(tk).__name__)
             self.extension_registry.register_builtin(name, tk)
         self.brain.register_toolkit(
-            ExtensionTools(self.extension_registry), "_extension_tools",
+            ExtensionTools(self.extension_registry),
+            "_extension_tools",
         )
 
         # v1.0.0 — Role-Specialized Sub-Agents (CrewAI pattern)
         from enton.cognition.sub_agents import SubAgentOrchestrator
+
         # Map toolkit names to instances for sub-agent access
         toolkit_map = {getattr(tk, "name", ""): tk for tk in toolkits}
         self.sub_agents = SubAgentOrchestrator(
@@ -274,12 +281,15 @@ class App:
             toolkits=toolkit_map,
         )
         self.brain.register_toolkit(
-            SubAgentTools(self.sub_agents), "_sub_agent_tools",
+            SubAgentTools(self.sub_agents),
+            "_sub_agent_tools",
         )
 
         # v0.4.0 — Self-Evolution (SkillRegistry + ToolForge)
         self.skill_registry = SkillRegistry(
-            brain=self.brain, bus=self.bus, skills_dir=settings.skills_dir,
+            brain=self.brain,
+            bus=self.bus,
+            skills_dir=settings.skills_dir,
         )
         self.forge_engine = ForgeEngine(
             brain=self.brain,
@@ -288,7 +298,8 @@ class App:
             max_retries=settings.forge_max_retries,
         )
         forge_tools = ForgeTools(
-            forge=self.forge_engine, registry=self.skill_registry,
+            forge=self.forge_engine,
+            registry=self.skill_registry,
         )
         self.brain.register_toolkit(forge_tools, "_forge_tools")
 
@@ -298,16 +309,15 @@ class App:
 
         # v0.8.0 — Global Workspace Initialization
         self.workspace = GlobalWorkspace()
-        
+
         self.perception_module = PerceptionModule(self.prediction)
         self.executive_module = ExecutiveModule(self.metacognition, self.skill_registry)
         self.agentic_module = AgenticModule(self.brain)
-        
+
         self.workspace.register_module(self.perception_module)
         self.workspace.register_module(self.executive_module)
         self.workspace.register_module(self.agentic_module)
         logger.info("Global Workspace initialized with modules: Perception, Executive, Agentic")
-
 
         # v0.6.0 — Android Phone Control (USB + WiFi + 4G via Tailscale)
         self._phone_bridge: AndroidBridge | None = None
@@ -330,12 +340,16 @@ class App:
 
         # v0.9.0 — Multi-platform Channels
         self.channel_manager = ChannelManager(
-            bus=self.bus, brain=self.brain, memory=self.memory,
+            bus=self.bus,
+            brain=self.brain,
+            memory=self.memory,
         )
         self._init_channels()
         from enton.skills.channel_toolkit import ChannelTools
+
         self.brain.register_toolkit(
-            ChannelTools(self.channel_manager), "_channel_tools",
+            ChannelTools(self.channel_manager),
+            "_channel_tools",
         )
 
         # Dream mode (must be after brain + memory)
@@ -358,6 +372,7 @@ class App:
     def _disk_free(self) -> str:
         """Human-readable free space on workspace disk."""
         import shutil
+
         total, _used, free = shutil.disk_usage(self._workspace)
         return f"{free / (1 << 30):.0f}GB/{total / (1 << 30):.0f}GB"
 
@@ -417,11 +432,7 @@ class App:
         if settings.telegram_bot_token:
             from enton.channels.telegram import TelegramChannel
 
-            allowed = [
-                u.strip()
-                for u in settings.telegram_allowed_users.split(",")
-                if u.strip()
-            ]
+            allowed = [u.strip() for u in settings.telegram_allowed_users.split(",") if u.strip()]
             tg = TelegramChannel(
                 self.bus,
                 token=settings.telegram_bot_token,
@@ -434,11 +445,7 @@ class App:
         if settings.discord_bot_token:
             from enton.channels.discord import DiscordChannel
 
-            guilds = [
-                g.strip()
-                for g in settings.discord_allowed_guilds.split(",")
-                if g.strip()
-            ]
+            guilds = [g.strip() for g in settings.discord_allowed_guilds.split(",") if g.strip()]
             dc = DiscordChannel(
                 self.bus,
                 token=settings.discord_bot_token,
@@ -481,13 +488,18 @@ class App:
             return
         detections = [d.label for d in (cam.last_detections or [])]
         await self.visual_memory.remember_scene(
-            cam.last_frame, detections, event.camera_id,
+            cam.last_frame,
+            detections,
+            event.camera_id,
         )
 
     async def _on_detection(self, event: DetectionEvent) -> None:
         self.self_model.record_detection(event.label)
         self.memory_tiers.update_object_location(
-            event.label, event.camera_id, event.bbox, event.confidence,
+            event.label,
+            event.camera_id,
+            event.bbox,
+            event.confidence,
         )
         if event.label == "person":
             self._person_present = True
@@ -504,7 +516,8 @@ class App:
             self._push_thought(f"[face] {event.identity} ({event.confidence:.0%})")
             logger.info(
                 "Face recognized: %s (%.0f%%)",
-                event.identity, event.confidence * 100,
+                event.identity,
+                event.confidence * 100,
             )
             self.memory.learn_about_user(
                 f"Rosto reconhecido: {event.identity}",
@@ -525,6 +538,7 @@ class App:
 
         # High-priority sounds get instant reactions (no brain call)
         from enton.cognition.prompts import URGENT_SOUND_REACTIONS
+
         reaction = URGENT_SOUND_REACTIONS.get(event.label)
         if reaction:
             self.awareness.trigger_alert(f"sound:{event.label}", self.bus)
@@ -534,11 +548,14 @@ class App:
         # Other sounds: ask brain for intelligent reaction
         if event.confidence > 0.5:
             from enton.cognition.prompts import SOUND_REACTION_PROMPT, SOUND_REACTION_SYSTEM
+
             prompt = SOUND_REACTION_PROMPT.format(
-                label=event.label, confidence=event.confidence,
+                label=event.label,
+                confidence=event.confidence,
             )
             response = await self.brain.think(
-                prompt, system=SOUND_REACTION_SYSTEM,
+                prompt,
+                system=SOUND_REACTION_SYSTEM,
             )
             if response and not self.voice.is_speaking:
                 await self.voice.say(response)
@@ -566,13 +583,13 @@ class App:
         activities = self.vision.last_activities
         emotions = self.vision.last_emotions
         scene_desc = self.fuser.fuse(detections, activities, emotions)
-        
+
         system = build_system_prompt(
             self.self_model,
             self.memory,
             detections=[{"label": d.label} for d in detections],
         )
-        
+
         # Inject Fuser context into system prompt or user message
         # Let's prepend to the user message or append to system
         system += f"\n\nCONTEXTO VISUAL ATUAL: {scene_desc}"
@@ -590,8 +607,10 @@ class App:
         response = await self.brain.think_agent(event.text, system=system)
         provider = getattr(self.brain._agent.model, "id", "?")
         self.metacognition.end_trace(
-            trace, response or "",
-            provider=provider, success=bool(response),
+            trace,
+            response or "",
+            provider=provider,
+            success=bool(response),
         )
 
         if response:
@@ -672,7 +691,8 @@ class App:
                 tg.create_task(self._consciousness_loop(), name="consciousness")
                 if self._sound_detector:
                     tg.create_task(
-                        self._sound_detection_loop(), name="sound_detect",
+                        self._sound_detection_loop(),
+                        name="sound_detect",
                     )
                 if self._metrics:
                     tg.create_task(self._metrics.run(), name="metrics")
@@ -680,11 +700,13 @@ class App:
                     tg.create_task(self.viewer.run(), name="viewer")
                 if self._phone_bridge:
                     tg.create_task(
-                        self._phone_monitor_loop(), name="phone_monitor",
+                        self._phone_monitor_loop(),
+                        name="phone_monitor",
                     )
                 # v0.9.0 — Multi-platform channels
                 tg.create_task(
-                    self.channel_manager.run(), name="channels",
+                    self.channel_manager.run(),
+                    name="channels",
                 )
         finally:
             # Graceful shutdown — persist state
@@ -733,8 +755,10 @@ class App:
             jpeg = self.vision.get_frame_jpeg()
             if jpeg is not None:
                 from enton.cognition.prompts import SCENE_DESCRIBE_SYSTEM
+
                 response = await self.brain.describe_scene(
-                    jpeg, system=SCENE_DESCRIBE_SYSTEM,
+                    jpeg,
+                    system=SCENE_DESCRIBE_SYSTEM,
                 )
                 if response:
                     await self.voice.say(response)
@@ -750,9 +774,11 @@ class App:
             if "Nenhum objeto" in scene_desc:
                 continue
             from enton.cognition.prompts import SCENE_FALLBACK_PROMPT, SCENE_FALLBACK_SYSTEM
+
             prompt = SCENE_FALLBACK_PROMPT.format(scene_desc=scene_desc)
             response = await self.brain.think(
-                prompt, system=SCENE_FALLBACK_SYSTEM,
+                prompt,
+                system=SCENE_FALLBACK_SYSTEM,
             )
             if response:
                 await self.voice.say(response)
@@ -799,12 +825,14 @@ class App:
                     continue
 
                 results = await self._sound_detector.classify_async(
-                    audio, sample_rate,
+                    audio,
+                    sample_rate,
                 )
                 for r in results:
                     logger.info(
                         "Sound event: %s (%.0f%%)",
-                        r.label, r.confidence * 100,
+                        r.label,
+                        r.confidence * 100,
                     )
                     await self.bus.emit(
                         SoundEvent(
@@ -851,16 +879,20 @@ class App:
                 jpeg = self.vision.get_frame_jpeg()
                 if jpeg is not None:
                     from enton.cognition.prompts import DESIRE_OBSERVE_SYSTEM
+
                     desc = await self.brain.describe_scene(
-                        jpeg, system=DESIRE_OBSERVE_SYSTEM,
+                        jpeg,
+                        system=DESIRE_OBSERVE_SYSTEM,
                     )
                     if desc:
                         await self.voice.say(desc)
 
             elif desire.name == "learn":
                 from enton.cognition.prompts import DESIRE_LEARN_PROMPT, DESIRE_LEARN_SYSTEM
+
                 response = await self.brain.think_agent(
-                    DESIRE_LEARN_PROMPT, system=DESIRE_LEARN_SYSTEM,
+                    DESIRE_LEARN_PROMPT,
+                    system=DESIRE_LEARN_SYSTEM,
                 )
                 if response:
                     await self.voice.say(response)
@@ -871,6 +903,7 @@ class App:
 
             elif desire.name == "optimize":
                 from enton.cognition.prompts import DESIRE_OPTIMIZE_PROMPT
+
                 response = await self.brain.think_agent(DESIRE_OPTIMIZE_PROMPT)
                 if response:
                     await self.voice.say(response)
@@ -883,25 +916,31 @@ class App:
 
             elif desire.name == "create":
                 from enton.cognition.prompts import DESIRE_CREATE_PROMPT, DESIRE_CREATE_SYSTEM
+
                 self.desires.on_creation()
                 response = await self.brain.think_agent(
-                    DESIRE_CREATE_PROMPT, system=DESIRE_CREATE_SYSTEM,
+                    DESIRE_CREATE_PROMPT,
+                    system=DESIRE_CREATE_SYSTEM,
                 )
                 if response:
                     await self.voice.say(response)
 
             elif desire.name == "explore":
                 from enton.cognition.prompts import DESIRE_EXPLORE_PROMPT, DESIRE_EXPLORE_SYSTEM
+
                 response = await self.brain.think_agent(
-                    DESIRE_EXPLORE_PROMPT, system=DESIRE_EXPLORE_SYSTEM,
+                    DESIRE_EXPLORE_PROMPT,
+                    system=DESIRE_EXPLORE_SYSTEM,
                 )
                 if response:
                     await self.voice.say(response)
 
             elif desire.name == "play":
                 from enton.cognition.prompts import DESIRE_PLAY_PROMPT, DESIRE_PLAY_SYSTEM
+
                 response = await self.brain.think_agent(
-                    DESIRE_PLAY_PROMPT, system=DESIRE_PLAY_SYSTEM,
+                    DESIRE_PLAY_PROMPT,
+                    system=DESIRE_PLAY_SYSTEM,
                 )
                 if response:
                     await self.voice.say(response)
@@ -947,7 +986,7 @@ class App:
     async def _consciousness_loop(self) -> None:
         """GWT Loop: Sensation -> Perception Update -> Global Broadcast -> Action."""
         await asyncio.sleep(5)  # Warmup
-        
+
         while True:
             # 1. Sensation & Perception Update
             user_present = self._person_present
@@ -956,23 +995,23 @@ class App:
                 if self.vision.last_activities:
                     activity_level = "medium"
                 if len(self.vision.last_detections) > 3:
-                     activity_level = "high"
-            
+                    activity_level = "high"
+
             state = WorldState(
                 timestamp=time.time(),
                 user_present=user_present,
                 activity_level=activity_level,
             )
-            
+
             # Feed perception module (updates prediction engine internally)
             surprise = self.perception_module.update_state(state)
-            
+
             # Legacy FPS Control (Reacting to raw surprise)
             self._adjust_fps(surprise)
-            
+
             # 2. Global Workspace Cycle (Competition & Broadcast)
             thought = self.workspace.tick()
-            
+
             # 3. Mathematical Sentience: Attention Resource Allocation
             # Calculate attention based on surprise using a logistic function
             # f(x) = L / (1 + e^(-k(x - x0)))
@@ -980,44 +1019,45 @@ class App:
             k = 10.0  # Steepness of the curve
             x0 = 0.5  # Midpoint (neutral surprise)
             L = 60.0  # Max FPS (resource limit)
-            
+
             attention_energy = L / (1 + math.exp(-k * (surprise - x0)))
             target_fps = max(1.0, attention_energy)
-            
+
             # Smooth transition for "biological" feel
             current_fps = getattr(self, "_current_fps", 5.0)
             self._current_fps = current_fps * 0.9 + target_fps * 0.1
-            
+
             # Apply to vision system (ocular motor control)
             self.vision.set_target_fps(self._current_fps)
-            
+
             # 4. Action Dispatch (Module outputs that won the workspace)
             if thought:
                 # Log the "Stream of Consciousness" for introspection
                 logger.info(
                     "CONSCIOUS THOUGHT: %s (Saliency: %.2f)",
-                    thought.content, thought.saliency,
+                    thought.content,
+                    thought.saliency,
                 )
                 await self._handle_conscious_thought(thought)
-            
+
             await asyncio.sleep(1.0 / self._current_fps)
 
     def _adjust_fps(self, surprise: float) -> None:
         """Optimizes vision processing based on surprise level."""
         if surprise < 0.2:
-            target_fps = 1.0 # Bored -> Save energy
+            target_fps = 1.0  # Bored -> Save energy
         elif surprise > 0.8:
-            target_fps = 30.0 # Alert -> Max details
+            target_fps = 30.0  # Alert -> Max details
         else:
-            target_fps = 10.0 # Normal
-            
+            target_fps = 10.0  # Normal
+
         self.vision.set_target_fps(target_fps)
 
     async def _handle_conscious_thought(self, msg: BroadcastMessage) -> None:
         """Act on the winning broadcast message."""
         # Log thought to HUD (if it's not spammy vision data)
         if msg.modality != "vision":
-             self._push_thought(f"[{msg.source}] {msg.content}")
+            self._push_thought(f"[{msg.source}] {msg.content}")
 
         # Intentions -> Actions
         if msg.modality == "intention" and msg.source == "executive":
@@ -1025,7 +1065,7 @@ class App:
             # In this case, GitHubModule listens to them, so we don't need to do much here
             # other than maybe vocalize if it's important.
             pass
-            
+
         elif msg.modality == "memory_recall" and msg.source == "github_skill":
             # Learned something!
             summary = msg.metadata.get("full_text", "")
@@ -1035,13 +1075,12 @@ class App:
                 await self.knowledge_crawler.learn_text(
                     summary, source=f"github_study:{msg.metadata.get('topic', 'unknown')}"
                 )
-                
+
                 # 2. Poetic Vocalization
                 from enton.cognition.prompts import CONSCIOUSNESS_LEARN_VOCALIZE
+
                 topic = msg.metadata.get("topic", "o universo")
-                await self.voice.say(
-                    CONSCIOUSNESS_LEARN_VOCALIZE.format(topic=topic)
-                )
+                await self.voice.say(CONSCIOUSNESS_LEARN_VOCALIZE.format(topic=topic))
 
     # ------------------------------------------------------------------
     # Phone Monitor (OpenClaw-inspired — Enton lives on the phone)
@@ -1098,29 +1137,29 @@ class App:
 
                 # --- New notifications ---
                 notifs = await bridge.notifications(10)
-                current_set = {
-                    f"{n['app']}:{n['title']}" for n in notifs
-                }
+                current_set = {f"{n['app']}:{n['title']}" for n in notifs}
                 new_notifs = current_set - last_notif_set
                 last_notif_set = current_set
 
                 if new_notifs and not self.voice.is_speaking:
                     # Filter interesting notifications
                     important_apps = {
-                        "com.whatsapp", "org.telegram",
-                        "com.google.android.gm", "com.android.phone",
+                        "com.whatsapp",
+                        "org.telegram",
+                        "com.google.android.gm",
+                        "com.android.phone",
                     }
                     for n in notifs:
                         key = f"{n['app']}:{n['title']}"
-                        if key in new_notifs and any(
-                            app in n["app"] for app in important_apps
-                        ):
+                        if key in new_notifs and any(app in n["app"] for app in important_apps):
                             self._push_thought(
                                 f"[phone] {n['app']}: {n['title']}",
                             )
                             logger.info(
                                 "Phone notification: [%s] %s: %s",
-                                n["app"], n["title"], n["text"][:50],
+                                n["app"],
+                                n["title"],
+                                n["text"][:50],
                             )
 
                 # --- Location tracking ---
@@ -1133,11 +1172,9 @@ class App:
 
                 # --- Memory: store phone state ---
                 self.memory.learn_about_user(
-                    f"Celular: {info.get('battery', '?')} bat, "
-                    f"GPS {coords}, {len(notifs)} notif",
+                    f"Celular: {info.get('battery', '?')} bat, GPS {coords}, {len(notifs)} notif",
                 )
 
             except Exception:
                 logger.debug("Phone monitor error", exc_info=True)
                 await asyncio.sleep(30)
-

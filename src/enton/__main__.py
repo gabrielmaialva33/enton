@@ -16,15 +16,15 @@ except ImportError:
 def main() -> None:
     if uvloop:
         asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-        
+
     parser = argparse.ArgumentParser(description="Enton — AI Robot Assistant")
     parser.add_argument("--webcam", action="store_true", help="Use local webcam instead of RTSP")
     parser.add_argument(
-        "--viewer", action="store_true",
+        "--viewer",
+        action="store_true",
         help="Open live vision window with HUD overlay",
     )
     args = parser.parse_args()
-
 
     # Force webcam if requested (before Settings reads .env)
     if args.webcam:
@@ -36,7 +36,6 @@ def main() -> None:
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
     os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "1")
 
-
     torch.set_num_threads(1)
 
     logging.basicConfig(
@@ -46,6 +45,7 @@ def main() -> None:
     )
 
     from enton.app import App
+
     app = App(viewer=args.viewer)
     try:
         asyncio.run(app.run())

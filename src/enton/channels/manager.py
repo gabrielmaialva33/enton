@@ -77,7 +77,9 @@ class ChannelManager:
         msg = event.message
         logger.info(
             "[%s] %s: %s",
-            msg.channel, msg.sender_name, msg.text[:80],
+            msg.channel,
+            msg.sender_name,
+            msg.text[:80],
         )
 
         from enton.cognition.prompts import CHANNEL_MESSAGE_SYSTEM
@@ -91,11 +93,13 @@ class ChannelManager:
         # Use VLM if message has image
         if msg.has_media and msg.media:
             response = await self.brain.describe_scene(
-                msg.media, system=system,
+                msg.media,
+                system=system,
             )
         else:
             response = await self.brain.think_agent(
-                msg.text, system=system,
+                msg.text,
+                system=system,
             )
 
         # Send response back through the channel

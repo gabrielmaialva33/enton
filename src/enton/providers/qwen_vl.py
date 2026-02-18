@@ -4,6 +4,7 @@ On-demand loading: the model is loaded on first call and kept in VRAM.
 Use this when Ollama is not available or you want direct GPU control.
 For Ollama-based VLM, LocalLLM.generate_with_image() handles it.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -85,7 +86,9 @@ class QwenVL:
         ]
 
         text = self._processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True,
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
         )
         image_inputs, video_inputs = process_vision_info(messages)
         inputs = self._processor(
@@ -103,9 +106,10 @@ class QwenVL:
             )
 
         # Decode only the generated tokens (not the prompt)
-        generated_ids = output_ids[:, inputs.input_ids.shape[1]:]
+        generated_ids = output_ids[:, inputs.input_ids.shape[1] :]
         result = self._processor.batch_decode(
-            generated_ids, skip_special_tokens=True,
+            generated_ids,
+            skip_special_tokens=True,
         )[0]
         return result.strip()
 
@@ -119,5 +123,8 @@ class QwenVL:
         """Async VLM inference — runs in thread executor."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
-            None, self.describe_sync, prompt, image,
+            None,
+            self.describe_sync,
+            prompt,
+            image,
         )

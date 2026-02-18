@@ -22,5 +22,3 @@ class TTSProvider(Protocol):
     async def synthesize(self, text: str) -> np.ndarray: ...
     async def synthesize_stream(self, text: str) -> AsyncIterator[np.ndarray]:
         yield np.array([])  # pragma: no cover
-
-

@@ -8,6 +8,7 @@ Wraps `claude -p` (headless mode) for:
 Requires: claude CLI installed (`npm i -g @anthropic-ai/claude-code`)
 Auth: Uses existing ANTHROPIC_API_KEY from environment.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -145,11 +146,15 @@ class ClaudeCodeProvider:
 
         cmd = [
             self._binary,
-            "-p", prompt,
-            "--output-format", "json",
+            "-p",
+            prompt,
+            "--output-format",
+            "json",
             "--no-session-persistence",
-            "--model", self._model,
-            "--max-turns", str(self._max_turns),
+            "--model",
+            self._model,
+            "--max-turns",
+            str(self._max_turns),
         ]
 
         effective_system = system or self._system
@@ -169,7 +174,8 @@ class ClaudeCodeProvider:
                 cwd=working_dir,
             )
             stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=env_timeout,
+                proc.communicate(),
+                timeout=env_timeout,
             )
 
             if proc.returncode != 0:

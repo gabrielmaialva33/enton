@@ -6,6 +6,7 @@ system ``adb`` binary.
 
 Requires: ADB installed (``apt install adb`` or Android SDK platform-tools).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -72,7 +73,10 @@ class AndroidBridge:
     # ------------------------------------------------------------------
 
     async def _exec(
-        self, *args: str, timeout: float | None = None, raw: bool = False,
+        self,
+        *args: str,
+        timeout: float | None = None,
+        raw: bool = False,
     ) -> tuple[bytes | str, str, int]:
         """Run an ADB command and return (stdout, stderr, returncode).
 
@@ -89,7 +93,8 @@ class AndroidBridge:
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout or self._timeout,
+            proc.communicate(),
+            timeout=timeout or self._timeout,
         )
         err = stderr.decode(errors="replace").strip()
         if raw:
@@ -233,11 +238,17 @@ class AndroidBridge:
         return str(out) or "ok"
 
     async def swipe(
-        self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300,
+        self,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        duration_ms: int = 300,
     ) -> str:
         """Swipe from (x1,y1) to (x2,y2)."""
         out, _, _ = await self._exec(
-            "shell", f"input swipe {x1} {y1} {x2} {y2} {duration_ms}",
+            "shell",
+            f"input swipe {x1} {y1} {x2} {y2} {duration_ms}",
         )
         return str(out) or "ok"
 
@@ -278,7 +289,8 @@ class AndroidBridge:
     async def open_app(self, package: str) -> str:
         """Launch an app by package name."""
         out, _, _ = await self._exec(
-            "shell", f"monkey -p {package} -c android.intent.category.LAUNCHER 1",
+            "shell",
+            f"monkey -p {package} -c android.intent.category.LAUNCHER 1",
         )
         return str(out) or "ok"
 
@@ -289,7 +301,8 @@ class AndroidBridge:
     async def open_url(self, url: str) -> str:
         """Open a URL in the device browser."""
         out, _, _ = await self._exec(
-            "shell", f"am start -a android.intent.action.VIEW -d '{url}'",
+            "shell",
+            f"am start -a android.intent.action.VIEW -d '{url}'",
         )
         return str(out) or "ok"
 
@@ -312,16 +325,20 @@ class AndroidBridge:
     # ------------------------------------------------------------------
 
     async def content_query(
-        self, uri: str, projection: str = "", where: str = "", sort: str = "",
+        self,
+        uri: str,
+        projection: str = "",
+        where: str = "",
+        sort: str = "",
     ) -> str:
         """Query an Android content provider via `adb shell content query`."""
         cmd = f"content query --uri {uri}"
         if projection:
             cmd += f" --projection {projection}"
         if where:
-            cmd += f" --where \"{where}\""
+            cmd += f' --where "{where}"'
         if sort:
-            cmd += f" --sort \"{sort}\""
+            cmd += f' --sort "{sort}"'
         out, err, rc = await self._exec("shell", cmd, timeout=20.0)
         if rc != 0 and err:
             return f"ERRO: {err}"
@@ -392,12 +409,14 @@ class AndroidBridge:
             call_type = type_map.get(_extract_field(line, "type"), "outro")
             duration = _extract_field(line, "duration")
             if number:
-                calls.append({
-                    "number": number,
-                    "name": name or "Desconhecido",
-                    "type": call_type,
-                    "duration": f"{duration}s",
-                })
+                calls.append(
+                    {
+                        "number": number,
+                        "name": name or "Desconhecido",
+                        "type": call_type,
+                        "duration": f"{duration}s",
+                    }
+                )
             if len(calls) >= limit:
                 break
         return calls
@@ -409,7 +428,9 @@ class AndroidBridge:
     async def notifications(self, limit: int = 15) -> list[dict[str, str]]:
         """Get current notifications from the notification bar."""
         out, _, _ = await self._exec(
-            "shell", "dumpsys notification --noredact", timeout=20.0,
+            "shell",
+            "dumpsys notification --noredact",
+            timeout=20.0,
         )
         notifs: list[dict[str, str]] = []
         lines = str(out).splitlines()
@@ -440,7 +461,8 @@ class AndroidBridge:
         raw = str(out)
         # GPS status
         gps_status, _, _ = await self._exec(
-            "shell", "settings get secure location_providers_allowed",
+            "shell",
+            "settings get secure location_providers_allowed",
         )
         result["providers"] = str(gps_status) or "off"
         # Parse last known locations
@@ -461,7 +483,8 @@ class AndroidBridge:
                     # Strategy: find the split between lat and lon
                     # A negative lon after lat means pattern: num,num,-num,num
                     m = re.match(
-                        r"(-?\d+[.,]\d+),(-?\d+[.,]\d+)", coords,
+                        r"(-?\d+[.,]\d+),(-?\d+[.,]\d+)",
+                        coords,
                     )
                     if m:
                         lat_s = m.group(1).replace(",", ".")
@@ -483,7 +506,8 @@ class AndroidBridge:
             info["wifi_ip"] = ip
         # WiFi SSID
         wifi_out, _, _ = await self._exec(
-            "shell", "dumpsys wifi | grep 'mWifiInfo'",
+            "shell",
+            "dumpsys wifi | grep 'mWifiInfo'",
         )
         wifi_str = str(wifi_out)
         if "SSID:" in wifi_str:
@@ -494,14 +518,16 @@ class AndroidBridge:
             info["link_speed"] = speed
         # Connection type
         conn_out, _, _ = await self._exec(
-            "shell", "dumpsys connectivity | grep 'ActiveDefaultNetwork'",
+            "shell",
+            "dumpsys connectivity | grep 'ActiveDefaultNetwork'",
         )
         conn_str = str(conn_out)
         if conn_str:
             info["connection"] = conn_str.strip()
         # Mobile data
         mobile_out, _, _ = await self._exec(
-            "shell", "settings get global mobile_data",
+            "shell",
+            "settings get global mobile_data",
         )
         info["mobile_data"] = "on" if str(mobile_out).strip() == "1" else "off"
         return info
@@ -514,7 +540,8 @@ class AndroidBridge:
         """Read clipboard text (Android 10+, may need grant)."""
         # Try via service call (varies by Android version)
         out, _, _ = await self._exec(
-            "shell", "am broadcast -a clipper.get 2>/dev/null || echo ''",
+            "shell",
+            "am broadcast -a clipper.get 2>/dev/null || echo ''",
         )
         return str(out).strip()
 
@@ -522,7 +549,8 @@ class AndroidBridge:
         """Set clipboard text via input command hack."""
         safe = text.replace("'", "'\\''")
         out, _, _ = await self._exec(
-            "shell", f"am broadcast -a clipper.set -e text '{safe}' 2>/dev/null"
+            "shell",
+            f"am broadcast -a clipper.set -e text '{safe}' 2>/dev/null"
             " || echo 'clipboard set requires Clipper app'",
         )
         return str(out).strip()

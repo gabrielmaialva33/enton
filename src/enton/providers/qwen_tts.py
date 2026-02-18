@@ -6,6 +6,7 @@ customizable voice design via natural language instructions.
 Requires: pip install qwen-tts (pulls torch automatically)
 VRAM: ~5GB for 0.6B model, ~7GB for 1.7B model
 """
+
 from __future__ import annotations
 
 import asyncio

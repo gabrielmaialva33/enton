@@ -5,6 +5,7 @@ No API key required, uses Microsoft's free neural voice API.
 
 Requires: pip install edge-tts
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -46,7 +47,8 @@ class EdgeTTS:
 
         # Decode MP3 → numpy float32
         audio, sr = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: sf.read(io.BytesIO(mp3_bytes)),
+            None,
+            lambda: sf.read(io.BytesIO(mp3_bytes)),
         )
         self.sample_rate = sr
 

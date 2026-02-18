@@ -9,6 +9,7 @@ Wraps `gemini -p` (headless mode) for:
 Requires: gemini CLI installed (`npm i -g @google/gemini-cli`)
 Auth: Uses existing GEMINI_API_KEY or Google OAuth from environment.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -159,9 +160,12 @@ class GeminiCliProvider:
 
         cmd = [
             self._binary,
-            "-p", prompt,
-            "--output-format", "json",
-            "-m", self._model,
+            "-p",
+            prompt,
+            "--output-format",
+            "json",
+            "-m",
+            self._model,
         ]
 
         if self._yolo:
@@ -181,7 +185,8 @@ class GeminiCliProvider:
                 env=env_overrides or None,
             )
             stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=env_timeout,
+                proc.communicate(),
+                timeout=env_timeout,
             )
 
             raw = stdout.decode(errors="replace")

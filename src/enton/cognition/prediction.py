@@ -43,17 +43,7 @@ class WorldState:
         return dt.strftime("%a-%H")
 
 
-class WorldModel:
-    """Statistical model of the world (User habits & environment patterns).
-
-    Uses a simple frequency table mapped by (Weekday, Hour) to predict
-    probability of user presence and activity.
-    """
-
-
 from enton.core.config import settings
-
-# ...
 
 
 class WorldModel:

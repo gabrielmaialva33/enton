@@ -60,7 +60,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["ruff>=0.9", "pytest>=8.0", "pytest-asyncio>=0.25"]
+dev = ["ruff>=0.9", "pytest>=8.0", "pytest-asyncio>=0.25", "mypy>=1.0"]
 
 [project.scripts]
 enton = "enton.__main__:main"
@@ -81,10 +81,33 @@ select = [
     "E", "F", "I", "N", "UP", "B", "SIM", "TCH", "PL", "RUF", "A", "C4", "ISC", "LOG"
 ]
 ignore = [
-    "E501",    # Line too long (handled by formatter mostly, but strict limit can be annoying)
-    "PLR2004", # Magic value used in comparison
-    "PLR0913", # Too many arguments in function definition (refactor later)
-    "PLC0415", # Import should be at top-level (used for lazy loading/circular dep avoidance)
+    "E402",    # module-level import not at top (lazy/conditional imports)
+    "E501",    # line too long (formatter handles most)
+    "E722",    # bare except
+    "N806",    # variable naming (uppercase in functions)
+    "PLR0911", # too many return statements
+    "PLR0912", # too many branches
+    "PLR0913", # too many arguments
+    "PLR0915", # too many statements
+    "PLR2004", # magic value comparison
+    "PLC0415", # conditional imports
+    "PLW0603", # global statement
+    "PLW1510", # subprocess.run without check
+    "PLW2901", # loop variable overwritten
+    "RUF001",  # ambiguous unicode (PT-BR strings)
+    "RUF002",  # ambiguous unicode docstring
+    "RUF003",  # ambiguous unicode comment
+    "RUF006",  # asyncio fire-and-forget
+    "RUF012",  # mutable class default
+    "RUF013",  # implicit Optional
+    "RUF059",  # unused variables (prefixed _)
+    "SIM102",  # collapsible if
+    "SIM105",  # use contextlib.suppress
+    "SIM108",  # ternary instead of if-else
+    "TC001",   # type-checking import (stdlib)
+    "TC002",   # type-checking import (3rd party)
+    "TC003",   # type-checking import (stdlib Path etc)
+    "UP042",   # class inheritance
 ]
 
 [tool.mypy]

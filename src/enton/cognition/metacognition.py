@@ -232,7 +232,7 @@ class MetaCognitiveEngine:
         recent = list(self._traces)[-10:]
         errors = sum(1 for t in recent if not t.success)
         best = self.best_strategy()
-        providers_used = set(t.provider for t in recent if t.provider)
+        providers_used = {t.provider for t in recent if t.provider}
 
         parts = [
             f"Calls: {self._total_calls} total",

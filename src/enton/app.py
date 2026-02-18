@@ -1165,7 +1165,7 @@ class App:
                 # --- Location tracking ---
                 loc = await bridge.location()
                 coords = f"{loc.get('lat', '')},{loc.get('lon', '')}"
-                if coords != ",," and coords != last_location:
+                if coords not in (",,", last_location):
                     if last_location:
                         logger.info("Phone location changed: %s", coords)
                     last_location = coords

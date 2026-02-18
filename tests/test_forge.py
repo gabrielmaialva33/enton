@@ -1,4 +1,5 @@
 """Tests for ForgeEngine and ForgeTools."""
+
 from __future__ import annotations
 
 import json
@@ -95,7 +96,10 @@ async def test_sandbox_catches_error(forge):
 @pytest.mark.asyncio()
 async def test_sandbox_catches_syntax_error(forge):
     passed, _ = await forge._sandbox_test(
-        "broken", "x: str", "return x +", 'broken("hi")',
+        "broken",
+        "x: str",
+        "return x +",
+        'broken("hi")',
     )
     assert passed is False
 
@@ -103,10 +107,13 @@ async def test_sandbox_catches_syntax_error(forge):
 @pytest.mark.asyncio()
 async def test_sandbox_timeout(tmp_path, mock_brain):
     forge = ForgeEngine(
-        brain=mock_brain, skills_dir=tmp_path, sandbox_timeout=1.0,
+        brain=mock_brain,
+        skills_dir=tmp_path,
+        sandbox_timeout=1.0,
     )
     passed, output = await forge._sandbox_test(
-        "slow", "x: str",
+        "slow",
+        "x: str",
         "import time; time.sleep(10); return x",
         'slow("hi")',
     )
@@ -230,8 +237,11 @@ def test_forge_tools_list_empty(forge_tools, mock_registry):
 def test_forge_tools_list_with_skills(forge_tools, mock_registry):
     mock_registry.loaded_skills = {
         "greet": SkillMetadata(
-            name="greet", file_path="/tmp/g.py",
-            description="Greeting", success_count=5, failure_count=1,
+            name="greet",
+            file_path="/tmp/g.py",
+            description="Greeting",
+            success_count=5,
+            failure_count=1,
         ),
     }
     result = forge_tools.list_dynamic_tools()

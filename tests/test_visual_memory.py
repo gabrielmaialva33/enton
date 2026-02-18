@@ -1,4 +1,5 @@
 """Tests for VisualMemory."""
+
 from __future__ import annotations
 
 import time
@@ -16,8 +17,10 @@ def _fake_frame(h: int = 480, w: int = 640) -> np.ndarray:
 
 def test_visual_episode_creation():
     ep = VisualEpisode(
-        timestamp=1.0, camera_id="main",
-        detections=["person", "cup"], thumbnail_path="/tmp/t.jpg",
+        timestamp=1.0,
+        camera_id="main",
+        detections=["person", "cup"],
+        thumbnail_path="/tmp/t.jpg",
     )
     assert ep.camera_id == "main"
     assert "person" in ep.detections
@@ -125,8 +128,10 @@ async def test_search_with_results():
     mock_client = MagicMock()
     mock_result = MagicMock()
     mock_result.payload = {
-        "timestamp": time.time(), "camera_id": "main",
-        "detections": ["cup"], "thumbnail_path": "/tmp/t.jpg",
+        "timestamp": time.time(),
+        "camera_id": "main",
+        "detections": ["cup"],
+        "thumbnail_path": "/tmp/t.jpg",
     }
     mock_result.score = 0.9
     mock_response = MagicMock()

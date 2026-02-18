@@ -1,4 +1,5 @@
 """Tests for MemoryTiers."""
+
 from __future__ import annotations
 
 import time
@@ -23,8 +24,10 @@ def _make_memory():
 
 def test_object_location_creation():
     loc = ObjectLocation(
-        label="cup", camera_id="main",
-        bbox=(10, 20, 50, 60), confidence=0.9,
+        label="cup",
+        camera_id="main",
+        bbox=(10, 20, 50, 60),
+        confidence=0.9,
     )
     assert loc.label == "cup"
     assert loc.confidence == 0.9
@@ -32,7 +35,10 @@ def test_object_location_creation():
 
 def test_temporal_pattern_creation():
     p = TemporalPattern(
-        description="person appears often", hour=14, tag="person", count=20,
+        description="person appears often",
+        hour=14,
+        tag="person",
+        count=20,
     )
     assert p.hour == 14
     assert p.count == 20
@@ -133,10 +139,16 @@ async def test_search_episodic():
 @pytest.mark.asyncio()
 async def test_search_with_visual():
     vm = MagicMock()
-    vm.search = AsyncMock(return_value=[{
-        "timestamp": time.time(), "camera_id": "main",
-        "detections": ["cup"], "score": 0.8,
-    }])
+    vm.search = AsyncMock(
+        return_value=[
+            {
+                "timestamp": time.time(),
+                "camera_id": "main",
+                "detections": ["cup"],
+                "score": 0.8,
+            }
+        ]
+    )
     mt = MemoryTiers(memory=_make_memory(), visual_memory=vm)
     results = await mt.search("cup")
     visual = [r for r in results if "Visual" in r.content]
@@ -146,9 +158,16 @@ async def test_search_with_visual():
 @pytest.mark.asyncio()
 async def test_search_with_knowledge():
     kc = MagicMock()
-    kc.search = AsyncMock(return_value=[{
-        "subject": "Python", "predicate": "is", "obj": "fast", "score": 0.7,
-    }])
+    kc.search = AsyncMock(
+        return_value=[
+            {
+                "subject": "Python",
+                "predicate": "is",
+                "obj": "fast",
+                "score": 0.7,
+            }
+        ]
+    )
     mt = MemoryTiers(memory=_make_memory(), knowledge=kc)
     results = await mt.search("Python speed")
     semantic = [r for r in results if r.tier == "semantic"]

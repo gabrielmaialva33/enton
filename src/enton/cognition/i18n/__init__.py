@@ -22,7 +22,7 @@ Uso:
 from __future__ import annotations
 
 import random
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -30,7 +30,7 @@ from typing import Any
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
-class Locale(str, Enum):
+class Locale(StrEnum):
     """Idiomas suportados."""
 
     PT_BR = "pt-BR"
@@ -38,7 +38,7 @@ class Locale(str, Enum):
     ZH_CN = "zh-CN"
 
 
-class Dialect(str, Enum):
+class Dialect(StrEnum):
     """Dialetos regionais brasileiros."""
 
     SP = "sp"  # São Paulo (default)

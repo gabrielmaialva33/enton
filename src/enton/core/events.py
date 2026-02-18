@@ -112,6 +112,29 @@ class ChannelMessageEvent(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class HumorEvent(Event):
+    """Emitted when sarcasm or humor is detected cross-modally."""
+
+    is_sarcastic: bool = False
+    confidence: float = 0.0
+    reason: str = ""
+    text: str = ""
+    face_emotion: str = ""
+    text_sentiment: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ActionEvent(Event):
+    """Emitted when VideoMAE recognizes a temporal action."""
+
+    action: str = ""
+    action_en: str = ""
+    confidence: float = 0.0
+    person_index: int = 0
+    camera_id: str = "main"
+
+
+@dataclass(frozen=True, slots=True)
 class SystemEvent(Event):
     kind: str = ""  # startup, shutdown, error, camera_lost, etc.
     detail: str = ""

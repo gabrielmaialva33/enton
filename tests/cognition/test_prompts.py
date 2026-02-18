@@ -95,6 +95,7 @@ ALL_STRING_CONSTANTS = [
 #  I. Type and existence checks
 # ---------------------------------------------------------------------------
 
+
 class TestExportedTypes:
     def test_system_prompt_is_str(self):
         assert isinstance(SYSTEM_PROMPT, str)
@@ -125,6 +126,7 @@ class TestExportedTypes:
 #  II. SYSTEM_PROMPT placeholders
 # ---------------------------------------------------------------------------
 
+
 class TestSystemPrompt:
     def test_contains_self_state_placeholder(self):
         assert "{self_state}" in SYSTEM_PROMPT
@@ -150,6 +152,7 @@ class TestSystemPrompt:
 #  III. MONOLOGUE_PROMPT placeholders
 # ---------------------------------------------------------------------------
 
+
 class TestMonologuePrompt:
     REQUIRED_PLACEHOLDERS = [
         "vision_summary",
@@ -170,6 +173,7 @@ class TestMonologuePrompt:
 #  IV. REACTION_TEMPLATES
 # ---------------------------------------------------------------------------
 
+
 class TestReactionTemplates:
     REQUIRED_CATEGORIES = [
         "person_appeared",
@@ -188,9 +192,7 @@ class TestReactionTemplates:
 
     @pytest.mark.parametrize("category", REQUIRED_CATEGORIES)
     def test_has_required_category(self, category):
-        assert category in REACTION_TEMPLATES, (
-            f"REACTION_TEMPLATES missing category: {category}"
-        )
+        assert category in REACTION_TEMPLATES, f"REACTION_TEMPLATES missing category: {category}"
 
     @pytest.mark.parametrize("category", REQUIRED_CATEGORIES)
     def test_category_is_nonempty_list(self, category):
@@ -201,14 +203,13 @@ class TestReactionTemplates:
     def test_all_templates_are_strings(self):
         for category, templates in REACTION_TEMPLATES.items():
             for t in templates:
-                assert isinstance(t, str), (
-                    f"Non-string template in '{category}': {t!r}"
-                )
+                assert isinstance(t, str), f"Non-string template in '{category}': {t!r}"
 
 
 # ---------------------------------------------------------------------------
 #  V. EMPATHY_TONES
 # ---------------------------------------------------------------------------
+
 
 class TestEmpathyTones:
     def test_has_at_least_3_entries(self):
@@ -225,6 +226,7 @@ class TestEmpathyTones:
 #  VI. DESIRE_PROMPTS — all 10 desire categories (9 in current source)
 # ---------------------------------------------------------------------------
 
+
 class TestDesirePrompts:
     EXPECTED_DESIRES = [
         "socialize",
@@ -240,9 +242,7 @@ class TestDesirePrompts:
 
     @pytest.mark.parametrize("desire", EXPECTED_DESIRES)
     def test_has_desire_category(self, desire):
-        assert desire in DESIRE_PROMPTS, (
-            f"DESIRE_PROMPTS missing desire: {desire}"
-        )
+        assert desire in DESIRE_PROMPTS, f"DESIRE_PROMPTS missing desire: {desire}"
 
     @pytest.mark.parametrize("desire", EXPECTED_DESIRES)
     def test_desire_is_nonempty_list(self, desire):
@@ -251,7 +251,7 @@ class TestDesirePrompts:
         assert len(prompts) > 0
 
     def test_all_desire_prompts_are_strings(self):
-        for desire, prompts in DESIRE_PROMPTS.items():
+        for _desire, prompts in DESIRE_PROMPTS.items():
             for p in prompts:
                 assert isinstance(p, str)
                 assert len(p) > 0
@@ -260,6 +260,7 @@ class TestDesirePrompts:
 # ---------------------------------------------------------------------------
 #  VII. Format placeholder smoke tests
 # ---------------------------------------------------------------------------
+
 
 class TestFormatPlaceholders:
     def test_gpu_hot_with_temp(self):
@@ -313,6 +314,7 @@ class TestFormatPlaceholders:
 #  VIII. Bulk non-empty and no TODO/FIXME checks
 # ---------------------------------------------------------------------------
 
+
 class TestBulkValidation:
     # Match standalone TODO/FIXME markers (not substrings like "TODOS")
     _TODO_RE = re.compile(r"\bTODO\b", re.IGNORECASE)
@@ -325,38 +327,22 @@ class TestBulkValidation:
 
     @pytest.mark.parametrize("prompt", ALL_STRING_CONSTANTS)
     def test_no_todo_or_fixme(self, prompt):
-        assert not self._TODO_RE.search(prompt), (
-            f"Found TODO marker in prompt: {prompt[:80]}..."
-        )
-        assert not self._FIXME_RE.search(prompt), (
-            f"Found FIXME marker in prompt: {prompt[:80]}..."
-        )
+        assert not self._TODO_RE.search(prompt), f"Found TODO marker in prompt: {prompt[:80]}..."
+        assert not self._FIXME_RE.search(prompt), f"Found FIXME marker in prompt: {prompt[:80]}..."
 
     def test_reaction_templates_no_todo(self):
         for category, templates in REACTION_TEMPLATES.items():
             for t in templates:
-                assert not self._TODO_RE.search(t), (
-                    f"Found TODO in '{category}': {t[:60]}"
-                )
-                assert not self._FIXME_RE.search(t), (
-                    f"Found FIXME in '{category}': {t[:60]}"
-                )
+                assert not self._TODO_RE.search(t), f"Found TODO in '{category}': {t[:60]}"
+                assert not self._FIXME_RE.search(t), f"Found FIXME in '{category}': {t[:60]}"
 
     def test_desire_prompts_no_todo(self):
         for desire, prompts in DESIRE_PROMPTS.items():
             for p in prompts:
-                assert not self._TODO_RE.search(p), (
-                    f"Found TODO in desire '{desire}': {p[:60]}"
-                )
-                assert not self._FIXME_RE.search(p), (
-                    f"Found FIXME in desire '{desire}': {p[:60]}"
-                )
+                assert not self._TODO_RE.search(p), f"Found TODO in desire '{desire}': {p[:60]}"
+                assert not self._FIXME_RE.search(p), f"Found FIXME in desire '{desire}': {p[:60]}"
 
     def test_empathy_tones_no_todo(self):
         for tone, desc in EMPATHY_TONES.items():
-            assert not self._TODO_RE.search(desc), (
-                f"Found TODO in tone '{tone}': {desc[:60]}"
-            )
-            assert not self._FIXME_RE.search(desc), (
-                f"Found FIXME in tone '{tone}': {desc[:60]}"
-            )
+            assert not self._TODO_RE.search(desc), f"Found TODO in tone '{tone}': {desc[:60]}"
+            assert not self._FIXME_RE.search(desc), f"Found FIXME in tone '{tone}': {desc[:60]}"

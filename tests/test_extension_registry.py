@@ -1,4 +1,5 @@
 """Tests for ExtensionRegistry."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -82,12 +83,17 @@ class TestExtensionRegistry:
 
         # Write manifest
         import json
-        (ext_dir / "manifest.json").write_text(json.dumps({
-            "name": "my_ext",
-            "version": "1.0",
-            "description": "Test",
-            "module": "toolkit.py",
-        }))
+
+        (ext_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "name": "my_ext",
+                    "version": "1.0",
+                    "description": "Test",
+                    "module": "toolkit.py",
+                }
+            )
+        )
 
         # Write dummy toolkit
         (ext_dir / "toolkit.py").write_text(
@@ -106,10 +112,15 @@ class TestExtensionRegistry:
         ext_dir.mkdir(parents=True)
 
         import json
-        (ext_dir / "manifest.json").write_text(json.dumps({
-            "name": "loadable",
-            "module": "toolkit.py",
-        }))
+
+        (ext_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "name": "loadable",
+                    "module": "toolkit.py",
+                }
+            )
+        )
         (ext_dir / "toolkit.py").write_text(
             "from agno.tools import Toolkit\n"
             "class LoadableTools(Toolkit):\n"
@@ -127,10 +138,15 @@ class TestExtensionRegistry:
         ext_dir.mkdir(parents=True)
 
         import json
-        (ext_dir / "manifest.json").write_text(json.dumps({
-            "name": "toggleable",
-            "module": "toolkit.py",
-        }))
+
+        (ext_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "name": "toggleable",
+                    "module": "toolkit.py",
+                }
+            )
+        )
         (ext_dir / "toolkit.py").write_text(
             "from agno.tools import Toolkit\n"
             "class ToggleTools(Toolkit):\n"

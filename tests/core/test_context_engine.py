@@ -1,4 +1,5 @@
 """Tests for ContextEngine — smart context management."""
+
 from __future__ import annotations
 
 import json
@@ -23,9 +24,7 @@ def test_context_entry_token_estimation():
 
 def test_context_entry_explicit_token_estimate():
     """Explicit token_estimate overrides auto-calculation."""
-    entry = ContextEntry(
-        key="k", content="short", category="system", token_estimate=999
-    )
+    entry = ContextEntry(key="k", content="short", category="system", token_estimate=999)
     assert entry.token_estimate == 999
 
 
@@ -44,7 +43,10 @@ def test_context_entry_not_stale_no_ttl():
 def test_context_entry_not_stale_within_ttl():
     """Entries within their TTL are fresh."""
     entry = ContextEntry(
-        key="k", content="x", category="system", ttl=60.0,
+        key="k",
+        content="x",
+        category="system",
+        ttl=60.0,
         timestamp=time.time(),
     )
     assert entry.is_stale is False
@@ -53,7 +55,10 @@ def test_context_entry_not_stale_within_ttl():
 def test_context_entry_stale_after_ttl():
     """Entries past their TTL are stale."""
     entry = ContextEntry(
-        key="k", content="x", category="system", ttl=1.0,
+        key="k",
+        content="x",
+        category="system",
+        ttl=1.0,
         timestamp=time.time() - 5.0,
     )
     assert entry.is_stale is True
@@ -69,8 +74,11 @@ def test_context_entry_age_seconds():
 def test_context_entry_relevance_score_fresh_high_priority():
     """Fresh, high-priority entries have high relevance."""
     entry = ContextEntry(
-        key="k", content="x", category="system",
-        priority=1.0, timestamp=time.time(),
+        key="k",
+        content="x",
+        category="system",
+        priority=1.0,
+        timestamp=time.time(),
     )
     score = entry.relevance_score()
     # priority * 0.7 + recency * 0.3
@@ -81,8 +89,11 @@ def test_context_entry_relevance_score_fresh_high_priority():
 def test_context_entry_relevance_score_old_low_priority():
     """Old, low-priority entries have low relevance."""
     entry = ContextEntry(
-        key="k", content="x", category="system",
-        priority=0.0, timestamp=time.time() - 3600,
+        key="k",
+        content="x",
+        category="system",
+        priority=0.0,
+        timestamp=time.time() - 3600,
     )
     score = entry.relevance_score()
     assert score < 0.1
@@ -92,12 +103,18 @@ def test_context_entry_relevance_decay_over_time():
     """Relevance decays as an entry ages."""
     now = time.time()
     fresh = ContextEntry(
-        key="a", content="x", category="system",
-        priority=0.5, timestamp=now,
+        key="a",
+        content="x",
+        category="system",
+        priority=0.5,
+        timestamp=now,
     )
     old = ContextEntry(
-        key="b", content="x", category="system",
-        priority=0.5, timestamp=now - 600,
+        key="b",
+        content="x",
+        category="system",
+        priority=0.5,
+        timestamp=now - 600,
     )
     assert fresh.relevance_score() > old.relevance_score()
 
@@ -449,7 +466,7 @@ def test_checkpoint_metadata(tmp_path):
     cp_id = engine.checkpoint("with-meta", metadata=meta)
 
     listing = engine.list_checkpoints()
-    cp_info = [c for c in listing if c["id"] == cp_id][0]
+    cp_info = next(c for c in listing if c["id"] == cp_id)
     assert cp_info["metadata"]["reason"] == "before big change"
     assert cp_info["metadata"]["version"] == 42
 
@@ -580,9 +597,15 @@ def test_stats_keys():
     engine = ContextEngine()
     s = engine.stats()
     expected_keys = {
-        "entries", "tokens_used", "tokens_max", "budget_pct",
-        "rot_score", "needs_compression", "categories",
-        "checkpoints", "total_compressions",
+        "entries",
+        "tokens_used",
+        "tokens_max",
+        "budget_pct",
+        "rot_score",
+        "needs_compression",
+        "categories",
+        "checkpoints",
+        "total_compressions",
     }
     assert expected_keys == set(s.keys())
 

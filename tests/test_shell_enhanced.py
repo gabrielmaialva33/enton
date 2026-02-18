@@ -83,6 +83,7 @@ async def test_background_lifecycle(shell):
 
     # Wait a bit for it to finish
     import asyncio
+
     await asyncio.sleep(0.3)
 
     status = await shell.check_background(bg_id)
@@ -112,5 +113,6 @@ def test_shared_state():
     state = ShellState()
     shell = ShellTools(state)
     from enton.skills.file_toolkit import FileTools
+
     files = FileTools(state)
     assert shell._state is files._state

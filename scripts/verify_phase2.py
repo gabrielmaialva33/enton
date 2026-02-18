@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-from enton.cognition.brain import Brain
+from enton.cognition.brain import EntonBrain as Brain
 from enton.core.config import Provider, Settings
 
 

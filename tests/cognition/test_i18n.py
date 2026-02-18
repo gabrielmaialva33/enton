@@ -151,10 +151,7 @@ class TestEnglishLocale:
         assert isinstance(greetings, list)
         assert len(greetings) >= 3
         # Should be in English
-        assert all(
-            any(w in g.lower() for w in ["hey", "yo", "sup", "what"])
-            for g in greetings
-        )
+        assert all(any(w in g.lower() for w in ["hey", "yo", "sup", "what"]) for g in greetings)
 
     def test_en_system_prompt(self):
         set_locale(Locale.EN)

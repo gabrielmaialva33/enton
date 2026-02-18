@@ -136,4 +136,4 @@ def test_engine_summary():
     assert "Desires:" in s
 
 
-import pytest  # noqa: E402 (needed for pytest.approx above)
+import pytest

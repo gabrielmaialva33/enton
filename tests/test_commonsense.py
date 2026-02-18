@@ -1,4 +1,5 @@
 """Tests for CommonsenseKB."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -54,7 +55,9 @@ async def test_search_with_results():
     mock_client = MagicMock()
     mock_result = MagicMock()
     mock_result.payload = {
-        "subject": "cat", "predicate": "has", "obj": "four legs",
+        "subject": "cat",
+        "predicate": "has",
+        "obj": "four legs",
     }
     mock_result.score = 0.9
 
@@ -81,7 +84,9 @@ async def test_what_is():
     mock_client = MagicMock()
     mock_result = MagicMock()
     mock_result.payload = {
-        "subject": "dog", "predicate": "is", "obj": "a mammal",
+        "subject": "dog",
+        "predicate": "is",
+        "obj": "a mammal",
     }
     mock_result.score = 0.8
 

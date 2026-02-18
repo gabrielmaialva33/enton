@@ -7,6 +7,7 @@ Each test verifies:
   4. It has the expected tools registered (sync in self.functions,
      async in self.async_functions)
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -31,9 +32,7 @@ def _assert_agno_toolkit(instance, expected_tools: list[str]) -> None:
     """Shared assertions for any agno Toolkit subclass."""
     from agno.tools import Toolkit
 
-    assert isinstance(instance, Toolkit), (
-        f"{type(instance).__name__} is not a Toolkit subclass"
-    )
+    assert isinstance(instance, Toolkit), f"{type(instance).__name__} is not a Toolkit subclass"
     registered = _all_registered_tools(instance)
     for tool_name in expected_tools:
         assert tool_name in registered, (
@@ -55,14 +54,17 @@ class TestShellTools:
             pytest.skip("ShellTools dependencies not installed")
 
         toolkit = ShellTools()
-        _assert_agno_toolkit(toolkit, [
-            "run_command",
-            "run_command_sudo",
-            "get_cwd",
-            "run_background",
-            "check_background",
-            "stop_background",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "run_command",
+                "run_command_sudo",
+                "get_cwd",
+                "run_background",
+                "check_background",
+                "stop_background",
+            ],
+        )
 
 
 class TestCodingTools:
@@ -73,12 +75,15 @@ class TestCodingTools:
             pytest.skip("CodingTools dependencies not installed")
 
         toolkit = CodingTools()
-        _assert_agno_toolkit(toolkit, [
-            "code_run",
-            "code_reference",
-            "code_languages",
-            "code_benchmark",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "code_run",
+                "code_reference",
+                "code_languages",
+                "code_benchmark",
+            ],
+        )
 
 
 class TestSystemTools:
@@ -89,11 +94,14 @@ class TestSystemTools:
             pytest.skip("SystemTools dependencies not installed")
 
         toolkit = SystemTools()
-        _assert_agno_toolkit(toolkit, [
-            "get_system_stats",
-            "get_time",
-            "list_processes",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "get_system_stats",
+                "get_time",
+                "list_processes",
+            ],
+        )
 
 
 class TestSearchTools:
@@ -104,9 +112,12 @@ class TestSearchTools:
             pytest.skip("SearchTools dependencies not installed")
 
         toolkit = SearchTools()
-        _assert_agno_toolkit(toolkit, [
-            "search_web",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "search_web",
+            ],
+        )
 
 
 class TestDesktopTools:
@@ -117,22 +128,25 @@ class TestDesktopTools:
             pytest.skip("DesktopTools dependencies not installed")
 
         toolkit = DesktopTools(brain=None)
-        _assert_agno_toolkit(toolkit, [
-            "screenshot",
-            "screenshot_analyze",
-            "ocr_screen",
-            "click",
-            "type_text",
-            "press_key",
-            "clipboard_get",
-            "clipboard_set",
-            "active_window",
-            "list_windows",
-            "focus_window",
-            "notify",
-            "mouse_move",
-            "screen_size",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "screenshot",
+                "screenshot_analyze",
+                "ocr_screen",
+                "click",
+                "type_text",
+                "press_key",
+                "clipboard_get",
+                "clipboard_set",
+                "active_window",
+                "list_windows",
+                "focus_window",
+                "notify",
+                "mouse_move",
+                "screen_size",
+            ],
+        )
 
 
 class TestBrowserTools:
@@ -143,13 +157,16 @@ class TestBrowserTools:
             pytest.skip("BrowserTools dependencies not installed")
 
         toolkit = BrowserTools()
-        _assert_agno_toolkit(toolkit, [
-            "browse_url",
-            "web_screenshot",
-            "web_search",
-            "extract_text",
-            "download_file",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "browse_url",
+                "web_screenshot",
+                "web_search",
+                "extract_text",
+                "download_file",
+            ],
+        )
 
 
 class TestMediaTools:
@@ -160,17 +177,20 @@ class TestMediaTools:
             pytest.skip("MediaTools dependencies not installed")
 
         toolkit = MediaTools()
-        _assert_agno_toolkit(toolkit, [
-            "download_video",
-            "download_audio",
-            "media_info",
-            "play_media",
-            "player_control",
-            "volume_get",
-            "volume_set",
-            "list_audio_sinks",
-            "tts_speak",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "download_video",
+                "download_audio",
+                "media_info",
+                "play_media",
+                "player_control",
+                "volume_get",
+                "volume_set",
+                "list_audio_sinks",
+                "tts_speak",
+            ],
+        )
 
 
 class TestNetworkTools:
@@ -181,18 +201,21 @@ class TestNetworkTools:
             pytest.skip("NetworkTools dependencies not installed")
 
         toolkit = NetworkTools()
-        _assert_agno_toolkit(toolkit, [
-            "network_scan",
-            "port_scan",
-            "ping",
-            "local_ip",
-            "bluetooth_devices",
-            "bluetooth_connect",
-            "bluetooth_disconnect",
-            "tailscale_status",
-            "wifi_networks",
-            "dns_lookup",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "network_scan",
+                "port_scan",
+                "ping",
+                "local_ip",
+                "bluetooth_devices",
+                "bluetooth_connect",
+                "bluetooth_disconnect",
+                "tailscale_status",
+                "wifi_networks",
+                "dns_lookup",
+            ],
+        )
 
 
 class TestPTZTools:
@@ -203,10 +226,13 @@ class TestPTZTools:
             pytest.skip("PTZTools dependencies not installed")
 
         toolkit = PTZTools()
-        _assert_agno_toolkit(toolkit, [
-            "camera_move",
-            "camera_motor_move",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "camera_move",
+                "camera_motor_move",
+            ],
+        )
 
 
 class TestMemoryTools:
@@ -217,11 +243,14 @@ class TestMemoryTools:
             pytest.skip("MemoryTools dependencies not installed")
 
         toolkit = MemoryTools(memory=MagicMock())
-        _assert_agno_toolkit(toolkit, [
-            "search_memory",
-            "recall_recent",
-            "what_do_you_know_about_user",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "search_memory",
+                "recall_recent",
+                "what_do_you_know_about_user",
+            ],
+        )
 
 
 class TestKnowledgeTools:
@@ -232,11 +261,14 @@ class TestKnowledgeTools:
             pytest.skip("KnowledgeTools dependencies not installed")
 
         toolkit = KnowledgeTools(crawler=MagicMock())
-        _assert_agno_toolkit(toolkit, [
-            "learn_from_url",
-            "search_knowledge",
-            "learn_about_topic",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "learn_from_url",
+                "search_knowledge",
+                "learn_about_topic",
+            ],
+        )
 
 
 class TestVisualMemoryTools:
@@ -247,10 +279,13 @@ class TestVisualMemoryTools:
             pytest.skip("VisualMemoryTools dependencies not installed")
 
         toolkit = VisualMemoryTools(visual_memory=MagicMock())
-        _assert_agno_toolkit(toolkit, [
-            "search_visual_memory",
-            "recall_recent_scenes",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "search_visual_memory",
+                "recall_recent_scenes",
+            ],
+        )
 
 
 class TestPlannerTools:
@@ -261,15 +296,18 @@ class TestPlannerTools:
             pytest.skip("PlannerTools dependencies not installed")
 
         toolkit = PlannerTools(planner=MagicMock())
-        _assert_agno_toolkit(toolkit, [
-            "add_reminder",
-            "add_recurring_reminder",
-            "list_reminders",
-            "cancel_reminder",
-            "add_todo",
-            "complete_todo",
-            "list_todos",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "add_reminder",
+                "add_recurring_reminder",
+                "list_reminders",
+                "cancel_reminder",
+                "add_todo",
+                "complete_todo",
+                "list_todos",
+            ],
+        )
 
 
 class TestForgeTools:
@@ -280,12 +318,15 @@ class TestForgeTools:
             pytest.skip("ForgeTools dependencies not installed")
 
         toolkit = ForgeTools(forge=MagicMock(), registry=MagicMock())
-        _assert_agno_toolkit(toolkit, [
-            "create_tool",
-            "list_dynamic_tools",
-            "retire_tool",
-            "tool_stats",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "create_tool",
+                "list_dynamic_tools",
+                "retire_tool",
+                "tool_stats",
+            ],
+        )
 
 
 class TestChannelTools:
@@ -296,11 +337,14 @@ class TestChannelTools:
             pytest.skip("ChannelTools dependencies not installed")
 
         toolkit = ChannelTools(channel_manager=MagicMock())
-        _assert_agno_toolkit(toolkit, [
-            "send_message",
-            "broadcast_message",
-            "list_channels",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "send_message",
+                "broadcast_message",
+                "list_channels",
+            ],
+        )
 
 
 class TestExtensionTools:
@@ -311,13 +355,16 @@ class TestExtensionTools:
             pytest.skip("ExtensionTools dependencies not installed")
 
         toolkit = ExtensionTools(registry=MagicMock())
-        _assert_agno_toolkit(toolkit, [
-            "extension_list",
-            "extension_enable",
-            "extension_disable",
-            "extension_install",
-            "extension_stats",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "extension_list",
+                "extension_enable",
+                "extension_disable",
+                "extension_install",
+                "extension_stats",
+            ],
+        )
 
 
 class TestProcessTools:
@@ -328,14 +375,17 @@ class TestProcessTools:
             pytest.skip("ProcessTools dependencies not installed")
 
         toolkit = ProcessTools(manager=MagicMock())
-        _assert_agno_toolkit(toolkit, [
-            "task_run",
-            "task_status",
-            "task_list",
-            "task_output",
-            "task_cancel",
-            "task_summary",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "task_run",
+                "task_status",
+                "task_list",
+                "task_output",
+                "task_cancel",
+                "task_summary",
+            ],
+        )
 
 
 class TestWorkspaceTools:
@@ -350,16 +400,19 @@ class TestWorkspaceTools:
             workspace=Path("/tmp/enton-test-workspace"),
             hardware=MagicMock(),
         )
-        _assert_agno_toolkit(toolkit, [
-            "workspace_info",
-            "workspace_list",
-            "hardware_status",
-            "hardware_gpu",
-            "hardware_full",
-            "project_create",
-            "project_list",
-            "disk_usage",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "workspace_info",
+                "workspace_list",
+                "hardware_status",
+                "hardware_gpu",
+                "hardware_full",
+                "project_create",
+                "project_list",
+                "disk_usage",
+            ],
+        )
 
 
 class TestGcpTools:
@@ -370,18 +423,21 @@ class TestGcpTools:
             pytest.skip("GcpTools dependencies not installed")
 
         toolkit = GcpTools()
-        _assert_agno_toolkit(toolkit, [
-            "gcp_status",
-            "gcp_vm_presets",
-            "gcp_vm_create",
-            "gcp_vm_list",
-            "gcp_vm_ssh",
-            "gcp_vm_delete",
-            "gcp_vm_start",
-            "gcp_vm_stop",
-            "gcp_run_code",
-            "gcp_billing",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "gcp_status",
+                "gcp_vm_presets",
+                "gcp_vm_create",
+                "gcp_vm_list",
+                "gcp_vm_ssh",
+                "gcp_vm_delete",
+                "gcp_vm_start",
+                "gcp_vm_stop",
+                "gcp_run_code",
+                "gcp_billing",
+            ],
+        )
 
 
 class TestSubAgentTools:
@@ -392,12 +448,15 @@ class TestSubAgentTools:
             pytest.skip("SubAgentTools dependencies not installed")
 
         toolkit = SubAgentTools(orchestrator=MagicMock())
-        _assert_agno_toolkit(toolkit, [
-            "delegate_task",
-            "auto_delegate",
-            "agent_consensus",
-            "list_agents",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "delegate_task",
+                "auto_delegate",
+                "agent_consensus",
+                "list_agents",
+            ],
+        )
 
 
 class TestDescribeTools:
@@ -408,10 +467,13 @@ class TestDescribeTools:
             pytest.skip("DescribeTools dependencies not installed")
 
         toolkit = DescribeTools(vision=MagicMock(), brain=None)
-        _assert_agno_toolkit(toolkit, [
-            "describe_scene",
-            "what_do_you_see",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "describe_scene",
+                "what_do_you_see",
+            ],
+        )
 
 
 class TestBlobTools:
@@ -422,11 +484,14 @@ class TestBlobTools:
             pytest.skip("BlobTools dependencies not installed")
 
         toolkit = BlobTools(blob_store=MagicMock())
-        _assert_agno_toolkit(toolkit, [
-            "search_blobs",
-            "recent_blobs",
-            "blob_stats",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "search_blobs",
+                "recent_blobs",
+                "blob_stats",
+            ],
+        )
 
 
 class TestN8nTools:
@@ -437,9 +502,12 @@ class TestN8nTools:
             pytest.skip("N8nTools dependencies not installed")
 
         toolkit = N8nTools()
-        _assert_agno_toolkit(toolkit, [
-            "trigger_automation",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "trigger_automation",
+            ],
+        )
 
 
 class TestScreenpipeTools:
@@ -450,10 +518,13 @@ class TestScreenpipeTools:
             pytest.skip("ScreenpipeTools dependencies not installed")
 
         toolkit = ScreenpipeTools()
-        _assert_agno_toolkit(toolkit, [
-            "search_screen",
-            "get_recent_activity",
-        ])
+        _assert_agno_toolkit(
+            toolkit,
+            [
+                "search_screen",
+                "get_recent_activity",
+            ],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +542,7 @@ class TestCryptoToolkit:
         # Use a temp path to avoid creating the wallet in the real project dir
         import os
         import tempfile
+
         wallet_path = os.path.join(tempfile.mkdtemp(), "paper_wallet.json")
         toolkit = CryptoToolkit(wallet_path=wallet_path)
 
@@ -480,8 +552,7 @@ class TestCryptoToolkit:
         tool_names = {t["name"] for t in tools}
         for expected in ["get_crypto_price"]:
             assert expected in tool_names, (
-                f"Tool '{expected}' not in CryptoToolkit.get_tools(). "
-                f"Found: {sorted(tool_names)}"
+                f"Tool '{expected}' not in CryptoToolkit.get_tools(). Found: {sorted(tool_names)}"
             )
 
     def test_has_name(self):
@@ -492,6 +563,7 @@ class TestCryptoToolkit:
 
         import os
         import tempfile
+
         wallet_path = os.path.join(tempfile.mkdtemp(), "paper_wallet.json")
         toolkit = CryptoToolkit(wallet_path=wallet_path)
         assert toolkit.name == "crypto_toolkit"
@@ -512,8 +584,7 @@ class TestGodModeToolkit:
         tool_names = {t["name"] for t in tools}
         for expected in ["list_heavy_processes", "kill_process"]:
             assert expected in tool_names, (
-                f"Tool '{expected}' not in GodModeToolkit.get_tools(). "
-                f"Found: {sorted(tool_names)}"
+                f"Tool '{expected}' not in GodModeToolkit.get_tools(). Found: {sorted(tool_names)}"
             )
 
     def test_has_name(self):
@@ -535,9 +606,7 @@ class TestNeurosurgeonToolkit:
 
         toolkit = NeurosurgeonToolkit()
 
-        assert hasattr(toolkit, "get_tools"), (
-            "NeurosurgeonToolkit must expose get_tools()"
-        )
+        assert hasattr(toolkit, "get_tools"), "NeurosurgeonToolkit must expose get_tools()"
         tools = toolkit.get_tools()
         assert isinstance(tools, list)
         tool_names = {t["name"] for t in tools}
@@ -604,9 +673,7 @@ def test_agno_toolkit_is_subclass(module_path: str, class_name: str):
 
     cls = getattr(mod, class_name, None)
     assert cls is not None, f"{class_name} not found in {module_path}"
-    assert issubclass(cls, Toolkit), (
-        f"{class_name} is not a subclass of agno.tools.Toolkit"
-    )
+    assert issubclass(cls, Toolkit), f"{class_name} is not a subclass of agno.tools.Toolkit"
 
 
 @pytest.mark.parametrize("module_path,class_name", _AGNO_TOOLKIT_IMPORTS)

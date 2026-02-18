@@ -1,4 +1,5 @@
 """Tests for MetaCognitiveEngine."""
+
 from __future__ import annotations
 
 import time
@@ -14,7 +15,10 @@ from enton.cognition.metacognition import (
 def test_record_updates_stats():
     mc = MetaCognitiveEngine()
     trace = ReasoningTrace(
-        query="test", strategy="agent", success=True, latency_ms=500,
+        query="test",
+        strategy="agent",
+        success=True,
+        latency_ms=500,
     )
     mc.record(trace)
     assert mc._total_calls == 1
@@ -24,7 +28,10 @@ def test_record_updates_stats():
 def test_record_error_updates_stats():
     mc = MetaCognitiveEngine()
     trace = ReasoningTrace(
-        query="test", strategy="agent", success=False, latency_ms=100,
+        query="test",
+        strategy="agent",
+        success=False,
+        latency_ms=100,
     )
     mc.record(trace)
     assert mc._total_errors == 1
@@ -93,10 +100,15 @@ def test_introspect_empty():
 def test_introspect_with_data():
     mc = MetaCognitiveEngine()
     for _ in range(5):
-        mc.record(ReasoningTrace(
-            query="q", strategy="agent", success=True,
-            latency_ms=200, provider="ollama",
-        ))
+        mc.record(
+            ReasoningTrace(
+                query="q",
+                strategy="agent",
+                success=True,
+                latency_ms=200,
+                provider="ollama",
+            )
+        )
     result = mc.introspect()
     assert "Calls: 5" in result
     assert "ollama" in result
@@ -111,15 +123,33 @@ def test_should_use_tools():
 
 def test_provider_stats():
     mc = MetaCognitiveEngine()
-    mc.record(ReasoningTrace(
-        query="q", strategy="agent", provider="ollama", success=True, latency_ms=100,
-    ))
-    mc.record(ReasoningTrace(
-        query="q", strategy="agent", provider="ollama", success=True, latency_ms=200,
-    ))
-    mc.record(ReasoningTrace(
-        query="q", strategy="agent", provider="groq", success=False, latency_ms=5000,
-    ))
+    mc.record(
+        ReasoningTrace(
+            query="q",
+            strategy="agent",
+            provider="ollama",
+            success=True,
+            latency_ms=100,
+        )
+    )
+    mc.record(
+        ReasoningTrace(
+            query="q",
+            strategy="agent",
+            provider="ollama",
+            success=True,
+            latency_ms=200,
+        )
+    )
+    mc.record(
+        ReasoningTrace(
+            query="q",
+            strategy="agent",
+            provider="groq",
+            success=False,
+            latency_ms=5000,
+        )
+    )
     stats = mc.provider_stats()
     assert stats["ollama"]["calls"] == 2
     assert stats["ollama"]["success_rate"] == 1.0

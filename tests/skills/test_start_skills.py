@@ -7,6 +7,7 @@ def test_config_defaults():
     assert settings.screenpipe_url == "http://localhost:3030"
     assert settings.n8n_webhook_base == ""
 
+
 def test_screenpipe_init():
     tools = ScreenpipeTools()
     assert tools.name == "screenpipe_tools"
@@ -14,6 +15,7 @@ def test_screenpipe_init():
     assert len(tools.functions) >= 2
     assert "search_screen" in tools.functions
     assert "get_recent_activity" in tools.functions
+
 
 def test_n8n_init():
     tools = N8nTools()

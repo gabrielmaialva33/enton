@@ -167,6 +167,11 @@ class Settings(BaseSettings):
     web_channel_host: str = "0.0.0.0"
     web_channel_port: int = 8765
 
+    # Home Assistant (v0.5.0 — IoT Bridge)
+    hass_url: str = ""
+    hass_token: str = ""
+    hass_enabled: bool = False
+
     # Integrations (Screenpipe + n8n)
     screenpipe_url: str = "http://localhost:3030"
     n8n_webhook_base: str = ""  # e.g. https://n8n.example.com/webhook

@@ -1,4 +1,5 @@
 """Tests for AI Delegation — ClaudeCodeProvider, GeminiCliProvider, AIDelegateTools."""
+
 from __future__ import annotations
 
 import json
@@ -147,13 +148,15 @@ class TestClaudeCodeProvider:
     @patch("shutil.which", return_value="/usr/bin/claude")
     async def test_generate_json_returns_full_result(self, _):
         p = ClaudeCodeProvider()
-        response_json = json.dumps({
-            "result": "Resposta",
-            "session_id": "sess1",
-            "total_cost_usd": 0.01,
-            "num_turns": 3,
-            "duration_ms": 2000,
-        })
+        response_json = json.dumps(
+            {
+                "result": "Resposta",
+                "session_id": "sess1",
+                "total_cost_usd": 0.01,
+                "num_turns": 3,
+                "duration_ms": 2000,
+            }
+        )
 
         mock_proc = AsyncMock()
         mock_proc.communicate = AsyncMock(

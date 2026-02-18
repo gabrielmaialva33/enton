@@ -1,4 +1,5 @@
 """Tests for DreamMode."""
+
 from __future__ import annotations
 
 import time
@@ -70,9 +71,9 @@ async def test_dream_cycle_consolidates():
 
     # Provide enough episodes for consolidation
     from enton.core.memory import Episode
+
     episodes = [
-        Episode(kind="conversation", summary=f"Chat #{i}", tags=["chat"])
-        for i in range(10)
+        Episode(kind="conversation", summary=f"Chat #{i}", tags=["chat"]) for i in range(10)
     ]
     mem.recall_recent.return_value = episodes
 
@@ -93,6 +94,7 @@ async def test_dream_cycle_extracts_patterns():
     brain = _make_brain()
 
     from enton.core.memory import Episode
+
     # Create episodes with repeated tags at same hour
     now = time.time()
     episodes = [
@@ -115,10 +117,8 @@ async def test_dream_handles_brain_failure():
     brain.think = AsyncMock(side_effect=Exception("LLM down"))
 
     from enton.core.memory import Episode
-    episodes = [
-        Episode(kind="conversation", summary=f"Chat {i}", tags=["chat"])
-        for i in range(10)
-    ]
+
+    episodes = [Episode(kind="conversation", summary=f"Chat {i}", tags=["chat"]) for i in range(10)]
     mem.recall_recent.return_value = episodes
 
     dm = DreamMode(memory=mem, brain=brain)

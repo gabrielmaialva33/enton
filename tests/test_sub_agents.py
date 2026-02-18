@@ -1,4 +1,5 @@
 """Tests for SubAgentOrchestrator."""
+
 from __future__ import annotations
 
 import asyncio
@@ -31,6 +32,7 @@ class TestSubAgentOrchestrator:
     @pytest.fixture
     def orchestrator(self):
         from agno.models.ollama import Ollama
+
         model = Ollama(id="qwen2.5:14b")
         return SubAgentOrchestrator(models=[model], toolkits={})
 
@@ -99,6 +101,7 @@ class TestRoleConfigs:
 class TestSubAgent:
     def test_success_rate_default(self):
         from agno.models.ollama import Ollama
+
         model = Ollama(id="qwen2.5:14b")
         agent = SubAgent(role="research", models=[model])
         assert agent.success_rate == 1.0

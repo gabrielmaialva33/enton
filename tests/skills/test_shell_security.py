@@ -20,36 +20,64 @@ from enton.skills.shell_toolkit import (
 
 class TestCommandClassification:
     # --- Safe commands ---
-    @pytest.mark.parametrize("cmd", [
-        "ls -la", "cat /etc/hostname", "pwd", "whoami", "date",
-        "git status", "python --version", "pip list", "uv sync",
-        "df -h", "free -m", "ps aux", "nvidia-smi", "uptime",
-        "grep pattern file.txt", "find . -name '*.py'",
-        "pytest tests/", "ruff check .", "echo hello",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "ls -la",
+            "cat /etc/hostname",
+            "pwd",
+            "whoami",
+            "date",
+            "git status",
+            "python --version",
+            "pip list",
+            "uv sync",
+            "df -h",
+            "free -m",
+            "ps aux",
+            "nvidia-smi",
+            "uptime",
+            "grep pattern file.txt",
+            "find . -name '*.py'",
+            "pytest tests/",
+            "ruff check .",
+            "echo hello",
+        ],
+    )
     def test_safe_commands(self, cmd: str):
         assert _classify_command(cmd) == "safe"
 
     # --- Elevated commands ---
-    @pytest.mark.parametrize("cmd", [
-        "apt install python3", "apt-get update",
-        "kill 1234", "killall python", "pkill firefox",
-        "pip install numpy", "uv add pandas",
-        "crontab -l", "chmod 755 script.sh",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "apt install python3",
+            "apt-get update",
+            "kill 1234",
+            "killall python",
+            "pkill firefox",
+            "pip install numpy",
+            "uv add pandas",
+            "crontab -l",
+            "chmod 755 script.sh",
+        ],
+    )
     def test_elevated_commands(self, cmd: str):
         assert _classify_command(cmd) == "elevated"
 
     # --- Dangerous commands ---
-    @pytest.mark.parametrize("cmd", [
-        "rm -rf /",
-        "rm -rf /*",
-        "mkfs.ext4 /dev/sda",
-        "dd if=/dev/zero of=/dev/sda",
-        "shutdown now",
-        "reboot",
-        ":(){ :|:& };:",  # fork bomb
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "rm -rf /",
+            "rm -rf /*",
+            "mkfs.ext4 /dev/sda",
+            "dd if=/dev/zero of=/dev/sda",
+            "shutdown now",
+            "reboot",
+            ":(){ :|:& };:",  # fork bomb
+        ],
+    )
     def test_dangerous_commands(self, cmd: str):
         assert _classify_command(cmd) == "dangerous"
 
@@ -115,6 +143,7 @@ class TestShellToolsInit:
 
     def test_with_custom_state(self):
         from pathlib import Path
+
         state = ShellState(cwd=Path("/tmp"))
         tools = ShellTools(state=state)
         assert tools._state.cwd == Path("/tmp")

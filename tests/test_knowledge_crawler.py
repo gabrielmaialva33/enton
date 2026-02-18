@@ -1,4 +1,5 @@
 """Tests for KnowledgeCrawler."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,7 +11,9 @@ from enton.core.knowledge_crawler import KnowledgeCrawler, KnowledgeTriple
 
 def test_knowledge_triple_creation():
     t = KnowledgeTriple(
-        subject="Python", predicate="is", obj="a programming language",
+        subject="Python",
+        predicate="is",
+        obj="a programming language",
         source_url="https://python.org",
     )
     assert t.subject == "Python"
@@ -138,8 +141,10 @@ async def test_search_with_results():
     mock_client = MagicMock()
     mock_result = MagicMock()
     mock_result.payload = {
-        "subject": "Python", "predicate": "is",
-        "obj": "fast", "source_url": "https://x.com",
+        "subject": "Python",
+        "predicate": "is",
+        "obj": "fast",
+        "source_url": "https://x.com",
     }
     mock_result.score = 0.85
     mock_response = MagicMock()

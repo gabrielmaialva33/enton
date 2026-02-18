@@ -20,7 +20,7 @@ assert "search_web" in registry.get_all_tools()
 
 # 2. Test Brain Integration
 print("\n--- Testing Brain.think_agent ---")
-from enton.cognition.brain import Brain
+from enton.cognition.brain import EntonBrain as Brain
 from enton.core.config import Provider, Settings
 
 

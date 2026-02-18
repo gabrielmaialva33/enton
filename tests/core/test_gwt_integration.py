@@ -91,6 +91,7 @@ async def test_gwt_github_module_result_delivery():
     assert thought.modality == "memory_recall"
     assert thought.saliency == 1.0
 
+
 if __name__ == "__main__":
     msg = BroadcastMessage(content="test", source="me", saliency=0.5, modality="text")
     print(msg)

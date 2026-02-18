@@ -1,4 +1,5 @@
 """Tests for ErrorLoopBack handler."""
+
 from __future__ import annotations
 
 import asyncio
@@ -36,9 +37,7 @@ class TestErrorLoopBack:
         async def ok_fn(prompt):
             return "success"
 
-        result, error = asyncio.get_event_loop().run_until_complete(
-            handler.execute(ok_fn, "test")
-        )
+        result, error = asyncio.get_event_loop().run_until_complete(handler.execute(ok_fn, "test"))
         assert result == "success"
         assert error is None
         assert handler.stats()["total_errors"] == 0
@@ -76,9 +75,7 @@ class TestErrorLoopBack:
         async def fail_fn(prompt):
             raise ValueError("bad input")
 
-        asyncio.get_event_loop().run_until_complete(
-            handler.execute(fail_fn, "test")
-        )
+        asyncio.get_event_loop().run_until_complete(handler.execute(fail_fn, "test"))
         # Should have injected error context
         error_ctx = ctx.get("error_1")
         assert error_ctx is not None

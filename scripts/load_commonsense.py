@@ -131,7 +131,7 @@ def upsert_to_qdrant(
                     "obj": r["obj"],
                 },
             )
-            for j, (r, emb) in enumerate(zip(batch_r, batch_e))
+            for j, (r, emb) in enumerate(zip(batch_r, batch_e, strict=True))
         ]
         client.upsert(collection_name=COLLECTION, points=points)
         done = min(i + batch_size, len(records))

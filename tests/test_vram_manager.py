@@ -1,4 +1,5 @@
 """Tests for VRAMManager."""
+
 from __future__ import annotations
 
 import pytest
@@ -8,6 +9,7 @@ from enton.core.vram_manager import ModelPriority, ModelSlot, VRAMManager
 
 class FakeModel:
     """Fake model that tracks device location."""
+
     def __init__(self, name: str = "fake"):
         self.name = name
         self._on_cuda = False
@@ -22,7 +24,9 @@ class FakeModel:
 
 
 def _make_slot(
-    name: str, vram: int = 100, priority: ModelPriority = ModelPriority.NORMAL,
+    name: str,
+    vram: int = 100,
+    priority: ModelPriority = ModelPriority.NORMAL,
 ) -> ModelSlot:
     return ModelSlot(
         name=name,

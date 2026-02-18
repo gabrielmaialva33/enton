@@ -19,7 +19,10 @@ from enton.core.gwt.workspace import GlobalWorkspace
 class TestBroadcastMessage:
     def test_creation(self):
         msg = BroadcastMessage(
-            content="hello", source="test", saliency=0.8, modality="text",
+            content="hello",
+            source="test",
+            saliency=0.8,
+            modality="text",
         )
         assert msg.content == "hello"
         assert msg.source == "test"
@@ -30,7 +33,10 @@ class TestBroadcastMessage:
 
     def test_str_representation(self):
         msg = BroadcastMessage(
-            content="test content", source="vision", saliency=0.75, modality="image",
+            content="test content",
+            source="vision",
+            saliency=0.75,
+            modality="image",
         )
         s = str(msg)
         assert "vision" in s
@@ -39,14 +45,20 @@ class TestBroadcastMessage:
 
     def test_long_content_truncated_in_str(self):
         msg = BroadcastMessage(
-            content="x" * 200, source="test", saliency=0.5, modality="text",
+            content="x" * 200,
+            source="test",
+            saliency=0.5,
+            modality="text",
         )
         s = str(msg)
         assert len(s) < 200  # truncated
 
     def test_metadata(self):
         msg = BroadcastMessage(
-            content="test", source="s", saliency=0.5, modality="m",
+            content="test",
+            source="s",
+            saliency=0.5,
+            modality="m",
             metadata={"key": "value"},
         )
         assert msg.metadata["key"] == "value"
@@ -54,7 +66,10 @@ class TestBroadcastMessage:
     def test_timestamp_auto_set(self):
         before = time.time()
         msg = BroadcastMessage(
-            content="t", source="s", saliency=0.5, modality="m",
+            content="t",
+            source="s",
+            saliency=0.5,
+            modality="m",
         )
         after = time.time()
         assert before <= msg.timestamp <= after
@@ -135,7 +150,10 @@ class TestGlobalWorkspace:
     def test_tick_single_candidate(self):
         gw = GlobalWorkspace()
         msg = BroadcastMessage(
-            content="thought", source="mod1", saliency=0.7, modality="inner_speech",
+            content="thought",
+            source="mod1",
+            saliency=0.7,
+            modality="inner_speech",
         )
         gw.register_module(DummyModule("mod1", response=msg))
         result = gw.tick()
@@ -183,6 +201,7 @@ class TestGlobalWorkspace:
 
     def test_module_error_doesnt_crash(self):
         """Module that raises exception should not crash the workspace."""
+
         class ErrorModule(CognitiveModule):
             def __init__(self):
                 super().__init__("error")
@@ -266,12 +285,14 @@ class TestExecutiveModule:
 class TestShellState:
     def test_init(self):
         from enton.skills._shell_state import ShellState
+
         state = ShellState()
         assert state.cwd.exists()
         assert state.background == {}
 
     def test_resolve_absolute_path(self):
         from enton.skills._shell_state import ShellState
+
         state = ShellState()
         p = state.resolve_path("/tmp/test")
         assert str(p) == "/tmp/test"
@@ -280,12 +301,14 @@ class TestShellState:
         from pathlib import Path
 
         from enton.skills._shell_state import ShellState
+
         state = ShellState(cwd=Path("/tmp"))
         p = state.resolve_path("subdir/file.txt")
         assert str(p) == "/tmp/subdir/file.txt"
 
     def test_resolve_home_path(self):
         from enton.skills._shell_state import ShellState
+
         state = ShellState()
         p = state.resolve_path("~/test")
         assert "~" not in str(p)  # expanded
@@ -299,11 +322,13 @@ class TestShellState:
 class TestProviderProtocols:
     def test_stt_protocol(self):
         from enton.providers.base import STTProvider
+
         assert hasattr(STTProvider, "transcribe")
         assert hasattr(STTProvider, "stream")
 
     def test_tts_protocol(self):
         from enton.providers.base import TTSProvider
+
         assert hasattr(TTSProvider, "synthesize")
         assert hasattr(TTSProvider, "synthesize_stream")
 
@@ -315,6 +340,7 @@ class TestProviderProtocols:
         class FakeSTT:
             async def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> str:
                 return "hello"
+
             async def stream(self):
                 yield ""
 
@@ -327,8 +353,10 @@ class TestProviderProtocols:
 
         class FakeTTS:
             sample_rate = 16000
+
             async def synthesize(self, text: str) -> np.ndarray:
                 return np.zeros(100)
+
             async def synthesize_stream(self, text: str):
                 yield np.zeros(100)
 
@@ -343,6 +371,7 @@ class TestProviderProtocols:
 class TestChannelBase:
     def test_message_type_enum(self):
         from enton.channels.base import MessageType
+
         assert MessageType.TEXT == "text"
         assert MessageType.IMAGE == "image"
         assert MessageType.AUDIO == "audio"
@@ -353,6 +382,7 @@ class TestChannelBase:
 
     def test_channel_message_creation(self):
         from enton.channels.base import ChannelMessage, MessageType
+
         msg = ChannelMessage(
             channel="telegram",
             sender_id="123",
@@ -369,6 +399,7 @@ class TestChannelBase:
 
     def test_channel_message_with_media(self):
         from enton.channels.base import ChannelMessage
+
         msg = ChannelMessage(
             channel="discord",
             sender_id="456",
@@ -380,6 +411,7 @@ class TestChannelBase:
 
     def test_channel_message_with_media_url(self):
         from enton.channels.base import ChannelMessage
+
         msg = ChannelMessage(
             channel="web",
             sender_id="789",
@@ -390,15 +422,19 @@ class TestChannelBase:
 
     def test_channel_message_timestamp(self):
         from enton.channels.base import ChannelMessage
+
         before = time.time()
         msg = ChannelMessage(
-            channel="test", sender_id="1", sender_name="t",
+            channel="test",
+            sender_id="1",
+            sender_name="t",
         )
         after = time.time()
         assert before <= msg.timestamp <= after
 
     def test_base_channel_is_abstract(self):
         from enton.channels.base import BaseChannel
+
         with pytest.raises(TypeError):
             BaseChannel(bus=MagicMock())  # can't instantiate abstract
 
@@ -413,16 +449,19 @@ class TestCudaLock:
         import threading
 
         from enton.core.cuda_lock import cuda_thread_lock
+
         assert isinstance(cuda_thread_lock, type(threading.Lock()))
 
     def test_async_lock_exists(self):
         import asyncio
 
         from enton.core.cuda_lock import cuda_async_lock
+
         assert isinstance(cuda_async_lock, asyncio.Lock)
 
     def test_thread_lock_acquire_release(self):
         from enton.core.cuda_lock import cuda_thread_lock
+
         acquired = cuda_thread_lock.acquire(timeout=1)
         assert acquired
         cuda_thread_lock.release()

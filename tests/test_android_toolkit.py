@@ -1,4 +1,5 @@
 """Tests for AndroidBridge and AndroidTools."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8,6 +9,7 @@ import pytest
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_proc(stdout: bytes = b"", stderr: bytes = b"", returncode: int = 0):
     """Create a fake asyncio.subprocess result."""

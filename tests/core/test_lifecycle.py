@@ -22,6 +22,7 @@ def redirect_state_file(tmp_path, monkeypatch):
 #  Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_self_model(engagement=0.7, social=0.4):
     sm = MagicMock()
     sm.mood.engagement = engagement
@@ -38,6 +39,7 @@ def _make_desires(data=None):
 # ---------------------------------------------------------------------------
 #  Init / Load
 # ---------------------------------------------------------------------------
+
 
 class TestInit:
     def test_init_no_state_file(self, redirect_state_file):
@@ -77,6 +79,7 @@ class TestInit:
 #  Properties
 # ---------------------------------------------------------------------------
 
+
 class TestProperties:
     def test_boot_count_default(self):
         lc = Lifecycle()
@@ -94,6 +97,7 @@ class TestProperties:
 # ---------------------------------------------------------------------------
 #  time_asleep / time_asleep_human
 # ---------------------------------------------------------------------------
+
 
 class TestTimeAsleep:
     def test_time_asleep_no_prior_shutdown(self):
@@ -140,6 +144,7 @@ class TestTimeAsleep:
 # ---------------------------------------------------------------------------
 #  on_boot
 # ---------------------------------------------------------------------------
+
 
 class TestOnBoot:
     def test_on_boot_increments_boot_count(self):
@@ -235,6 +240,7 @@ class TestOnBoot:
 #  on_shutdown
 # ---------------------------------------------------------------------------
 
+
 class TestOnShutdown:
     def test_on_shutdown_saves_state_file(self, redirect_state_file):
         lc = Lifecycle()
@@ -282,6 +288,7 @@ class TestOnShutdown:
 #  save_periodic
 # ---------------------------------------------------------------------------
 
+
 class TestSavePeriodic:
     def test_save_periodic_delegates_to_on_shutdown(self, redirect_state_file):
         lc = Lifecycle()
@@ -299,6 +306,7 @@ class TestSavePeriodic:
 # ---------------------------------------------------------------------------
 #  summary
 # ---------------------------------------------------------------------------
+
 
 class TestSummary:
     def test_summary_format(self):

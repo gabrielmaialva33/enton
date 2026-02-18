@@ -120,10 +120,7 @@ def main() -> None:
         logger.error("Cannot use --int8 and --no-half (FP32) at the same time.")
         return
 
-    if args.models:
-        paths = [Path(m) for m in args.models]
-    else:
-        paths = discover_models(MODELS_DIR)
+    paths = [Path(m) for m in args.models] if args.models else discover_models(MODELS_DIR)
 
     if not paths:
         logger.warning("No .pt models found. Place YOLO .pt files in %s", MODELS_DIR)

@@ -8,6 +8,7 @@ from enton.core.gwt.module import CognitiveModule
 
 logger = logging.getLogger(__name__)
 
+
 class AgenticModule(CognitiveModule):
     """
     Agência Universal.
@@ -32,7 +33,7 @@ class AgenticModule(CognitiveModule):
                 source=self.name,
                 saliency=1.0,
                 modality="memory_recall",
-                metadata={"full_text": content, "type": "action_result"}
+                metadata={"full_text": content, "type": "action_result"},
             )
 
         # 2. Se está ocupado, não aceita novas tarefas
@@ -43,7 +44,6 @@ class AgenticModule(CognitiveModule):
         # Formato esperado da intenção: "use_tool:<tool_name>:<instruction>"
         # Ou intenções de alto nível: "perform_task:<task_description>"
         if context and context.modality == "intention":
-            
             # Caso 1: Uso explícito de ferramenta
             if context.content.startswith("use_tool:"):
                 parts = context.content.split(":", 2)
@@ -51,25 +51,27 @@ class AgenticModule(CognitiveModule):
                     tool_name, instruction = parts[1], parts[2]
                     self.is_busy = True
                     asyncio.create_task(self._execute_tool(tool_name, instruction))
-                    
+
                     return BroadcastMessage(
                         content=f"Executing tool {tool_name}...",
                         source=self.name,
                         saliency=0.9,
-                        modality="inner_speech"
+                        modality="inner_speech",
                     )
 
             # Caso 2: Tarefa genérica (Agentic execution)
             elif context.content.startswith("agentic_task:"):
-                instruction = context.metadata.get("instruction") or context.content.split(":", 1)[1]
+                instruction = (
+                    context.metadata.get("instruction") or context.content.split(":", 1)[1]
+                )
                 self.is_busy = True
                 asyncio.create_task(self._execute_agentic_task(instruction))
-                
+
                 return BroadcastMessage(
                     content=f"Starting agentic task: {instruction[:50]}...",
                     source=self.name,
                     saliency=0.9,
-                    modality="inner_speech"
+                    modality="inner_speech",
                 )
 
         return None
@@ -78,15 +80,17 @@ class AgenticModule(CognitiveModule):
         """Executa uma ferramenta específica via Brain."""
         try:
             logger.info(f"AgenticModule: Using tool {tool_name} with instruction: {instruction}")
-            
+
             # Aqui usamos o brain.think, mas forçando o contexto da ferramenta se possível
             # Como o brain já tem toolkits registrados, pedimos pra ele usar.
             from enton.cognition.prompts import AGENTIC_TOOL_PROMPT
+
             prompt = AGENTIC_TOOL_PROMPT.format(
-                tool_name=tool_name, instruction=instruction,
+                tool_name=tool_name,
+                instruction=instruction,
             )
             result = await self.brain.think(prompt)
-            
+
             self._pending_result = f"Tool {tool_name} output: {result}"
         except Exception as e:
             logger.error(f"AgenticModule tool error: {e}")

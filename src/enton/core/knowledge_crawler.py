@@ -3,6 +3,7 @@
 Crawls URLs, extracts text, uses LLM to extract knowledge triples.
 Stores triples in Qdrant collection 'enton_knowledge' with embeddings.
 """
+
 from __future__ import annotations
 
 import json
@@ -17,6 +18,8 @@ from bs4 import BeautifulSoup
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
+from enton.core.crawler_engine import Crawl4AIEngine
+
 if TYPE_CHECKING:
     from enton.cognition.brain import EntonBrain
 
@@ -24,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 KNOWLEDGE_COLLECTION = "enton_knowledge"
 EMBED_DIM = 768  # nomic-embed-text dimension
-MAX_TEXT_LEN = 4000
+MAX_TEXT_LEN = 10000 # Increased for better context
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +54,7 @@ class KnowledgeCrawler:
         self._qdrant: Any = None
         self._embedder: Any = None
         self._triple_count = 0
+        self._engine = Crawl4AIEngine()
 
     # -- initialization --
 
@@ -65,7 +69,8 @@ class KnowledgeCrawler:
                 client.create_collection(
                     collection_name=KNOWLEDGE_COLLECTION,
                     vectors_config=VectorParams(
-                        size=EMBED_DIM, distance=Distance.COSINE,
+                        size=EMBED_DIM,
+                        distance=Distance.COSINE,
                     ),
                 )
                 logger.info("Created Qdrant collection '%s'", KNOWLEDGE_COLLECTION)
@@ -81,7 +86,8 @@ class KnowledgeCrawler:
             return self._embedder
         try:
             self._embedder = OllamaEmbedder(
-                id="nomic-embed-text", dimensions=EMBED_DIM,
+                id="nomic-embed-text",
+                dimensions=EMBED_DIM,
             )
             return self._embedder
         except Exception:
@@ -91,34 +97,25 @@ class KnowledgeCrawler:
     # -- crawling --
 
     async def crawl_url(self, url: str) -> str:
-        """Fetch URL content, extract text via BeautifulSoup."""
-        try:
-            async with httpx.AsyncClient(
-                timeout=15, follow_redirects=True,
-            ) as client:
-                resp = await client.get(url, headers={
-                    "User-Agent": "Enton/0.3 (AI Assistant)",
-                })
-                resp.raise_for_status()
-
-            soup = BeautifulSoup(resp.text, "html.parser")
-
-            # Remove scripts, styles, nav
-            for tag in soup(["script", "style", "nav", "footer", "header"]):
-                tag.decompose()
-
-            text = soup.get_text(separator="\n", strip=True)
-            # Collapse whitespace
-            text = re.sub(r"\n{3,}", "\n\n", text)
-            return text[:MAX_TEXT_LEN]
-        except Exception:
-            logger.warning("Failed to crawl %s", url)
+        """Fetch URL content, extract markdown via Crawl4AI."""
+        result = await self._engine.crawl(url)
+        if result.get("error"):
+            logger.warning("Failed to crawl %s: %s", url, result["error"])
             return ""
+        
+        markdown = result.get("markdown", "")
+        if not markdown:
+            # Fallback to HTML -> Text if markdown failed
+            return ""
+            
+        return markdown[:MAX_TEXT_LEN]
 
     # -- extraction --
 
     async def extract_triples(
-        self, text: str, source_url: str = "",
+        self,
+        text: str,
+        source_url: str = "",
     ) -> list[KnowledgeTriple]:
         """Use LLM to extract knowledge triples from text."""
         if not self._brain or not text:
@@ -146,12 +143,14 @@ class KnowledgeCrawler:
             triples = []
             for item in data[:10]:
                 if all(k in item for k in ("subject", "predicate", "obj")):
-                    triples.append(KnowledgeTriple(
-                        subject=str(item["subject"]),
-                        predicate=str(item["predicate"]),
-                        obj=str(item["obj"]),
-                        source_url=source_url,
-                    ))
+                    triples.append(
+                        KnowledgeTriple(
+                            subject=str(item["subject"]),
+                            predicate=str(item["predicate"]),
+                            obj=str(item["obj"]),
+                            source_url=source_url,
+                        )
+                    )
             return triples
         except (json.JSONDecodeError, Exception):
             logger.warning("Failed to extract triples from LLM response")
@@ -173,15 +172,17 @@ class KnowledgeCrawler:
         logger.info("Learned %d triples from %s", len(triples), url)
         return triples
 
-    async def learn_text(self, text: str, source: str = "internal_thought") -> list[KnowledgeTriple]:
+    async def learn_text(
+        self, text: str, source: str = "internal_thought"
+    ) -> list[KnowledgeTriple]:
         """Learn directly from provided text (e.g. from GitHubModule)."""
         if not text:
             return []
-        
+
         triples = await self.extract_triples(text, source_url=source)
         if not triples:
             return []
-            
+
         await self._store_triples(triples)
         logger.info("Learned %d triples from %s", len(triples), source)
         return triples
@@ -199,7 +200,8 @@ class KnowledgeCrawler:
         """DuckDuckGo HTML search — returns list of URLs."""
         try:
             async with httpx.AsyncClient(
-                timeout=10, follow_redirects=True,
+                timeout=10,
+                follow_redirects=True,
             ) as client:
                 resp = await client.get(
                     "https://html.duckduckgo.com/html/",
@@ -239,20 +241,23 @@ class KnowledgeCrawler:
                 embedding = resp
 
                 self._triple_count += 1
-                points.append(PointStruct(
-                    id=self._triple_count,
-                    vector=embedding,
-                    payload={
-                        "subject": triple.subject,
-                        "predicate": triple.predicate,
-                        "obj": triple.obj,
-                        "source_url": triple.source_url,
-                    },
-                ))
+                points.append(
+                    PointStruct(
+                        id=self._triple_count,
+                        vector=embedding,
+                        payload={
+                            "subject": triple.subject,
+                            "predicate": triple.predicate,
+                            "obj": triple.obj,
+                            "source_url": triple.source_url,
+                        },
+                    )
+                )
 
             if points:
                 self._qdrant.upsert(
-                    collection_name=KNOWLEDGE_COLLECTION, points=points,
+                    collection_name=KNOWLEDGE_COLLECTION,
+                    points=points,
                 )
         except Exception:
             logger.warning("Failed to store triples in Qdrant")

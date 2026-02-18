@@ -89,7 +89,7 @@ class Settings(BaseSettings):
 
     # Edge-TTS (cloud fallback — free Microsoft Neural TTS)
     edge_tts_voice: str = "pt-BR-AntonioNeural"
-    
+
     # Brain
     brain_timeout: float = 30.0
     brain_max_turns: int = 5

@@ -6,6 +6,7 @@ capture output, and auto-retry on failure.
 
 Pattern: Named async tasks with status tracking + output buffering.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -56,7 +57,9 @@ class ManagedTask:
     @property
     def is_done(self) -> bool:
         return self.status in (
-            TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED,
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
         )
 
     def summary(self) -> str:
@@ -153,7 +156,8 @@ class ProcessManager:
                         cwd=cwd or None,
                     )
                     stdout, stderr = await asyncio.wait_for(
-                        proc.communicate(), timeout=mt.timeout,
+                        proc.communicate(),
+                        timeout=mt.timeout,
                     )
                     mt.output = stdout.decode(errors="replace").strip()
                     mt.error = stderr.decode(errors="replace").strip()
@@ -164,7 +168,8 @@ class ProcessManager:
                         mt.status = TaskStatus.COMPLETED
                         logger.info(
                             "Task completed: %s (%.1fs)",
-                            mt.name, mt.elapsed,
+                            mt.name,
+                            mt.elapsed,
                         )
                         return
 
@@ -172,15 +177,19 @@ class ProcessManager:
                     if attempt < mt.max_retries:
                         logger.warning(
                             "Task %s failed (exit=%d), retry %d/%d",
-                            mt.name, mt.exit_code, attempt + 1, mt.max_retries,
+                            mt.name,
+                            mt.exit_code,
+                            attempt + 1,
+                            mt.max_retries,
                         )
-                        await asyncio.sleep(2 ** attempt)  # exponential backoff
+                        await asyncio.sleep(2**attempt)  # exponential backoff
                         continue
 
                     mt.status = TaskStatus.FAILED
                     logger.warning(
                         "Task failed: %s (exit=%d, retries exhausted)",
-                        mt.name, mt.exit_code,
+                        mt.name,
+                        mt.exit_code,
                     )
 
                 except TimeoutError:
@@ -200,7 +209,9 @@ class ProcessManager:
                     return
 
     async def _run_coro(
-        self, mt: ManagedTask, coro: asyncio.coroutines,
+        self,
+        mt: ManagedTask,
+        coro: asyncio.coroutines,
     ) -> None:
         """Execute async coroutine with tracking."""
         async with self._semaphore:
@@ -245,7 +256,9 @@ class ProcessManager:
         return True
 
     def list_tasks(
-        self, status: TaskStatus | None = None, limit: int = 20,
+        self,
+        status: TaskStatus | None = None,
+        limit: int = 20,
     ) -> list[ManagedTask]:
         """List tasks, optionally filtered by status."""
         tasks = sorted(
@@ -261,8 +274,7 @@ class ProcessManager:
         """Remove old completed/failed tasks. Returns count removed."""
         now = time.time()
         to_remove = [
-            tid for tid, t in self._tasks.items()
-            if t.is_done and (now - t.finished_at) > max_age
+            tid for tid, t in self._tasks.items() if t.is_done and (now - t.finished_at) > max_age
         ]
         for tid in to_remove:
             del self._tasks[tid]
@@ -270,10 +282,7 @@ class ProcessManager:
 
     @property
     def active_count(self) -> int:
-        return sum(
-            1 for t in self._tasks.values()
-            if t.status == TaskStatus.RUNNING
-        )
+        return sum(1 for t in self._tasks.values() if t.status == TaskStatus.RUNNING)
 
     def summary(self) -> str:
         """Quick status summary."""

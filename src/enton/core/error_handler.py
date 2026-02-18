@@ -17,6 +17,7 @@ Pattern:
   5. If still fails → fall back to next provider (existing behavior)
   6. After N total retries → give up gracefully
 """
+
 from __future__ import annotations
 
 import logging
@@ -108,7 +109,9 @@ class ErrorLoopBack:
                 # If previous attempt failed, inject error context
                 if last_error and args:
                     enhanced_prompt = self._build_loopback_prompt(
-                        original_prompt, last_error, attempt,
+                        original_prompt,
+                        last_error,
+                        attempt,
                     )
                     args = (enhanced_prompt, *args[1:])
 
@@ -126,7 +129,8 @@ class ErrorLoopBack:
                     )
                     logger.info(
                         "Error loop-back: resolved on attempt %d (provider=%s)",
-                        attempt, provider_id,
+                        attempt,
+                        provider_id,
                     )
 
                 self._consecutive_failures = 0
@@ -134,7 +138,10 @@ class ErrorLoopBack:
 
             except Exception as exc:
                 error = self._capture_error(
-                    exc, provider_id, original_prompt, attempt,
+                    exc,
+                    provider_id,
+                    original_prompt,
+                    attempt,
                 )
                 self._history.append(error)
                 self._consecutive_failures += 1
@@ -149,7 +156,10 @@ class ErrorLoopBack:
 
                 logger.warning(
                     "Error loop-back [%d/%d]: %s (provider=%s)",
-                    attempt, self._max_total, error.message[:80], provider_id,
+                    attempt,
+                    self._max_total,
+                    error.message[:80],
+                    provider_id,
                 )
 
         # All retries exhausted
@@ -168,13 +178,17 @@ class ErrorLoopBack:
         """
         for provider_id, func, args, kwargs in providers:
             result, error = await self.execute(
-                func, *args, provider_id=provider_id, **kwargs,
+                func,
+                *args,
+                provider_id=provider_id,
+                **kwargs,
             )
             if result:
                 return result, provider_id
             if error:
                 logger.info(
-                    "Provider %s exhausted, trying next", provider_id,
+                    "Provider %s exhausted, trying next",
+                    provider_id,
                 )
 
         return "", ""
@@ -246,21 +260,15 @@ class ErrorLoopBack:
 
         # JSON/parsing errors
         if "json" in msg or "parse" in msg or "decode" in msg:
-            hints.append(
-                "DICA: Erro de parsing. Retorne texto simples em vez de JSON."
-            )
+            hints.append("DICA: Erro de parsing. Retorne texto simples em vez de JSON.")
 
         # Connection errors
         if "connection" in msg or "connect" in msg or "refused" in msg:
-            hints.append(
-                "DICA: Servico indisponivel. Evite dependencias externas."
-            )
+            hints.append("DICA: Servico indisponivel. Evite dependencias externas.")
 
         # Permission denied
         if "permission" in msg or "denied" in msg or "forbidden" in msg:
-            hints.append(
-                "DICA: Sem permissao. Tente um caminho/recurso diferente."
-            )
+            hints.append("DICA: Sem permissao. Tente um caminho/recurso diferente.")
 
         # Similar errors in history — pattern detection
         similar = self._find_similar_errors(error)
@@ -276,7 +284,8 @@ class ErrorLoopBack:
         """Count recent similar errors (same type + provider)."""
         cutoff = time.time() - 300  # last 5 minutes
         return sum(
-            1 for e in self._history
+            1
+            for e in self._history
             if e.error_type == error.error_type
             and e.provider == error.provider
             and e.timestamp > cutoff
@@ -287,7 +296,10 @@ class ErrorLoopBack:
     # ------------------------------------------------------------------ #
 
     def _inject_context(
-        self, key: str, content: str, priority: float = 0.5,
+        self,
+        key: str,
+        content: str,
+        priority: float = 0.5,
     ) -> None:
         """Inject error info into context engine (if available)."""
         if self._context:

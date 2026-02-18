@@ -3,6 +3,7 @@
 Records mood, detections/min, FPS, VRAM, latencies, etc.
 Falls back gracefully if TimescaleDB is unavailable.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -76,7 +77,8 @@ class MetricsCollector:
 
         logger.info(
             "Metrics loop started (interval=%.0fs, collectors=%d)",
-            self._interval, len(self._collectors),
+            self._interval,
+            len(self._collectors),
         )
 
         while True:

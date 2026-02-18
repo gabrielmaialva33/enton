@@ -7,6 +7,7 @@ evicted back to CPU (or fully unloaded).
 
 Replaces the naive cuda_lock.py with a proper resource manager.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -24,9 +25,9 @@ logger = logging.getLogger(__name__)
 
 
 class ModelPriority(IntEnum):
-    LOW = auto()        # only if room (SigLIP, optional models)
-    NORMAL = auto()     # on-demand (Whisper, Kokoro, Qwen-VL)
-    CRITICAL = auto()   # always in VRAM (YOLO during active modes)
+    LOW = auto()  # only if room (SigLIP, optional models)
+    NORMAL = auto()  # on-demand (Whisper, Kokoro, Qwen-VL)
+    CRITICAL = auto()  # always in VRAM (YOLO during active modes)
 
 
 @dataclass(slots=True)
@@ -75,6 +76,7 @@ class ModelSlot:
 def _empty_cache() -> None:
     try:
         import torch
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     except Exception:
@@ -85,6 +87,7 @@ def _get_vram_free_mb() -> int:
     """Return free VRAM in MB (or 0 if unavailable)."""
     try:
         import torch
+
         if torch.cuda.is_available():
             free, _ = torch.cuda.mem_get_info()
             return int(free / (1024 * 1024))
@@ -114,7 +117,10 @@ class VRAMManager:
         priority: ModelPriority = ModelPriority.NORMAL,
     ) -> None:
         self._slots[name] = ModelSlot(
-            name=name, loader=loader, vram_mb=vram_mb, priority=priority,
+            name=name,
+            loader=loader,
+            vram_mb=vram_mb,
+            priority=priority,
         )
 
     # -- queries --
@@ -177,10 +183,7 @@ class VRAMManager:
 
     def _pick_eviction(self, exclude: str) -> ModelSlot | None:
         """LRU eviction among on-device models, lowest priority first."""
-        candidates = [
-            s for s in self._slots.values()
-            if s.on_device and s.name != exclude
-        ]
+        candidates = [s for s in self._slots.values() if s.on_device and s.name != exclude]
         if not candidates:
             return None
         # sort: lowest priority first, then oldest last_used
@@ -211,8 +214,7 @@ class VRAMManager:
         for s in sorted(self._slots.values(), key=lambda x: -x.priority):
             loc = "CUDA" if s.on_device else ("CPU" if s.model else "off")
             lines.append(
-                f"  {s.name}: {loc} ({s.vram_mb}MB, "
-                f"P{s.priority.name}, used {s.use_count}x)"
+                f"  {s.name}: {loc} ({s.vram_mb}MB, P{s.priority.name}, used {s.use_count}x)"
             )
         return "\n".join(lines)
 

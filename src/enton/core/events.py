@@ -81,6 +81,7 @@ class SoundEvent(Event):
 @dataclass(frozen=True, slots=True)
 class SceneChangeEvent(Event):
     """Emitted when visual scene changes significantly."""
+
     camera_id: str = "main"
     new_objects: list[str] = field(default_factory=list)
     removed_objects: list[str] = field(default_factory=list)
@@ -89,6 +90,7 @@ class SceneChangeEvent(Event):
 @dataclass(frozen=True, slots=True)
 class SkillEvent(Event):
     """Emitted when a dynamic skill is loaded, unloaded, or forged."""
+
     kind: str = ""  # "loaded", "unloaded", "forge_created", "forge_failed"
     name: str = ""
     detail: str = ""
@@ -97,6 +99,7 @@ class SkillEvent(Event):
 @dataclass(frozen=True, slots=True)
 class ChannelMessageEvent(Event):
     """Emitted when a message arrives from any channel (Telegram, Discord, etc.)."""
+
     message: object = None  # ChannelMessage (avoid circular import)
 
     @property

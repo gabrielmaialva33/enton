@@ -9,6 +9,7 @@ Key features:
 - Summarization triggers: compress when approaching limits
 - Token-aware budget management
 """
+
 from __future__ import annotations
 
 import json
@@ -176,7 +177,8 @@ class ContextEngine:
         return "\n".join(parts)
 
     def assemble_by_category(
-        self, categories: list[str] | None = None,
+        self,
+        categories: list[str] | None = None,
     ) -> dict[str, str]:
         """Assemble context grouped by category."""
         self._cleanup_stale()
@@ -219,13 +221,17 @@ class ContextEngine:
         if self._checkpoint_dir:
             path = self._checkpoint_dir / f"{cp_id}.json"
             path.write_text(
-                json.dumps({
-                    "id": cp.id,
-                    "name": cp.name,
-                    "entries": cp.entries,
-                    "metadata": cp.metadata,
-                    "created_at": cp.created_at,
-                }, ensure_ascii=False, indent=2),
+                json.dumps(
+                    {
+                        "id": cp.id,
+                        "name": cp.name,
+                        "entries": cp.entries,
+                        "metadata": cp.metadata,
+                        "created_at": cp.created_at,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
                 encoding="utf-8",
             )
             logger.info("Checkpoint saved: %s → %s", name, path)

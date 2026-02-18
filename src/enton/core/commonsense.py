@@ -3,6 +3,7 @@
 Lazy initialization: only activates if 'enton_commonsense' Qdrant collection
 exists (populated by scripts/load_commonsense.py).
 """
+
 from __future__ import annotations
 
 import logging
@@ -57,7 +58,8 @@ class CommonsenseKB:
             return self._embedder
         try:
             self._embedder = OllamaEmbedder(
-                id="nomic-embed-text", dimensions=EMBED_DIM,
+                id="nomic-embed-text",
+                dimensions=EMBED_DIM,
             )
             return self._embedder
         except Exception:
@@ -98,7 +100,4 @@ class CommonsenseKB:
     async def what_is(self, concept: str, n: int = 3) -> list[str]:
         """Get commonsense facts about a concept as natural language."""
         results = await self.search(concept, n=n)
-        return [
-            f"{r['subject']} {r['predicate']} {r['obj']}"
-            for r in results
-        ]
+        return [f"{r['subject']} {r['predicate']} {r['obj']}" for r in results]

@@ -17,6 +17,7 @@ Architecture:
     SkillRegistry manages the "how" (import, instantiate, hot-reload).
     Brain manages the "where" (Agent tool list).
 """
+
 from __future__ import annotations
 
 import importlib
@@ -38,15 +39,17 @@ logger = logging.getLogger(__name__)
 
 class ExtensionSource(StrEnum):
     """Where an extension came from."""
-    BUILTIN = "builtin"       # shipped with Enton
+
+    BUILTIN = "builtin"  # shipped with Enton
     FILESYSTEM = "filesystem"  # loaded from skills_dir (SkillRegistry)
     ENTRYPOINT = "entrypoint"  # pip package entry point
-    MANIFEST = "manifest"      # local manifest JSON
-    REMOTE = "remote"          # git cloned
+    MANIFEST = "manifest"  # local manifest JSON
+    REMOTE = "remote"  # git cloned
 
 
 class ExtensionState(StrEnum):
     """Extension lifecycle state."""
+
     DISCOVERED = "discovered"
     LOADED = "loaded"
     ENABLED = "enabled"
@@ -270,11 +273,7 @@ class ExtensionRegistry:
             # Scan for Toolkit subclass
             for attr_name in dir(module):
                 attr = getattr(module, attr_name, None)
-                if (
-                    isinstance(attr, type)
-                    and issubclass(attr, Toolkit)
-                    and attr is not Toolkit
-                ):
+                if isinstance(attr, type) and issubclass(attr, Toolkit) and attr is not Toolkit:
                     return attr()
 
         except Exception:
@@ -340,7 +339,11 @@ class ExtensionRegistry:
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                "git", "clone", "--depth=1", repo_url, str(target),
+                "git",
+                "clone",
+                "--depth=1",
+                repo_url,
+                str(target),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

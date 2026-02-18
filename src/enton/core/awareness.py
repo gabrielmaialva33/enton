@@ -9,6 +9,7 @@ time, and system events.
                      |         CREATIVE (dream)
                      +--- (any) <--- ALERT
 """
+
 from __future__ import annotations
 
 import logging
@@ -25,12 +26,12 @@ logger = logging.getLogger(__name__)
 
 
 class AwarenessLevel(Enum):
-    DORMANT = auto()     # system idle, minimal processing
-    SENTINEL = auto()    # background watching, motion/sound only
-    ATTENTIVE = auto()   # someone present, all perception active
-    FOCUSED = auto()     # active conversation, full cognition
-    CREATIVE = auto()    # dream mode / background processing
-    ALERT = auto()       # emergency: loud sound, error cascade
+    DORMANT = auto()  # system idle, minimal processing
+    SENTINEL = auto()  # background watching, motion/sound only
+    ATTENTIVE = auto()  # someone present, all perception active
+    FOCUSED = auto()  # active conversation, full cognition
+    CREATIVE = auto()  # dream mode / background processing
+    ALERT = auto()  # emergency: loud sound, error cascade
 
 
 @dataclass(slots=True, frozen=True)
@@ -47,22 +48,46 @@ class AwarenessConfig:
 # Pre-built configs per level
 LEVEL_CONFIGS: dict[AwarenessLevel, AwarenessConfig] = {
     AwarenessLevel.DORMANT: AwarenessConfig(
-        vision_fps=0, audio=False, llm=False, tts=False, dream=False,
+        vision_fps=0,
+        audio=False,
+        llm=False,
+        tts=False,
+        dream=False,
     ),
     AwarenessLevel.SENTINEL: AwarenessConfig(
-        vision_fps=2, audio=True, llm=False, tts=False, dream=False,
+        vision_fps=2,
+        audio=True,
+        llm=False,
+        tts=False,
+        dream=False,
     ),
     AwarenessLevel.ATTENTIVE: AwarenessConfig(
-        vision_fps=10, audio=True, llm=True, tts=True, dream=False,
+        vision_fps=10,
+        audio=True,
+        llm=True,
+        tts=True,
+        dream=False,
     ),
     AwarenessLevel.FOCUSED: AwarenessConfig(
-        vision_fps=15, audio=True, llm=True, tts=True, dream=False,
+        vision_fps=15,
+        audio=True,
+        llm=True,
+        tts=True,
+        dream=False,
     ),
     AwarenessLevel.CREATIVE: AwarenessConfig(
-        vision_fps=1, audio=False, llm=True, tts=False, dream=True,
+        vision_fps=1,
+        audio=False,
+        llm=True,
+        tts=False,
+        dream=True,
     ),
     AwarenessLevel.ALERT: AwarenessConfig(
-        vision_fps=30, audio=True, llm=True, tts=True, dream=False,
+        vision_fps=30,
+        audio=True,
+        llm=True,
+        tts=True,
+        dream=False,
     ),
 }
 
@@ -130,15 +155,21 @@ class AwarenessStateMachine:
 
         logger.info(
             "Awareness: %s -> %s (%s) [#%d]",
-            old.name, new_state.name, reason, self._transition_count,
+            old.name,
+            new_state.name,
+            reason,
+            self._transition_count,
         )
 
         if bus is not None:
             from enton.core.events import SystemEvent
-            bus.emit_nowait(SystemEvent(
-                kind="awareness_change",
-                detail=f"{old.name}->{new_state.name}: {reason}",
-            ))
+
+            bus.emit_nowait(
+                SystemEvent(
+                    kind="awareness_change",
+                    detail=f"{old.name}->{new_state.name}: {reason}",
+                )
+            )
 
         return True
 
@@ -171,13 +202,15 @@ class AwarenessStateMachine:
         elif self._state == AwarenessLevel.CREATIVE:
             if mood.social > 0.2:
                 self.transition(
-                    AwarenessLevel.ATTENTIVE, "interaction during dream", bus,
+                    AwarenessLevel.ATTENTIVE,
+                    "interaction during dream",
+                    bus,
                 )
             elif t > 300:  # 5min dream max
                 self.transition(AwarenessLevel.SENTINEL, "dream complete", bus)
 
         elif self._state == AwarenessLevel.ALERT and t > 60:
-                self.transition(AwarenessLevel.ATTENTIVE, "alert timeout", bus)
+            self.transition(AwarenessLevel.ATTENTIVE, "alert timeout", bus)
 
     def trigger_alert(self, reason: str, bus: EventBus | None = None) -> None:
         """Force transition to ALERT (e.g. loud sound, unknown person)."""

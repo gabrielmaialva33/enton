@@ -3,6 +3,7 @@
 Manages binary files (images, audio, video, faces, snapshots) on an
 external HD with Qdrant metadata indexing and transparent fallback.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -184,9 +185,11 @@ class BlobStore:
         try:
             filt = None
             if blob_type:
-                filt = Filter(must=[
-                    FieldCondition(key="blob_type", match=MatchValue(value=blob_type.value)),
-                ])
+                filt = Filter(
+                    must=[
+                        FieldCondition(key="blob_type", match=MatchValue(value=blob_type.value)),
+                    ]
+                )
             response = self._qdrant.query_points(
                 collection_name=BLOB_COLLECTION,
                 query=embedding,
@@ -209,9 +212,11 @@ class BlobStore:
         try:
             filt = None
             if blob_type:
-                filt = Filter(must=[
-                    FieldCondition(key="blob_type", match=MatchValue(value=blob_type.value)),
-                ])
+                filt = Filter(
+                    must=[
+                        FieldCondition(key="blob_type", match=MatchValue(value=blob_type.value)),
+                    ]
+                )
             # Fetch more than needed, sort in Python by timestamp
             fetch_limit = min(n * 3, 100)
             results, _ = self._qdrant.scroll(
@@ -320,6 +325,7 @@ class BlobStore:
             return True
         try:
             from agno.knowledge.embedder.ollama import OllamaEmbedder
+
             self._embedder = OllamaEmbedder(id="nomic-embed-text", dimensions=EMBED_DIM)
             return True
         except Exception:
@@ -342,12 +348,14 @@ class BlobStore:
             return
 
         # Build searchable text from tags + type + camera
-        search_text = " ".join([
-            meta.blob_type.value,
-            meta.camera_id,
-            *meta.tags,
-            *[f"{k}={v}" for k, v in meta.extra.items() if isinstance(v, str)],
-        ])
+        search_text = " ".join(
+            [
+                meta.blob_type.value,
+                meta.camera_id,
+                *meta.tags,
+                *[f"{k}={v}" for k, v in meta.extra.items() if isinstance(v, str)],
+            ]
+        )
         embedding = await self._embed_text(search_text)
         if not embedding:
             return
@@ -366,11 +374,13 @@ class BlobStore:
         try:
             self._qdrant.upsert(
                 collection_name=BLOB_COLLECTION,
-                points=[PointStruct(
-                    id=uuid.uuid4().hex,
-                    vector=embedding,
-                    payload=payload,
-                )],
+                points=[
+                    PointStruct(
+                        id=uuid.uuid4().hex,
+                        vector=embedding,
+                        payload=payload,
+                    )
+                ],
             )
         except Exception:
             logger.debug("BlobStore Qdrant indexing failed")

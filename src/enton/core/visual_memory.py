@@ -4,6 +4,7 @@ Embeds keyframes on significant vision events (new objects, scene changes).
 Stores embeddings in Qdrant collection 'enton_visual' with metadata.
 Saves JPEG thumbnails to ~/.enton/frames/ for retrieval.
 """
+
 from __future__ import annotations
 
 import logging
@@ -81,7 +82,8 @@ class VisualMemory:
                 client.create_collection(
                     collection_name=VISUAL_COLLECTION,
                     vectors_config=VectorParams(
-                        size=EMBED_DIM, distance=Distance.COSINE,
+                        size=EMBED_DIM,
+                        distance=Distance.COSINE,
                     ),
                 )
                 logger.info("Created Qdrant collection '%s'", VISUAL_COLLECTION)
@@ -107,7 +109,9 @@ class VisualMemory:
             self._preprocess = preprocess
             self._tokenizer = open_clip.get_tokenizer(self._siglip_model_name)
             logger.info(
-                "SigLIP '%s' loaded on %s", self._siglip_model_name, device,
+                "SigLIP '%s' loaded on %s",
+                self._siglip_model_name,
+                device,
             )
             return True
         except Exception:
@@ -204,28 +208,35 @@ class VisualMemory:
             try:
                 self._qdrant.upsert(
                     collection_name=VISUAL_COLLECTION,
-                    points=[PointStruct(
-                        id=self._episode_count,
-                        vector=embedding,
-                        payload={
-                            "timestamp": now,
-                            "camera_id": camera_id,
-                            "detections": detections,
-                            "thumbnail_path": thumbnail_path,
-                        },
-                    )],
+                    points=[
+                        PointStruct(
+                            id=self._episode_count,
+                            vector=embedding,
+                            payload={
+                                "timestamp": now,
+                                "camera_id": camera_id,
+                                "detections": detections,
+                                "thumbnail_path": thumbnail_path,
+                            },
+                        )
+                    ],
                 )
             except Exception:
                 logger.warning("Failed to store visual episode in Qdrant")
 
         logger.info(
             "Visual memory #%d: %s (%s)",
-            self._episode_count, detections, camera_id,
+            self._episode_count,
+            detections,
+            camera_id,
         )
         return episode
 
     async def _save_thumbnail(
-        self, frame_bgr: np.ndarray, timestamp: float, camera_id: str = "",
+        self,
+        frame_bgr: np.ndarray,
+        timestamp: float,
+        camera_id: str = "",
     ) -> str:
         """Save JPEG thumbnail, return path string."""
         try:
@@ -234,11 +245,14 @@ class VisualMemory:
             if w > 320:
                 scale = 320 / w
                 frame_bgr = cv2.resize(
-                    frame_bgr, (320, int(h * scale)),
+                    frame_bgr,
+                    (320, int(h * scale)),
                 )
 
             _, jpeg_buf = cv2.imencode(
-                ".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 70],
+                ".jpg",
+                frame_bgr,
+                [cv2.IMWRITE_JPEG_QUALITY, 70],
             )
             jpeg_bytes = jpeg_buf.tobytes()
 

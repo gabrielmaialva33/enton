@@ -5,12 +5,13 @@ from enton.core.gwt.module import CognitiveModule
 
 logger = logging.getLogger(__name__)
 
+
 class GlobalWorkspace:
     """
     O 'Palco' da consciência. Gerencia a competição entre módulos
     e faz o broadcast do vencedor.
     """
-    
+
     def __init__(self):
         self.modules: list[CognitiveModule] = []
         self.current_conscious_content: BroadcastMessage | None = None
@@ -53,8 +54,8 @@ class GlobalWorkspace:
 
         # 3. Update Global Workspace
         self.current_conscious_content = winner
-        self.history.append(winner) # Short-term history
-        
+        self.history.append(winner)  # Short-term history
+
         # Limit history size
         if len(self.history) > 100:
             self.history.pop(0)

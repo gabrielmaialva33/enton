@@ -8,6 +8,7 @@ Tiers:
 
 Unified search queries all tiers and ranks results.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -98,7 +99,8 @@ class MemoryTiers:
         # Evict oldest if too many
         if len(self._spatial) > self.MAX_OBJECTS:
             oldest_key = min(
-                self._spatial, key=lambda k: self._spatial[k].timestamp,
+                self._spatial,
+                key=lambda k: self._spatial[k].timestamp,
             )
             del self._spatial[oldest_key]
 
@@ -116,7 +118,7 @@ class MemoryTiers:
         """Add a temporal pattern (called from DreamMode)."""
         self._patterns.append(pattern)
         if len(self._patterns) > self.MAX_PATTERNS:
-            self._patterns = self._patterns[-self.MAX_PATTERNS:]
+            self._patterns = self._patterns[-self.MAX_PATTERNS :]
 
     def patterns_for_hour(self, hour: int) -> list[TemporalPattern]:
         """Get temporal patterns active around a given hour."""
@@ -133,28 +135,26 @@ class MemoryTiers:
         for label, loc in self._spatial.items():
             if label.lower() in q_lower or q_lower in label.lower():
                 age = time.time() - loc.timestamp
-                age_str = (
-                    f"{int(age)}s ago" if age < 60
-                    else f"{int(age / 60)}min ago"
+                age_str = f"{int(age)}s ago" if age < 60 else f"{int(age / 60)}min ago"
+                results.append(
+                    TierResult(
+                        tier="spatial",
+                        content=f"{label} seen on camera '{loc.camera_id}' ({age_str})",
+                        score=loc.confidence,
+                        metadata={"camera_id": loc.camera_id, "bbox": loc.bbox},
+                    )
                 )
-                results.append(TierResult(
-                    tier="spatial",
-                    content=f"{label} seen on camera '{loc.camera_id}' ({age_str})",
-                    score=loc.confidence,
-                    metadata={"camera_id": loc.camera_id, "bbox": loc.bbox},
-                ))
 
         # Temporal: keyword match
         for pattern in self._patterns:
-            if (
-                pattern.tag.lower() in q_lower
-                or q_lower in pattern.description.lower()
-            ):
-                results.append(TierResult(
-                    tier="temporal",
-                    content=pattern.description,
-                    score=pattern.count / 100.0,
-                ))
+            if pattern.tag.lower() in q_lower or q_lower in pattern.description.lower():
+                results.append(
+                    TierResult(
+                        tier="temporal",
+                        content=pattern.description,
+                        score=pattern.count / 100.0,
+                    )
+                )
 
         # Episodic + Visual + Semantic: run in parallel
         tasks = []
@@ -162,15 +162,13 @@ class MemoryTiers:
         # Episodic text search
         async def _episodic() -> list[TierResult]:
             hits = self._memory.semantic_search(query, n=n)
-            return [
-                TierResult(tier="episodic", content=h, score=0.7)
-                for h in hits
-            ]
+            return [TierResult(tier="episodic", content=h, score=0.7) for h in hits]
 
         tasks.append(_episodic())
 
         # Visual search
         if self._visual is not None:
+
             async def _visual() -> list[TierResult]:
                 hits = await self._visual.search(query, n=n)
                 return [
@@ -191,6 +189,7 @@ class MemoryTiers:
 
         # Knowledge search
         if self._knowledge is not None:
+
             async def _knowledge() -> list[TierResult]:
                 hits = await self._knowledge.search(query, n=n)
                 return [
@@ -207,6 +206,7 @@ class MemoryTiers:
 
         # Commonsense search
         if self._commonsense is not None and self._commonsense.available:
+
             async def _commonsense() -> list[TierResult]:
                 hits = await self._commonsense.search(query, n=n)
                 return [
@@ -230,7 +230,7 @@ class MemoryTiers:
 
         # Sort by score descending, limit
         results.sort(key=lambda r: r.score, reverse=True)
-        return results[:n * 2]
+        return results[: n * 2]
 
     # -- context --
 
@@ -241,11 +241,10 @@ class MemoryTiers:
         if include_spatial and self._spatial:
             recent = sorted(
                 self._spatial.values(),
-                key=lambda o: o.timestamp, reverse=True,
+                key=lambda o: o.timestamp,
+                reverse=True,
             )[:5]
-            objs = ", ".join(
-                f"{o.label}@{o.camera_id}" for o in recent
-            )
+            objs = ", ".join(f"{o.label}@{o.camera_id}" for o in recent)
             parts.append(f"Objects: {objs}")
 
         hour = datetime.now().hour
@@ -264,8 +263,5 @@ class MemoryTiers:
             "temporal_patterns": len(self._patterns),
             "visual_memory": self._visual is not None,
             "knowledge": self._knowledge is not None,
-            "commonsense": (
-                self._commonsense.available
-                if self._commonsense else False
-            ),
+            "commonsense": (self._commonsense.available if self._commonsense else False),
         }

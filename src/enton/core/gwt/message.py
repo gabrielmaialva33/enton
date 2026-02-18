@@ -9,10 +9,11 @@ class BroadcastMessage:
     Representa um conteúdo que ganhou acesso ao Global Workspace.
     É transmitido para todos os módulos no início de cada ciclo.
     """
+
     content: Any
     source: str
     saliency: float  # 0.0 a 1.0 (Quão importante/surpreendente é)
-    modality: str    # "vision", "audio", "inner_speech", "emotion", etc.
+    modality: str  # "vision", "audio", "inner_speech", "emotion", etc.
     timestamp: float = field(default_factory=time.time)
     metadata: dict[str, Any] = field(default_factory=dict)
 

@@ -7,12 +7,13 @@ from enton.core.gwt.module import CognitiveModule
 
 logger = logging.getLogger(__name__)
 
+
 class PerceptionModule(CognitiveModule):
     """
     Módulo responsável pela percepção visual e cálculo de surpresa.
     Atua como 'Sensory Cortex'.
     """
-    
+
     def __init__(self, prediction_engine: PredictionEngine):
         super().__init__(name="perception")
         self.engine = prediction_engine
@@ -33,11 +34,11 @@ class PerceptionModule(CognitiveModule):
         # 0.0 -> |0.0 - 0.5| = 0.5 * 2 = 1.0 Saliência
         # 1.0 -> |1.0 - 0.5| = 0.5 * 2 = 1.0 Saliência
         # 0.5 -> |0.5 - 0.5| = 0.0 * 2 = 0.0 Saliência
-        
+
         dist_from_neutral = abs(self._current_surprise - 0.5)
-        saliency = dist_from_neutral * 1.8 # Boost factor
+        saliency = dist_from_neutral * 1.8  # Boost factor
         saliency = min(1.0, max(0.0, saliency))
-        
+
         # Filtro de ruído: Só reporta se tiver alguma relevância
         if saliency > 0.2:
             content_type = "High Novelty" if self._current_surprise > 0.5 else "High Predictability"
@@ -46,7 +47,7 @@ class PerceptionModule(CognitiveModule):
                 source=self.name,
                 saliency=saliency,
                 modality="vision",
-                metadata={"surprise": self._current_surprise}
+                metadata={"surprise": self._current_surprise},
             )
-        
+
         return None

@@ -4,6 +4,7 @@ Detects GPU (NVIDIA), CPU, RAM, disk (local + external HD), network,
 CUDA capabilities, and running services. Updates periodically to give
 Enton real-time awareness of his computational resources.
 """
+
 from __future__ import annotations
 
 import logging
@@ -266,7 +267,10 @@ def _get_cuda_version() -> str:
         # Try nvcc for precise CUDA version
         nvcc = subprocess.run(
             ["nvcc", "--version"],
-            capture_output=True, text=True, timeout=5, check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
         )
         if nvcc.returncode == 0:
             for line in nvcc.stdout.splitlines():
@@ -282,10 +286,20 @@ def _get_cuda_version() -> str:
 def _get_compute_capability(gpu_name: str) -> str:
     """Known compute capabilities for common GPUs."""
     cc_map = {
-        "4090": "8.9", "4080": "8.9", "4070": "8.9", "4060": "8.9",
-        "3090": "8.6", "3080": "8.6", "3070": "8.6", "3060": "8.6",
-        "A100": "8.0", "H100": "9.0", "L40": "8.9",
-        "V100": "7.0", "T4": "7.5", "A10": "8.6",
+        "4090": "8.9",
+        "4080": "8.9",
+        "4070": "8.9",
+        "4060": "8.9",
+        "3090": "8.6",
+        "3080": "8.6",
+        "3070": "8.6",
+        "3060": "8.6",
+        "A100": "8.0",
+        "H100": "9.0",
+        "L40": "8.9",
+        "V100": "7.0",
+        "T4": "7.5",
+        "A10": "8.6",
     }
     for key, cc in cc_map.items():
         if key in gpu_name:
@@ -306,15 +320,17 @@ def _detect_disks() -> list[DiskInfo]:
         seen_devices.add(part.device)
         try:
             usage = psutil.disk_usage(part.mountpoint)
-            disks.append(DiskInfo(
-                mount=part.mountpoint,
-                device=part.device,
-                total_gb=usage.total / (1 << 30),
-                used_gb=usage.used / (1 << 30),
-                free_gb=usage.free / (1 << 30),
-                percent=usage.percent,
-                fstype=part.fstype,
-            ))
+            disks.append(
+                DiskInfo(
+                    mount=part.mountpoint,
+                    device=part.device,
+                    total_gb=usage.total / (1 << 30),
+                    used_gb=usage.used / (1 << 30),
+                    free_gb=usage.free / (1 << 30),
+                    percent=usage.percent,
+                    fstype=part.fstype,
+                )
+            )
         except (PermissionError, OSError):
             continue
     return disks

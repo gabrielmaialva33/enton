@@ -3,6 +3,7 @@
 Uses Agno Knowledge (Qdrant + Ollama embeddings) for semantic search.
 JSONL file as durable backup. User profile persisted as JSON.
 """
+
 from __future__ import annotations
 
 import json
@@ -168,7 +169,8 @@ class Memory:
 
     def strengthen_relationship(self, amount: float = 0.02) -> None:
         self.profile.relationship_score = min(
-            1.0, self.profile.relationship_score + amount,
+            1.0,
+            self.profile.relationship_score + amount,
         )
         self._save_profile()
 

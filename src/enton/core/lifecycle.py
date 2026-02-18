@@ -7,6 +7,7 @@ Saves and restores:
 - Last shutdown reason
 - Planner data is handled by planner.py itself
 """
+
 from __future__ import annotations
 
 import json
@@ -126,7 +127,8 @@ class Lifecycle:
         self._save()
         logger.info(
             "Lifecycle saved: boot #%d, total uptime %.1fh",
-            self.boot_count, self.total_uptime_hours,
+            self.boot_count,
+            self.total_uptime_hours,
         )
 
     def save_periodic(self, self_model: SelfModel, desires: DesireEngine) -> None:

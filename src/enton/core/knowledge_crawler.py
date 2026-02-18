@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 KNOWLEDGE_COLLECTION = "enton_knowledge"
 EMBED_DIM = 768  # nomic-embed-text dimension
-MAX_TEXT_LEN = 10000 # Increased for better context
+MAX_TEXT_LEN = 10000  # Increased for better context
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,12 +102,12 @@ class KnowledgeCrawler:
         if result.get("error"):
             logger.warning("Failed to crawl %s: %s", url, result["error"])
             return ""
-        
+
         markdown = result.get("markdown", "")
         if not markdown:
             # Fallback to HTML -> Text if markdown failed
             return ""
-            
+
         return markdown[:MAX_TEXT_LEN]
 
     # -- extraction --
@@ -187,13 +187,36 @@ class KnowledgeCrawler:
         logger.info("Learned %d triples from %s", len(triples), source)
         return triples
 
-    async def learn_topic(self, topic: str) -> list[KnowledgeTriple]:
-        """Search web for topic, crawl top results, extract triples."""
+    async def learn_topic(self, topic: str, max_pages: int = 5) -> list[KnowledgeTriple]:
+        """Deep research: Search web, parallel crawl, extract knowledge."""
         urls = await self._search_web(topic)
+        target_urls = urls[:max_pages]
+        
+        if not target_urls:
+            return []
+
+        logger.info(f"Deep researching '{topic}' across {len(target_urls)} pages...")
+        
+        # Parallel crawl with Crawl4AI
+        results = await self._engine.crawl_many(target_urls)
+        
         all_triples: list[KnowledgeTriple] = []
-        for url in urls[:2]:
-            triples = await self.learn_from_url(url)
-            all_triples.extend(triples)
+        
+        for res in results:
+            url = res.get("url", "")
+            markdown = res.get("markdown", "")
+            
+            if res.get("error") or not markdown:
+                logger.warning(f"Failed to learn from {url}: {res.get('error')}")
+                continue
+
+            # Extract knowledge from content
+            triples = await self.extract_triples(markdown, source_url=url)
+            if triples:
+                await self._store_triples(triples)
+                all_triples.extend(triples)
+                logger.info(f"Learned {len(triples)} facts from {url}")
+
         return all_triples
 
     async def _search_web(self, query: str) -> list[str]:

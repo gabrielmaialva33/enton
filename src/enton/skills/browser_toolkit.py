@@ -1,13 +1,12 @@
 """BrowserTools — Agno toolkit for web browser automation.
 
 Enton can browse the web: open URLs, screenshot pages, extract text,
-search, download content. Uses subprocess chromium in headless mode.
-
-Requires: chromium-browser or google-chrome (pre-installed).
+search, download content. Uses Crawl4AI/Playwright for high-fidelity automation.
 """
 
 from __future__ import annotations
 
+import base64
 import logging
 import subprocess
 import tempfile
@@ -15,18 +14,9 @@ from pathlib import Path
 
 from agno.tools import Toolkit
 
+from enton.core.crawler_engine import Crawl4AIEngine
+
 logger = logging.getLogger(__name__)
-
-
-def _find_browser() -> str | None:
-    """Find available browser binary."""
-    import shutil
-
-    for name in ("chromium-browser", "chromium", "google-chrome", "google-chrome-stable"):
-        path = shutil.which(name)
-        if path:
-            return path
-    return None
 
 
 class BrowserTools(Toolkit):
@@ -34,10 +24,10 @@ class BrowserTools(Toolkit):
 
     def __init__(self, workspace: Path | None = None) -> None:
         super().__init__(name="browser_tools")
-        self._browser = _find_browser()
         self._workspace = workspace or Path(tempfile.gettempdir())
         self._downloads = self._workspace / "downloads"
         self._downloads.mkdir(parents=True, exist_ok=True)
+        self._crawler = Crawl4AIEngine()
 
         self.register(self.browse_url)
         self.register(self.web_screenshot)
@@ -61,43 +51,32 @@ class BrowserTools(Toolkit):
         except Exception as e:
             return f"Erro: {e}"
 
-    def web_screenshot(self, url: str, width: int = 1920, height: int = 1080) -> str:
+    async def web_screenshot(self, url: str) -> str:
         """Screenshot a webpage using headless browser. Returns file path.
 
         Args:
             url: URL to screenshot
-            width: Viewport width
-            height: Viewport height
         """
-        if not self._browser:
-            return "Erro: nenhum browser encontrado (chromium/chrome)"
-
         path = tempfile.mktemp(suffix=".png", prefix="enton_web_")
         try:
-            subprocess.run(
-                [
-                    self._browser,
-                    "--headless=new",
-                    "--disable-gpu",
-                    "--no-sandbox",
-                    f"--window-size={width},{height}",
-                    f"--screenshot={path}",
-                    url,
-                ],
-                timeout=30,
-                capture_output=True,
-            )
-            if Path(path).exists():
-                size = Path(path).stat().st_size
-                return f"Screenshot da pagina salvo: {path} ({size} bytes)"
-            return "Erro: screenshot nao foi gerado"
-        except subprocess.TimeoutExpired:
-            return "Timeout ao carregar pagina (30s)"
+            result = await self._crawler.crawl(url, screenshot=True)
+            if result.get("error"):
+                return f"Erro ao tirar screenshot: {result['error']}"
+
+            b64_data = result.get("screenshot")
+            if not b64_data:
+                return "Erro: screenshot nao retornado pelo crawler"
+
+            with open(path, "wb") as f:
+                f.write(base64.b64decode(b64_data))
+
+            size = Path(path).stat().st_size
+            return f"Screenshot da pagina salvo: {path} ({size} bytes)"
         except Exception as e:
             return f"Erro: {e}"
 
     def web_search(self, query: str) -> str:
-        """Open a web search in the browser.
+        """Open a web search in the browser (user visible).
 
         Args:
             query: Search query
@@ -116,39 +95,22 @@ class BrowserTools(Toolkit):
         except Exception as e:
             return f"Erro: {e}"
 
-    def extract_text(self, url: str) -> str:
-        """Extract text content from a webpage (headless, no JS rendering needed).
+    async def extract_text(self, url: str) -> str:
+        """Extract markdown content from a webpage.
 
         Args:
             url: URL to extract text from
         """
         try:
-            result = subprocess.run(
-                [
-                    self._browser or "chromium-browser",
-                    "--headless=new",
-                    "--disable-gpu",
-                    "--no-sandbox",
-                    "--dump-dom",
-                    url,
-                ],
-                timeout=30,
-                capture_output=True,
-                text=True,
-            )
-            html = result.stdout
-            # Simple HTML to text (strip tags)
-            import re
+            result = await self._crawler.crawl(url)
+            if result.get("error"):
+                return f"Erro ao extrair texto: {result['error']}"
 
-            text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL)
-            text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
-            text = re.sub(r"<[^>]+>", " ", text)
-            text = re.sub(r"\s+", " ", text).strip()
-            if len(text) > 5000:
-                text = text[:5000] + f"\n... ({len(text)} chars total)"
-            return text if text else "Nenhum texto extraido."
-        except subprocess.TimeoutExpired:
-            return "Timeout (30s)"
+            markdown = result.get("markdown", "")
+            if not markdown:
+                return "Nenhum texto extraido (conteudo vazio)."
+
+            return markdown
         except Exception as e:
             return f"Erro: {e}"
 
@@ -164,24 +126,26 @@ class BrowserTools(Toolkit):
 
         dest = self._downloads / filename
         try:
-            result = subprocess.run(
-                ["aria2c", "-x", "16", "-s", "16", "-d", str(self._downloads), "-o", filename, url],
-                timeout=120,
-                capture_output=True,
-                text=True,
-            )
+            # Try curl first, then wget
+            try:
+                subprocess.run(
+                    ["curl", "-L", "-o", str(dest), url],
+                    timeout=120,
+                    check=True,
+                    capture_output=True,
+                )
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                subprocess.run(
+                    ["wget", "-q", "-O", str(dest), url],
+                    timeout=120,
+                    check=True,
+                    capture_output=True,
+                )
+
             if dest.exists():
                 size = dest.stat().st_size
                 return f"Download completo: {dest} ({size / 1024:.0f} KB)"
-            # Fallback to wget
-            result = subprocess.run(
-                ["wget", "-q", "-O", str(dest), url],
-                timeout=120,
-                capture_output=True,
-            )
-            if dest.exists():
-                return f"Download completo: {dest}"
-            return f"Erro no download: {result.stderr.decode()[:200]}"
+            return "Erro no download: arquivo nao criado"
         except subprocess.TimeoutExpired:
             return "Timeout no download (120s)"
         except Exception as e:

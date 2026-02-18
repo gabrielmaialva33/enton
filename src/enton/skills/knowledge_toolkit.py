@@ -22,6 +22,7 @@ class KnowledgeTools(Toolkit):
         self.register(self.learn_from_url)
         self.register(self.search_knowledge)
         self.register(self.learn_about_topic)
+        self.register(self.deep_research)
 
     async def learn_from_url(self, url: str) -> str:
         """Aprende conhecimento de uma URL da web. Extrai fatos e armazena.
@@ -64,9 +65,29 @@ class KnowledgeTools(Toolkit):
         Args:
             topic: Topico para aprender (ex: 'Python asyncio', 'fotossintese').
         """
-        triples = await self._crawler.learn_topic(topic)
+        triples = await self._crawler.learn_topic(topic, max_pages=3)
         if not triples:
             return f"Nao consegui aprender sobre '{topic}' agora."
 
         lines = [f"- {t.subject} {t.predicate} {t.obj}" for t in triples[:8]]
         return f"Aprendi {len(triples)} fatos sobre '{topic}':\n" + "\n".join(lines)
+
+    async def deep_research(self, topic: str) -> str:
+        """Realiza uma pesquisa profunda sobre um tema (Deep Research).
+        
+        Busca em multiplas fontes, le o conteudo completo e sintetiza um conhecimento denso.
+        Use isso quando precisar de informacoes detalhadas ou complexas.
+
+        Args:
+            topic: Topico para pesquisar profundamente.
+        """
+        triples = await self._crawler.learn_topic(topic, max_pages=10)
+        if not triples:
+            return f"Falha na pesquisa profunda sobre '{topic}'."
+
+        # Return more details for deep research
+        lines = [f"- {t.subject} {t.predicate} {t.obj}" for t in triples[:20]]
+        return (
+            f"**Deep Research concluido**: {len(triples)} fatos extraidos sobre '{topic}'.\n"
+            "Principais descobertas:\n" + "\n".join(lines)
+        )

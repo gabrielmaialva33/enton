@@ -1,5 +1,5 @@
-import logging
 import json
+import logging
 from unittest.mock import AsyncMock
 
 # Configure logging
@@ -8,8 +8,6 @@ logging.basicConfig(level=logging.INFO)
 # 1. Test Registry and Skills
 print("--- Testing Registry & Skills ---")
 from enton.core.tools import registry
-import enton.skills.system_skill
-import enton.skills.search_skill
 
 print(f"Registered tools: {list(registry.get_all_tools().keys())}")
 
@@ -23,7 +21,8 @@ assert "search_web" in registry.get_all_tools()
 # 2. Test Brain Integration
 print("\n--- Testing Brain.think_agent ---")
 from enton.cognition.brain import Brain
-from enton.core.config import Settings, Provider
+from enton.core.config import Provider, Settings
+
 
 async def test_brain_agent():
     settings = Settings()

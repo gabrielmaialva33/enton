@@ -1,12 +1,13 @@
 import asyncio
 import logging
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
 from enton.cognition.brain import Brain
-from enton.core.config import Settings, Provider
+from enton.core.config import Provider, Settings
+
 
 async def test_brain_loop():
     print("Testing Brain think_with_tools loop...")

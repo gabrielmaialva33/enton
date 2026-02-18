@@ -10,7 +10,9 @@ Controls:
     q — quit
     f — toggle fullscreen
 """
-import os, sys, time
+import os
+import sys
+import time
 
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
@@ -19,7 +21,9 @@ import cv2
 from ultralytics import YOLO
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from enton.perception.activity import NOSE, classify as classify_activity, _visible as visible
+from enton.perception.activity import NOSE
+from enton.perception.activity import _visible as visible
+from enton.perception.activity import classify as classify_activity
 from enton.perception.emotion import EmotionRecognizer
 from enton.perception.overlay import Overlay
 

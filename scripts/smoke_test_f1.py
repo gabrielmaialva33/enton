@@ -24,6 +24,7 @@ except ImportError:
 from enton.app import App
 from enton.core.config import settings
 
+
 async def main():
     print("Initializing App...")
     # Disable heavy models for smoke test if needed, or keep them to test loading

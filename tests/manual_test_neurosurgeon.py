@@ -1,5 +1,7 @@
-from enton.skills.neurosurgeon_toolkit import NeurosurgeonToolkit
 import os
+
+from enton.skills.neurosurgeon_toolkit import NeurosurgeonToolkit
+
 
 def test_neurosurgeon():
     print("=== TESTANDO NEUROSURGEON TOOLKIT ===")
@@ -32,7 +34,7 @@ def test_neurosurgeon():
     print(rewrite_res)
     
     # Verificar resultado
-    with open(dummy_path, "r") as f:
+    with open(dummy_path) as f:
         new_content = f.read()
     print("\n--- Novo Conteúdo ---")
     print(new_content)

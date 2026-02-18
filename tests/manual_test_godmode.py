@@ -1,5 +1,6 @@
+
 from enton.skills.god_mode_toolkit import GodModeToolkit
-import time
+
 
 def test_god_mode():
     print("=== TESTANDO GOD MODE TOOLKIT ===")

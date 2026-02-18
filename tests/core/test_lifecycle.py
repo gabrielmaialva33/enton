@@ -2,9 +2,9 @@
 
 import json
 import time
+from unittest.mock import MagicMock
 
 import pytest
-from unittest.mock import MagicMock
 
 import enton.core.lifecycle as lifecycle_mod
 from enton.core.lifecycle import Lifecycle

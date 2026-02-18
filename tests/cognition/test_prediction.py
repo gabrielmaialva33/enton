@@ -1,7 +1,5 @@
-import time
-import pytest
-from pathlib import Path
-from enton.cognition.prediction import PredictionEngine, WorldState, WorldModel
+from enton.cognition.prediction import PredictionEngine, WorldState
+
 
 def test_world_model_learning(tmp_path):
     """Test that WorldModel learns patterns over repeated exposure."""

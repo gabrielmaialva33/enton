@@ -1,6 +1,7 @@
 import time
-import pytest
-from enton.cognition.metacognition import MetaCognitiveEngine, CuriosityItem
+
+from enton.cognition.metacognition import MetaCognitiveEngine
+
 
 def test_metacognition_initialization():
     engine = MetaCognitiveEngine()

@@ -94,7 +94,7 @@ async def test_sandbox_catches_error(forge):
 
 @pytest.mark.asyncio()
 async def test_sandbox_catches_syntax_error(forge):
-    passed, output = await forge._sandbox_test(
+    passed, _ = await forge._sandbox_test(
         "broken", "x: str", "return x +", 'broken("hi")',
     )
     assert passed is False

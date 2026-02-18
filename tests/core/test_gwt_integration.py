@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from enton.cognition.metacognition import MetaCognitiveEngine
 from enton.core.gwt.message import BroadcastMessage

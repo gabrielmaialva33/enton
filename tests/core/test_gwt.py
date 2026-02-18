@@ -11,7 +11,6 @@ from enton.core.gwt.message import BroadcastMessage
 from enton.core.gwt.module import CognitiveModule
 from enton.core.gwt.workspace import GlobalWorkspace
 
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  BroadcastMessage
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -218,8 +217,8 @@ class TestGlobalWorkspace:
 
 class TestExecutiveModule:
     def test_init(self):
-        from enton.core.gwt.modules.executive import ExecutiveModule
         from enton.cognition.metacognition import MetaCognitiveEngine
+        from enton.core.gwt.modules.executive import ExecutiveModule
 
         engine = MetaCognitiveEngine()
         mod = ExecutiveModule(engine)
@@ -227,8 +226,8 @@ class TestExecutiveModule:
         assert mod.engine is engine
 
     def test_run_step_no_action(self):
-        from enton.core.gwt.modules.executive import ExecutiveModule
         from enton.cognition.metacognition import MetaCognitiveEngine
+        from enton.core.gwt.modules.executive import ExecutiveModule
 
         engine = MetaCognitiveEngine()
         mod = ExecutiveModule(engine)
@@ -237,8 +236,8 @@ class TestExecutiveModule:
         assert result is None
 
     def test_run_step_with_high_boredom(self):
-        from enton.core.gwt.modules.executive import ExecutiveModule
         from enton.cognition.metacognition import MetaCognitiveEngine
+        from enton.core.gwt.modules.executive import ExecutiveModule
 
         engine = MetaCognitiveEngine()
         engine.boredom_level = 0.7  # above threshold
@@ -249,8 +248,8 @@ class TestExecutiveModule:
         assert result.modality == "emotion"
 
     def test_with_skill_registry(self):
-        from enton.core.gwt.modules.executive import ExecutiveModule
         from enton.cognition.metacognition import MetaCognitiveEngine
+        from enton.core.gwt.modules.executive import ExecutiveModule
 
         engine = MetaCognitiveEngine()
         registry = MagicMock()
@@ -278,8 +277,9 @@ class TestShellState:
         assert str(p) == "/tmp/test"
 
     def test_resolve_relative_path(self):
-        from enton.skills._shell_state import ShellState
         from pathlib import Path
+
+        from enton.skills._shell_state import ShellState
         state = ShellState(cwd=Path("/tmp"))
         p = state.resolve_path("subdir/file.txt")
         assert str(p) == "/tmp/subdir/file.txt"
@@ -309,6 +309,7 @@ class TestProviderProtocols:
 
     def test_stt_is_runtime_checkable(self):
         import numpy as np
+
         from enton.providers.base import STTProvider
 
         class FakeSTT:
@@ -321,6 +322,7 @@ class TestProviderProtocols:
 
     def test_tts_is_runtime_checkable(self):
         import numpy as np
+
         from enton.providers.base import TTSProvider
 
         class FakeTTS:
@@ -408,12 +410,14 @@ class TestChannelBase:
 
 class TestCudaLock:
     def test_thread_lock_exists(self):
-        from enton.core.cuda_lock import cuda_thread_lock
         import threading
+
+        from enton.core.cuda_lock import cuda_thread_lock
         assert isinstance(cuda_thread_lock, type(threading.Lock()))
 
     def test_async_lock_exists(self):
         import asyncio
+
         from enton.core.cuda_lock import cuda_async_lock
         assert isinstance(cuda_async_lock, asyncio.Lock)
 

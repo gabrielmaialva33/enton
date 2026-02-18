@@ -1,14 +1,15 @@
-import pytest
-from unittest.mock import MagicMock, patch
 import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Mock hardware modules to avoid runtime errors during import/init
 sys.modules["v4l2py"] = MagicMock()
 sys.modules["sounddevice"] = MagicMock()
 sys.modules["fast_whisper"] = MagicMock()
 
-from enton.app import App
-from enton.core.config import settings
+from enton.app import App  # noqa: E402
+
 
 @pytest.fixture
 def mock_dependencies():
@@ -68,10 +69,11 @@ async def test_consciousness_loop_math(mock_dependencies):
     
     # Logistic function logic used in app.py
     import math
+
     k = 10.0
     x0 = 0.5
-    L = 60.0
-    attention_energy = L / (1 + math.exp(-k * (surprise - x0)))
+    max_fps = 60.0
+    attention_energy = max_fps / (1 + math.exp(-k * (surprise - x0)))
     target_fps = max(1.0, attention_energy)
     
     current_fps = app._current_fps

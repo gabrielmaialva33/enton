@@ -30,7 +30,7 @@ def test_provider_enum_has_edge():
 class TestQwen3TTS:
     def test_init_lazy(self, mock_settings):
         """Model should NOT be loaded on init."""
-        from enton.providers.qwen_tts import Qwen3TTS  # noqa: PLC0415
+        from enton.providers.qwen_tts import Qwen3TTS
 
         tts = Qwen3TTS(mock_settings)
         assert tts._model is None
@@ -38,7 +38,7 @@ class TestQwen3TTS:
 
     def test_synthesize_returns_float32(self, mock_settings):
         """Synthesis should return float32 numpy array."""
-        from enton.providers.qwen_tts import Qwen3TTS  # noqa: PLC0415
+        from enton.providers.qwen_tts import Qwen3TTS
 
         fake_audio = np.random.randn(24000).astype(np.float32)
         fake_model = MagicMock()
@@ -61,7 +61,7 @@ class TestQwen3TTS:
 
     def test_voice_design_called_on_first_use(self, mock_settings):
         """Voice design should be called when voice_instruct is set."""
-        from enton.providers.qwen_tts import Qwen3TTS  # noqa: PLC0415
+        from enton.providers.qwen_tts import Qwen3TTS
 
         fake_model_cls = MagicMock()
         fake_model = MagicMock()
@@ -83,7 +83,7 @@ class TestQwen3TTS:
 
     def test_no_voice_design_without_instruct(self, mock_settings):
         """Without voice_instruct, no voice design should happen."""
-        from enton.providers.qwen_tts import Qwen3TTS  # noqa: PLC0415
+        from enton.providers.qwen_tts import Qwen3TTS
 
         mock_settings.qwen3_tts_voice_instruct = ""
 
@@ -106,7 +106,7 @@ class TestQwen3TTS:
 
     def test_synthesize_stream_yields_audio(self, mock_settings):
         """synthesize_stream should yield the full audio."""
-        from enton.providers.qwen_tts import Qwen3TTS  # noqa: PLC0415
+        from enton.providers.qwen_tts import Qwen3TTS
 
         fake_audio = np.random.randn(24000).astype(np.float32)
 
@@ -131,7 +131,7 @@ class TestQwen3TTS:
 
 class TestEdgeTTS:
     def test_init(self, mock_settings):
-        from enton.providers.edge_tts_provider import EdgeTTS  # noqa: PLC0415
+        from enton.providers.edge_tts_provider import EdgeTTS
 
         tts = EdgeTTS(mock_settings)
         assert tts._voice == "pt-BR-AntonioNeural"
@@ -139,7 +139,7 @@ class TestEdgeTTS:
 
     def test_empty_response(self, mock_settings):
         """Empty MP3 stream should return empty array."""
-        from enton.providers.edge_tts_provider import EdgeTTS  # noqa: PLC0415
+        from enton.providers.edge_tts_provider import EdgeTTS
 
         mock_communicate = MagicMock()
 
@@ -164,7 +164,7 @@ class TestEdgeTTS:
 
     def test_stereo_to_mono(self, mock_settings):
         """Stereo audio should be converted to mono."""
-        from enton.providers.edge_tts_provider import EdgeTTS  # noqa: PLC0415
+        from enton.providers.edge_tts_provider import EdgeTTS
 
         stereo_audio = np.random.randn(24000, 2).astype(np.float32)
 
@@ -188,10 +188,10 @@ class TestEdgeTTS:
         try:
             # Inline patched synthesize to avoid executor issues in tests
             async def patched_synthesize():
-                import io  # noqa: PLC0415
+                import io
 
-                import edge_tts  # noqa: PLC0415
-                import soundfile as sf  # noqa: PLC0415
+                import edge_tts
+                import soundfile as sf
 
                 communicate = edge_tts.Communicate("test", tts._voice)
                 mp3_bytes = b""
@@ -217,7 +217,7 @@ class TestEdgeTTS:
 
     def test_synthesize_stream_yields_audio(self, mock_settings):
         """synthesize_stream should yield the full audio."""
-        from enton.providers.edge_tts_provider import EdgeTTS  # noqa: PLC0415
+        from enton.providers.edge_tts_provider import EdgeTTS
 
         fake_audio = np.random.randn(24000).astype(np.float32)
 
@@ -242,7 +242,7 @@ class TestEdgeTTS:
 class TestVoiceFallback:
     def test_fallback_order_defined(self):
         """Voice should have a defined fallback order."""
-        from enton.action.voice import Voice  # noqa: PLC0415
+        from enton.action.voice import Voice
 
         assert Provider.QWEN3 in Voice._FALLBACK_ORDER
         assert Provider.EDGE in Voice._FALLBACK_ORDER
@@ -250,7 +250,7 @@ class TestVoiceFallback:
 
     def test_fallback_order_correct(self):
         """QWEN3 should come before EDGE, which comes before LOCAL."""
-        from enton.action.voice import Voice  # noqa: PLC0415
+        from enton.action.voice import Voice
 
         order = Voice._FALLBACK_ORDER
         assert order.index(Provider.QWEN3) < order.index(Provider.EDGE)
@@ -269,19 +269,19 @@ class TestSampleRate:
             patch("enton.providers.local.KPipeline"),
             patch("enton.providers.local.torch"),
         ):
-            from enton.providers.local import LocalTTS  # noqa: PLC0415
+            from enton.providers.local import LocalTTS
 
             tts = LocalTTS(mock_settings)
             assert tts.sample_rate == 24000
 
     def test_qwen3_tts_has_sample_rate(self, mock_settings):
-        from enton.providers.qwen_tts import Qwen3TTS  # noqa: PLC0415
+        from enton.providers.qwen_tts import Qwen3TTS
 
         tts = Qwen3TTS(mock_settings)
         assert tts.sample_rate == 24000
 
     def test_edge_tts_has_sample_rate(self, mock_settings):
-        from enton.providers.edge_tts_provider import EdgeTTS  # noqa: PLC0415
+        from enton.providers.edge_tts_provider import EdgeTTS
 
         tts = EdgeTTS(mock_settings)
         assert tts.sample_rate == 24000

@@ -499,7 +499,7 @@ class TestBrainCliIntegration:
     """Test that CLI providers are initialized in brain config."""
 
     def test_config_defaults(self):
-        from enton.core.config import Settings  # noqa: PLC0415
+        from enton.core.config import Settings
 
         s = Settings()
         assert s.claude_code_enabled is True

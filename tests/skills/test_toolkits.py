@@ -9,10 +9,10 @@ Each test verifies:
 """
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -469,7 +469,8 @@ class TestCryptoToolkit:
             pytest.skip("CryptoToolkit dependencies not installed")
 
         # Use a temp path to avoid creating the wallet in the real project dir
-        import tempfile, os
+        import os
+        import tempfile
         wallet_path = os.path.join(tempfile.mkdtemp(), "paper_wallet.json")
         toolkit = CryptoToolkit(wallet_path=wallet_path)
 
@@ -489,7 +490,8 @@ class TestCryptoToolkit:
         except ImportError:
             pytest.skip("CryptoToolkit dependencies not installed")
 
-        import tempfile, os
+        import os
+        import tempfile
         wallet_path = os.path.join(tempfile.mkdtemp(), "paper_wallet.json")
         toolkit = CryptoToolkit(wallet_path=wallet_path)
         assert toolkit.name == "crypto_toolkit"

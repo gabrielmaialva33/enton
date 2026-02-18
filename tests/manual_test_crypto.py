@@ -1,6 +1,7 @@
-from enton.skills.crypto_toolkit import CryptoToolkit
 import os
-import json
+
+from enton.skills.crypto_toolkit import CryptoToolkit
+
 
 def test_crypto():
     print("=== TESTANDO CRYPTO TOOLKIT (Day Trader Doidão) ===")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from enton.skills._shell_state import ShellState
 from enton.skills.shell_toolkit import (
     DANGEROUS_PATTERNS,
     ELEVATED_COMMANDS,
@@ -11,8 +12,6 @@ from enton.skills.shell_toolkit import (
     ShellTools,
     _classify_command,
 )
-from enton.skills._shell_state import ShellState
-
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  Command classification

@@ -1,6 +1,7 @@
-import pytest
 from unittest.mock import MagicMock, patch
+
 from enton.skills.github_learner import GitHubLearner
+
 
 def test_learner_initialization():
     learner = GitHubLearner()

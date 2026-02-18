@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from enton.core.config import Settings
 
+
 def test_config_defaults():
     """Test default values without environment variables or .env file."""
     # Ensure no env vars interfere and ignore .env file

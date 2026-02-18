@@ -6,12 +6,12 @@ including submit, submit_async, cancel, timeout, retry, cleanup, and more.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 
 import pytest
 
 from enton.core.process_manager import ManagedTask, ProcessManager, TaskStatus
-
 
 # ---------------------------------------------------------------------------
 # TaskStatus enum
@@ -484,10 +484,8 @@ class TestProcessManagerConcurrency:
         for tid in tids:
             task = pm.get(tid)
             if task._task and not task._task.done():
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task._task
-                except asyncio.CancelledError:
-                    pass
 
     @pytest.mark.asyncio
     async def test_submit_with_cwd(self, pm):

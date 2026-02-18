@@ -4,15 +4,10 @@ from __future__ import annotations
 import json
 import time
 
-import pytest
-
 from enton.core.context_engine import (
-    Checkpoint,
     ContextEngine,
     ContextEntry,
-    _CHARS_PER_TOKEN,
 )
-
 
 # ------------------------------------------------------------------ #
 # ContextEntry unit tests

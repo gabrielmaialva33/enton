@@ -1,7 +1,7 @@
-import pytest
 from enton.core.config import settings
-from enton.skills.screenpipe_toolkit import ScreenpipeTools
 from enton.skills.n8n_toolkit import N8nTools
+from enton.skills.screenpipe_toolkit import ScreenpipeTools
+
 
 def test_config_defaults():
     assert settings.screenpipe_url == "http://localhost:3030"

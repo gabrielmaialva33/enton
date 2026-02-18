@@ -24,21 +24,21 @@ def _make_proc(stdout: bytes = b"", stderr: bytes = b"", returncode: int = 0):
 
 class TestFindAdb:
     def test_hint_path_exists(self, tmp_path):
-        from enton.providers.android_bridge import find_adb  # noqa: PLC0415
+        from enton.providers.android_bridge import find_adb
 
         fake_adb = tmp_path / "adb"
         fake_adb.touch()
         assert find_adb(str(fake_adb)) == str(fake_adb)
 
     def test_hint_path_not_exists(self):
-        from enton.providers.android_bridge import find_adb  # noqa: PLC0415
+        from enton.providers.android_bridge import find_adb
 
         result = find_adb("/nonexistent/adb")
         # Falls through to PATH / SDK check — may or may not find adb
         assert result is None or isinstance(result, str)
 
     def test_empty_hint_uses_shutil(self):
-        from enton.providers.android_bridge import find_adb  # noqa: PLC0415
+        from enton.providers.android_bridge import find_adb
 
         with patch("enton.providers.android_bridge.shutil.which", return_value="/usr/bin/adb"):
             assert find_adb("") == "/usr/bin/adb"
@@ -51,7 +51,7 @@ class TestFindAdb:
 
 class TestAndroidBridge:
     def _make_bridge(self, serial: str = ""):
-        from enton.providers.android_bridge import AndroidBridge  # noqa: PLC0415
+        from enton.providers.android_bridge import AndroidBridge
 
         return AndroidBridge(adb_path="/usr/bin/adb", device_serial=serial)
 
@@ -249,8 +249,8 @@ class TestAndroidBridge:
 
 class TestAndroidTools:
     def _make_tools(self):
-        from enton.providers.android_bridge import AndroidBridge  # noqa: PLC0415
-        from enton.skills.android_toolkit import AndroidTools  # noqa: PLC0415
+        from enton.providers.android_bridge import AndroidBridge
+        from enton.skills.android_toolkit import AndroidTools
 
         bridge = MagicMock(spec=AndroidBridge)
         tools = AndroidTools(bridge)

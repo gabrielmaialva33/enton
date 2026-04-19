@@ -8,6 +8,30 @@ Enton is an autonomous AI robot assistant with vision, voice, personality, and c
 
 **Language**: All code comments, docstrings, and AI prompts are in **PT-BR**. The coding sub-agent prompt is intentionally in English (LLMs code better in EN). User communication should be in informal Brazilian Portuguese (SP dialect).
 
+## Physical Body
+
+Enton's physical body is a **Yoosee SC-B21** IP camera (Anyka AK3918AV100, ARM926EJ-S) with
+hacked firmware exposing a persistent root telnet backdoor + ONVIF SOAP control.
+
+- **Full hardware specs**: [docs/hardware/robot_body.md](./docs/hardware/robot_body.md)
+- **Firmware hack procedure**: [docs/hardware/firmware_hack.md](./docs/hardware/firmware_hack.md)
+- **Toolkit (Agno)**: `src/enton/skills/robot_body_toolkit.py` — `RobotBodyTools`
+- **Config** (`.env`): `ROBOT_BODY_IP=192.168.1.5`
+
+### Control channels
+
+- **ONVIF PTZ** (port 5000) — pan/tilt/zoom via SOAP, profile `PROFILE_000`
+- **Telnet root shell** (ports 23 + 2323) — `telnetd -l /bin/sh`, zero auth
+- **RTSP stream** (port 554) — `rtsp://<IP>/cam/realmonitor` (dual-lens H.265, no auth)
+
+### Critical constraints
+
+- **ONVIF throttle ≥500ms**: flood of PTZ requests crashes IPC, requires power cycle
+- **Busybox minimal**: no `head`, `pidof`, `python`, `strace`, `gdb`; has `nc`, `tftp`
+- **`/etc` is tmpfs**: runtime modifications don't persist. Permanent changes need flash repack
+- **`/rom` (JFFS2, 256KB)** is the only writable persistent path at runtime
+- **Kernel 4.4.282, uClibc-ng, ARMv5TEJ** — no modern glibc, ARM926 single-core 441MHz
+
 ## Commands
 
 ```bash

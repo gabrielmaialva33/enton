@@ -31,6 +31,20 @@ class Settings(BaseSettings):
     # e.g. "main:0,hack:rtsp://192.168.18.23:554/video0_unicast"
     cameras: str = ""
 
+    # Robot Body — Yoosee SC-B21 (ver docs/hardware/robot_body.md)
+    robot_body_ip: str = "192.168.1.5"
+    robot_body_onvif_port: int = 5000
+    robot_body_telnet_port: int = 23
+    robot_body_rtsp_path: str = "/cam/realmonitor"
+    # RTSP credentials for streams with audio (/onvif1 main, /onvif2 sub).
+    # User sets these in the Yoosee app. /cam/realmonitor is video-only no-auth.
+    robot_body_rtsp_user: str = "admin"
+    robot_body_rtsp_password: str = ""
+    robot_body_rtsp_auth_path: str = "/onvif2"  # substream (lower CPU) with audio
+    # enton_bridge TCP daemon (autostarted from SD card by rc.local patch).
+    # Single entry point for motor/gpio/exec from the host brain.
+    robot_body_bridge_port: int = 9999
+
     # i18n — locale e dialeto regional
     locale: str = "pt-BR"  # pt-BR | en | zh-CN
     locale_dialect: str = "sp"  # sp|rj|mg|ba|rs|pe|ce|pa|go|pr|ma

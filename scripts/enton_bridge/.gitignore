@@ -1,0 +1,5 @@
+# ARMv5 static binaries — rebuild with:
+#   zig cc -target arm-linux-musleabi -mcpu=arm926ej_s -static -Os -o enton_bridge enton_bridge.c
+#   zig cc -target arm-linux-musleabi -mcpu=arm926ej_s -static -Os -o enton_tools enton_tools.c
+enton_bridge
+enton_tools

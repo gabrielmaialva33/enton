@@ -1,32 +1,31 @@
-# Scripts do Enton
+# Enton Scripts
 
-Scripts utilitários organizados por função.
+Utility scripts organized by function.
 
-## Estrutura
+## Structure
 
-- **`setup/`**: Configuração inicial e instalação.
-  - `phone_setup.sh`: Configura ADB e dependências Android.
-  - `load_commonsense.py`: Baixa e indexa conhecimento comum (ASCENT++).
+- **`setup/`**: Initial setup and installation.
+  - `phone_setup.sh`: Configures ADB and Android dependencies.
+  - `load_commonsense.py`: Downloads and indexes common knowledge (ASCENT++).
 
-- **`tests/`**: Verificação e testes manuais.
-  - `smoke_test_f1.py`: Teste de fumaça (inicializa App e verifica componentes).
-  - `verify_phase2.py`: Valida loop de pensamento do cérebro.
-  - `verify_phase3.py`: Valida registro de skills dinâmicas.
+- **`tests/`**: Verification and manual testing.
+  - `smoke_test_f1.py`: Smoke test (starts the app and checks components).
+  - `verify_phase2.py`: Validates the brain's thought loop.
+  - `verify_phase3.py`: Validates dynamic skill registration.
 
-- **`data/`**: Gestão de dados e modelos.
-  - `optimize_models.py`: Converte modelos YOLO (.pt) para TensorRT (.engine).
+- **`data/`**: Data and model management.
+  - `optimize_models.py`: Converts YOLO models (`.pt`) to TensorRT (`.engine`).
 
-- **`dev/`**: Ferramentas de desenvolvimento.
-  - `live_yolo.py`: Visualizador em tempo real da visão computacional.
+- **`dev/`**: Development tools.
+  - `live_yolo.py`: Real-time computer vision viewer.
 
-## Uso
+## Usage
 
-Execute a partir da raiz do projeto:
+Run from the project root:
 
 ```bash
-# Exemplo: Rodar smoke test
+# Example: Run smoke test
 uv run python scripts/tests/smoke_test_f1.py
 
-# Exemplo: Otimizar modelos
+# Example: Optimize models
 uv run python scripts/data/optimize_models.py
-```

@@ -62,6 +62,23 @@ pub(crate) fn checklist(now: u64, actionable: bool) -> Event {
     }
 }
 
+/// The owner's quiet command at `now`, quiet until `until`: a release when that is not
+/// after `now`.
+pub(crate) fn quiet(now: u64, until: u64) -> Event {
+    Event::Quiet {
+        now: Millis(now),
+        until: Millis(until),
+    }
+}
+
+/// The owner's quiet hours beginning or ending.
+pub(crate) fn quiet_hours(now: u64, active: bool) -> Event {
+    Event::QuietHours {
+        now: Millis(now),
+        active,
+    }
+}
+
 pub(crate) fn body(now: u64, temperature_c: Option<f32>, battery: Option<f32>) -> Event {
     Event::Body {
         now: Millis(now),

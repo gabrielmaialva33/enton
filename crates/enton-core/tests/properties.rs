@@ -4,8 +4,9 @@
 //! repeats or runs backward, body signals, speech cues with arbitrary
 //! measurements (including NaN, infinities, negatives and values above one),
 //! cortex replies and failures for thoughts the organism issued (and failures
-//! for thoughts it never did), checklist readings, and playback of the
-//! utterances it spoke. After every step the reducer invariants must hold on
+//! for thoughts it never did), checklist readings, the owner's quiet commands (and
+//! releases) and quiet hours, and playback of the utterances it spoke. After every
+//! step the reducer invariants must hold on
 //! both shipped profiles (and a variant with budgets a short tape can drain),
 //! and a snapshot taken at a random step must restore an organism that decides
 //! the rest of the tape exactly like the live one.
@@ -212,6 +213,27 @@ enum Stimulus {
     PlaybackStarted(Index),
     /// A playback's end, cut off or not.
     PlaybackFinished(Index, bool),
+    /// The owner's quiet command, or its release.
+    Quiet(QuietSpan),
+    /// The quiet hours begin or end.
+    QuietHours(bool),
+}
+
+/// How long a quiet command asks for, from the instant it is heard.
+#[derive(Debug, Clone, Copy)]
+enum QuietSpan {
+    /// Released: quiet ends at once (its `until` lies this long before the command).
+    Release(u64),
+    /// Quiet for this long; any length, up to past the end of time.
+    For(u64),
+}
+
+fn quiet_span() -> impl Strategy<Value = QuietSpan> {
+    prop_oneof![
+        2 => prop_oneof![Just(0_u64), 1_u64..=60_000].prop_map(QuietSpan::Release),
+        4 => (1_u64..=120_000).prop_map(QuietSpan::For),
+        1 => any::<u64>().prop_map(QuietSpan::For),
+    ]
 }
 
 fn reply_text() -> impl Strategy<Value = String> {
@@ -242,6 +264,8 @@ fn stimulus(broken_body: bool) -> impl Strategy<Value = Stimulus> {
         2 => any::<Index>().prop_map(Stimulus::PlaybackStarted),
         2 => (any::<Index>(), any::<bool>())
             .prop_map(|(index, interrupted)| Stimulus::PlaybackFinished(index, interrupted)),
+        1 => quiet_span().prop_map(Stimulus::Quiet),
+        1 => prop::bool::weighted(0.4).prop_map(Stimulus::QuietHours),
     ]
 }
 
@@ -315,6 +339,17 @@ impl World {
                     utterance,
                     interrupted: *interrupted,
                 }),
+            Stimulus::Quiet(span) => Event::Quiet {
+                now,
+                until: Millis(match span {
+                    QuietSpan::Release(before) => self.now.saturating_sub(*before),
+                    QuietSpan::For(span) => self.now.saturating_add(*span),
+                }),
+            },
+            Stimulus::QuietHours(active) => Event::QuietHours {
+                now,
+                active: *active,
+            },
         }
     }
 
@@ -523,10 +558,12 @@ fn check_decisions(event: &Event, actions: &[Action]) -> Result<(), TestCaseErro
         | Event::PlaybackStarted { .. }
         | Event::PlaybackFinished { .. }
         | Event::Checklist { .. }
-        | Event::CortexFailed { .. } => {
+        | Event::CortexFailed { .. }
+        | Event::Quiet { .. }
+        | Event::QuietHours { .. } => {
             prop_assert!(
                 actions.is_empty(),
-                "body, playback, checklist and failure events decide nothing: {actions:?}"
+                "body, playback, checklist, failure and quiet events decide nothing: {actions:?}"
             );
         }
     }
@@ -534,9 +571,11 @@ fn check_decisions(event: &Event, actions: &[Action]) -> Result<(), TestCaseErro
 }
 
 /// A discretionary thought (a drive, overheard speech, or an explored cue) is bought only
-/// with the owner around and no cortex backoff, and a drive's only with something to
-/// check; each abstention for those reasons holds exactly when its reason does, and never
-/// for an obligation.
+/// outside quiet mode and quiet hours, with the owner around and no cortex backoff, and a
+/// drive's only with something to check; each abstention for those reasons holds exactly
+/// when its reason does, and never for an obligation. A deferred intent rides only an
+/// answer the owner asked for, and only when its drive could have thought but for the
+/// conversation; an intent expires only on a tick.
 fn check_discretion(
     organism: &Organism,
     event: &Event,
@@ -545,14 +584,41 @@ fn check_discretion(
     let now = event.now();
     let home = organism.owner_present_as_of(now);
     let backing_off = organism.backoff_until().is_some_and(|until| now < until);
+    let quiet = organism.quiet_as_of(now);
+    let quiet_hours = organism.in_quiet_hours();
     for action in actions {
         match action {
+            Action::Think {
+                thought,
+                reason,
+                propensity,
+                rider: Some(drive),
+                ..
+            } => {
+                prop_assert!(
+                    matches!(reason, Reason::Keyword | Reason::FollowUp) && propensity.is_none(),
+                    "only an answer the owner asked for carries a ride: {action:?}"
+                );
+                prop_assert!(
+                    home && !quiet
+                        && !quiet_hours
+                        && organism.checklist_actionable()
+                        && !organism.is_torpid(),
+                    "a ride only when its drive could think but for the conversation: {action:?}"
+                );
+                prop_assert_eq!(organism.drive_thought(), Some((*thought, drive.as_str())));
+                prop_assert!(
+                    organism.deferred().is_some_and(|held| held.drive == *drive),
+                    "a ride carries the intent held: {:?}",
+                    organism.deferred()
+                );
+            }
             Action::Think {
                 reason, propensity, ..
             } if matches!(reason, Reason::Drive(_) | Reason::Speech) || propensity.is_some() => {
                 prop_assert!(
-                    home && !backing_off,
-                    "a discretionary thought with nobody home or while backing off: {action:?}"
+                    home && !backing_off && !quiet && !quiet_hours,
+                    "a discretionary thought with nobody home, while backing off or in quiet: {action:?}"
                 );
                 if matches!(reason, Reason::Drive(_)) {
                     prop_assert!(
@@ -572,6 +638,16 @@ fn check_discretion(
                     Abstention::Backoff => {
                         prop_assert!(discretionary && home && backing_off, "{action:?}");
                     }
+                    Abstention::Quiet => prop_assert!(discretionary && quiet, "{action:?}"),
+                    Abstention::QuietHours => {
+                        prop_assert!(discretionary && quiet_hours && !quiet, "{action:?}");
+                    }
+                    Abstention::Expired => prop_assert!(
+                        matches!(reason, Reason::Drive(_))
+                            && matches!(event, Event::Tick { .. })
+                            && organism.deferred().is_none(),
+                        "{action:?}"
+                    ),
                     _ => {}
                 }
             }
@@ -671,6 +747,7 @@ fn eager() -> Profile {
     profile.discretion.presence_window_ms = 120_000;
     profile.discretion.cortex_backoff_base_ms = 2_000;
     profile.discretion.cortex_backoff_cap_ms = 30_000;
+    profile.discretion.deferral_ms = 20_000;
     profile
 }
 
@@ -817,10 +894,14 @@ fn generated_tapes_reach_every_discretionary_gate() {
                             reason: Reason::Drive(_),
                             ..
                         } => "drive thought",
+                        Action::Think { rider: Some(_), .. } => "ride",
                         Action::Abstain { why, .. } => match why {
                             Abstention::NothingToCheck => "nothing to check",
                             Abstention::NobodyHome => "nobody home",
                             Abstention::Backoff => "backoff",
+                            Abstention::Quiet => "quiet",
+                            Abstention::QuietHours => "quiet hours",
+                            Abstention::Expired => "expired",
                             _ => continue,
                         },
                         _ => continue,
@@ -837,6 +918,10 @@ fn generated_tapes_reach_every_discretionary_gate() {
         "nothing to check",
         "nobody home",
         "backoff",
+        "ride",
+        "expired",
+        "quiet",
+        "quiet hours",
     ] {
         assert!(
             seen.get(key).is_some_and(|count| *count > 0),

@@ -116,11 +116,27 @@ enum Checklist {
     Actionable,
 }
 
-/// A drive's thought awaiting its outcome, and the drive it answers.
+/// A drive's thought awaiting its outcome, and the drive it answers: the drive's own
+/// thought, or an answer to the owner that its deferred intent rides.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct DriveThought {
     thought: ThoughtId,
     drive: String,
+}
+
+/// A ready drive's intent, held while Enton is in a conversation: rather than cut the
+/// owner off with a thought of its own, the drive rides the next thought the owner asks
+/// for, which brings up what the drive wanted to at no extra paid call. Once the
+/// conversation is over the drive may think alone instead; past `expires`, with neither,
+/// it lets the intent go.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Deferred {
+    /// The drive whose intent waits.
+    pub drive: String,
+    /// When it began to wait.
+    pub since: Millis,
+    /// When it lets go, unless a ride or a thought of its own came first.
+    pub expires: Millis,
 }
 
 /// The version of the brainstem reducer and snapshot schema.
@@ -238,6 +254,17 @@ pub struct Organism {
     /// Until when discretionary thoughts back off after those failures.
     #[serde(default)]
     backoff_until: Option<Millis>,
+    /// A ready drive's intent, held while Enton is in a conversation, to ride the
+    /// owner's next request.
+    #[serde(default)]
+    deferred: Option<Deferred>,
+    /// Until when the owner asked for quiet, as of the last `Quiet` command; `None`
+    /// before one, or once released.
+    #[serde(default)]
+    quiet_until: Option<Millis>,
+    /// Whether the owner's quiet hours are on, as of the last `QuietHours` event.
+    #[serde(default)]
+    quiet_hours: bool,
 }
 
 impl Organism {
@@ -290,6 +317,9 @@ impl Organism {
             drive_waiting: None,
             cortex_failures: 0,
             backoff_until: None,
+            deferred: None,
+            quiet_until: None,
+            quiet_hours: false,
         })
     }
 
@@ -483,6 +513,32 @@ impl Organism {
         self.backoff_until
     }
 
+    /// The intent a ready drive holds while Enton is in a conversation, to ride the
+    /// owner's next request, if one is held.
+    #[must_use]
+    pub fn deferred(&self) -> Option<&Deferred> {
+        self.deferred.as_ref()
+    }
+
+    /// Until when the owner asked for quiet, as of the last `Quiet` command: `None`
+    /// before one, or once released. Quiet holds before this instant.
+    #[must_use]
+    pub fn quiet_until(&self) -> Option<Millis> {
+        self.quiet_until
+    }
+
+    /// Whether the owner's quiet mode holds at `now`.
+    #[must_use]
+    pub fn quiet_as_of(&self, now: Millis) -> bool {
+        self.quiet(now)
+    }
+
+    /// Whether the owner's quiet hours are on, as of the last `QuietHours` event.
+    #[must_use]
+    pub fn in_quiet_hours(&self) -> bool {
+        self.quiet_hours
+    }
+
     /// Belief, from zero to one, that a TV is playing at `now`: the value a cue
     /// at that instant is weighed against, decayed since the last overheard line.
     /// Read-only, for audits such as `enton why`.
@@ -535,6 +591,14 @@ impl Organism {
                 self.cortex_failed(*now, *thought);
                 Vec::new()
             }
+            Event::Quiet { now, until } => {
+                self.hush(*now, *until);
+                Vec::new()
+            }
+            Event::QuietHours { active, .. } => {
+                self.quiet_hours = *active;
+                Vec::new()
+            }
             Event::CortexReply { now, text, thought } => {
                 self.drives.satisfy("social", 0.3);
                 if self.issued(*thought) {
@@ -551,6 +615,14 @@ impl Organism {
                 {
                     self.drives.satisfy(&answered.drive, 1.0);
                     self.ignition.settle(self.drives.pressure());
+                    // A ride's reply answers the intent it carried, as the drive's own would.
+                    if self
+                        .deferred
+                        .as_ref()
+                        .is_some_and(|deferred| deferred.drive == answered.drive)
+                    {
+                        self.deferred = None;
+                    }
                 }
                 self.self_speech_has_keyword = contains_keyword_word(text, "enton");
                 if Some(*thought) == self.conversation_thought {
@@ -700,9 +772,23 @@ impl Organism {
             self.verified_attention_until = None;
         }
 
+        // An intent that found nothing to ride, and no turn of its own, lets go.
+        if let Some(expired) = self.expire_deferral(now) {
+            self.drive_waiting = None;
+            actions.push(expired);
+            return actions;
+        }
         // A drive waits for a conversation to end: a thought of its own would cut the
-        // owner off, and would supersede the answer Enton owes them.
-        if !self.ignition.drive_ready(now) || self.in_conversation(now) {
+        // owner off, and would supersede the answer Enton owes them. It holds its intent
+        // instead, to ride the owner's next request.
+        if self.in_conversation(now) {
+            if self.ignition.drive_pressing() {
+                self.defer(now);
+            }
+            self.drive_waiting = None;
+            return actions;
+        }
+        if !self.ignition.drive_ready(now) {
             self.drive_waiting = None;
             return actions;
         }
@@ -756,10 +842,15 @@ impl Organism {
             || self.is_in_echo_period(now)
     }
 
-    /// What holds a discretionary thought back at `now`, in order: for a drive, a
-    /// checklist with nothing to check; for any, nobody home or a cortex backoff.
+    /// What holds a discretionary thought back at `now`, in order: the owner's quiet
+    /// mode, then their quiet hours; for a drive, a checklist with nothing to check; for
+    /// any, nobody home or a cortex backoff.
     fn discretion_gate(&self, now: Millis, drive: bool) -> Option<Abstention> {
-        if drive && self.checklist == Checklist::Empty {
+        if self.quiet(now) {
+            Some(Abstention::Quiet)
+        } else if self.quiet_hours {
+            Some(Abstention::QuietHours)
+        } else if drive && self.checklist == Checklist::Empty {
             Some(Abstention::NothingToCheck)
         } else if !self.owner_present(now) {
             Some(Abstention::NobodyHome)
@@ -768,6 +859,94 @@ impl Organism {
         } else {
             None
         }
+    }
+
+    /// Whether the owner asked for quiet and it still holds at `now`.
+    fn quiet(&self, now: Millis) -> bool {
+        self.quiet_until.is_some_and(|until| now < until)
+    }
+
+    /// The owner's quiet command at `now`: quiet until `until`, or released when that is
+    /// not after `now`. It called Enton by name, so the owner is home. It ends the turn it
+    /// may have finished, so a pending "Enton..." does not time out into an answer, and
+    /// quiet closes the attention windows: the owner is done talking for now.
+    fn hush(&mut self, now: Millis, until: Millis) {
+        self.heard_owner(now);
+        self.pending_attend = None;
+        if until > now {
+            self.quiet_until = Some(until);
+            self.attention_until = None;
+            self.verified_attention_until = None;
+        } else {
+            self.quiet_until = None;
+        }
+    }
+
+    /// Whether a drive's intent may ride an answer to the owner at `now` (or begin to
+    /// wait for one): nothing but the conversation holds the drive back. A ride buys no
+    /// thought, so neither the budget nor a cortex backoff applies; the body, quiet, the
+    /// checklist and somebody home do.
+    fn may_ride(&self, now: Millis) -> bool {
+        !self.torpor
+            && !self.quiet(now)
+            && !self.quiet_hours
+            && self.checklist == Checklist::Actionable
+            && self.owner_present(now)
+    }
+
+    /// A drive presses to fire during a conversation: hold the strongest drive's intent,
+    /// unless one is already held or something besides the conversation holds it back.
+    fn defer(&mut self, now: Millis) {
+        if self.deferred.is_some() || !self.may_ride(now) {
+            return;
+        }
+        let Some(drive) = self.drives.strongest().map(|drive| drive.name.clone()) else {
+            return;
+        };
+        let expires = Millis(now.0.saturating_add(self.profile.discretion.deferral_ms));
+        self.deferred = Some(Deferred {
+            drive,
+            since: now,
+            expires,
+        });
+    }
+
+    /// A held intent whose deferral ran out, with no ride in flight, lets go: its drive is
+    /// answered as if by silence and asks again only once its pressure builds back up.
+    /// The abstention is logged once, at the tick that drops it.
+    fn expire_deferral(&mut self, now: Millis) -> Option<Action> {
+        if self.drive_thought.is_some() {
+            // A ride in flight waits for its outcome.
+            return None;
+        }
+        let expired = self
+            .deferred
+            .take_if(|deferred| now >= deferred.expires)?;
+        let salience = self.ignition.salience();
+        self.drives.satisfy(&expired.drive, 1.0);
+        self.ignition.settle(self.drives.pressure());
+        Some(Action::Abstain {
+            reason: Reason::Drive(expired.drive),
+            salience,
+            why: Abstention::Expired,
+            propensity: None,
+        })
+    }
+
+    /// An answer the owner asked for, `thought`, carries the held intent when it may: the
+    /// thought now answers the drive, as the drive's own would, and its reply, failure or
+    /// supersession resolves it like one. The intent stays held until it is answered, so a
+    /// ride that is lost may ride the owner's next request.
+    fn ride(&mut self, now: Millis, thought: ThoughtId) -> Option<String> {
+        if !self.may_ride(now) {
+            return None;
+        }
+        let drive = self.deferred.as_ref()?.drive.clone();
+        self.drive_thought = Some(DriveThought {
+            thought,
+            drive: drive.clone(),
+        });
+        Some(drive)
     }
 
     /// Whether the owner was heard within the presence window before `now`.
@@ -1837,7 +2016,16 @@ impl Organism {
         let thought = ThoughtId(self.next_thought);
         self.next_thought = self.next_thought.saturating_add(1);
         self.supersede_drive_thought();
+        // An answer the owner asked for carries a held intent; the drive's own thought
+        // takes its place.
+        let rider = match payment {
+            Payment::Obligation => self.ride(now, thought),
+            Payment::Discretionary | Payment::Explored(_) => None,
+        };
         if matches!(reason, Reason::Drive(_)) {
+            self.deferred = None;
+        }
+        if matches!(reason, Reason::Drive(_)) || rider.is_some() {
             self.ignition.fired(now);
         } else {
             self.ignition.paid(now);
@@ -1857,6 +2045,7 @@ impl Organism {
             reason,
             salience,
             propensity,
+            rider,
         }
     }
 
@@ -1907,12 +2096,14 @@ fn logged(action: Action, probability: f32) -> Action {
             thought,
             reason,
             salience,
+            rider,
             ..
         } => Action::Think {
             thought,
             reason,
             salience,
             propensity: Some(probability),
+            rider,
         },
         Action::Abstain {
             reason,

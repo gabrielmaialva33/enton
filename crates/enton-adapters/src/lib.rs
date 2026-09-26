@@ -3,6 +3,7 @@
 pub mod body;
 pub mod checklist;
 pub mod clock;
+pub mod initiative;
 
 #[cfg(feature = "audio")]
 pub mod audio;

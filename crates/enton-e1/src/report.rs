@@ -364,7 +364,7 @@ impl fmt::Display for Report {
         for criterion in &self.criteria {
             writeln!(
                 f,
-                "  [{}] {} — {}",
+                "  [{}] {} ({})",
                 criterion.status, criterion.name, criterion.details
             )?;
         }

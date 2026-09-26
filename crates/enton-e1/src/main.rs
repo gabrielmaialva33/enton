@@ -19,7 +19,7 @@ fn parse_seeds(value: &str) -> Result<Vec<u64>, Error> {
         let end = parse(high.trim_start_matches('='))?;
         if end < start || end - start >= 32 {
             return Err(Error::Invalid(
-                "seed range must contain 1–32 entries (inclusive)".into(),
+                "seed range must contain 1 to 32 entries (inclusive)".into(),
             ));
         }
         Ok((start..=end).collect())
@@ -69,7 +69,7 @@ fn execute() -> Result<(), Error> {
     let cli = parse_cli(std::env::args().skip(1))?;
     if cli.help {
         println!(
-            "E1 benchmark {BENCHMARK_VERSION}\nUsage: e1-sim [--seed N | --seeds A..=B | --seeds A,B] [--json] [--held-out]\nRanges are inclusive, at most 32 seeds. Calibration seeds: 0–999. Held-out mode is reserved for the frozen-manifest owner."
+            "E1 benchmark {BENCHMARK_VERSION}\nUsage: e1-sim [--seed N | --seeds A..=B | --seeds A,B] [--json] [--held-out]\nRanges are inclusive, at most 32 seeds. Calibration seeds: 0 to 999. Held-out mode is reserved for the frozen-manifest owner."
         );
         return Ok(());
     }

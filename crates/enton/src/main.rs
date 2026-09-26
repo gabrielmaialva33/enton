@@ -610,6 +610,7 @@ fn speech_cue(line: &str) -> SpeechCue {
         duration_ms,
         vad_confidence: 1.0,
         keyword,
+        speaker_sim: None,
     }
 }
 
@@ -853,30 +854,32 @@ fn spawn_voice_event_listener(player: &Arc<VoicePlayer>, tx: mpsc::Sender<LoopMe
 mod tests {
     use super::*;
 
+    /// A typed line with the given timing and loudness (energy and VAD alike).
+    fn typed(text: &str, now: u64, level: f32, duration_ms: u32, keyword: bool) -> LoopMessage {
+        LoopMessage::SpeechInput {
+            text: text.to_string(),
+            event: Event::Speech {
+                now: enton_core::Millis(now),
+                cue: SpeechCue {
+                    energy: level,
+                    vad_confidence: level,
+                    duration_ms,
+                    keyword,
+                    speaker_sim: None,
+                },
+            },
+            input_end_time: Instant::now(),
+        }
+    }
+
     #[tokio::test]
     async fn rejected_cues_leave_transcripts_intact() {
         let (tx, _rx) = mpsc::channel(1);
         let mut state = test_state(Organism::new(Profile::t1_ref()).unwrap(), None);
 
-        // 1. Keyword -> accepted, Attend until later.
-        let kw_event = Event::Speech {
-            now: enton_core::Millis(100),
-            cue: enton_core::SpeechCue {
-                energy: 0.9,
-                vad_confidence: 0.9,
-                duration_ms: 500, // < 900ms => Attend
-                keyword: true,
-            },
-        };
+        // 1. Keyword, shorter than 900 ms -> accepted, Attend until later.
         state
-            .handle_message(
-                LoopMessage::SpeechInput {
-                    text: "enton".to_string(),
-                    event: kw_event,
-                    input_end_time: Instant::now(),
-                },
-                &tx,
-            )
+            .handle_message(typed("enton", 100, 0.9, 500, true), &tx)
             .await
             .unwrap();
 
@@ -884,24 +887,8 @@ mod tests {
         assert_eq!(state.attended_transcript.as_deref(), Some("enton")); // Attend sets attended_transcript
 
         // 2. Rejected noise (low VAD) -> Abstain
-        let noise_event = Event::Speech {
-            now: enton_core::Millis(200),
-            cue: enton_core::SpeechCue {
-                energy: 0.1,
-                vad_confidence: 0.1,
-                duration_ms: 100,
-                keyword: false,
-            },
-        };
         state
-            .handle_message(
-                LoopMessage::SpeechInput {
-                    text: "shhh".to_string(),
-                    event: noise_event,
-                    input_end_time: Instant::now(),
-                },
-                &tx,
-            )
+            .handle_message(typed("shhh", 200, 0.1, 100, false), &tx)
             .await
             .unwrap();
 
@@ -914,24 +901,8 @@ mod tests {
         assert_eq!(state.last_transcript.as_deref(), None);
 
         // 3. Continuation (high VAD) -> accepted -> Think
-        let cont_event = Event::Speech {
-            now: enton_core::Millis(300),
-            cue: enton_core::SpeechCue {
-                energy: 0.9,
-                vad_confidence: 0.9,
-                duration_ms: 1000,
-                keyword: false,
-            },
-        };
         state
-            .handle_message(
-                LoopMessage::SpeechInput {
-                    text: "help me".to_string(),
-                    event: cont_event,
-                    input_end_time: Instant::now(),
-                },
-                &tx,
-            )
+            .handle_message(typed("help me", 300, 0.9, 1000, false), &tx)
             .await
             .unwrap();
 
@@ -945,24 +916,8 @@ mod tests {
         // The Think above set in_flight_thought and active_cortex_task
         assert!(state.in_flight_thought.is_some());
 
-        let noise2_event = Event::Speech {
-            now: enton_core::Millis(400),
-            cue: enton_core::SpeechCue {
-                energy: 0.1,
-                vad_confidence: 0.1,
-                duration_ms: 100,
-                keyword: false,
-            },
-        };
         state
-            .handle_message(
-                LoopMessage::SpeechInput {
-                    text: "cough".to_string(),
-                    event: noise2_event,
-                    input_end_time: Instant::now(),
-                },
-                &tx,
-            )
+            .handle_message(typed("cough", 400, 0.1, 100, false), &tx)
             .await
             .unwrap();
 

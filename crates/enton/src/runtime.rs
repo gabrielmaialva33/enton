@@ -408,6 +408,7 @@ mod tests {
                     media: None,
                     turn_complete: None,
                     directed: None,
+                    direction: None,
                 },
             },
             input_end_time: Instant::now(),

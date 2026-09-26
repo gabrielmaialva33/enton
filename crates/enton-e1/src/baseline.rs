@@ -73,6 +73,7 @@ impl Baseline {
             reason,
             salience: cue.vad_confidence,
             propensity: None,
+            rider: None,
         }]
     }
 }

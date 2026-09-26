@@ -9,15 +9,18 @@ use std::thread::JoinHandle;
 use enton_core::UtteranceId;
 use enton_core::ports::{PortError, TextToSpeech};
 
+use super::chime::chime;
 use super::config::{VoiceConfig, VoiceError};
 use super::events::{
     EventHub, PlaybackEvent, PlaybackEventStats, UtteranceStageTimings, emit_event,
 };
-use super::playback::{PlaybackQueueState, open_output_device, start_output_stream};
+use super::playback::{
+    PlaybackQueueState, QueuedSentence, open_output_device, spawn_simulated_device,
+    start_output_stream,
+};
 use super::worker::{
     PortJob, SynthesisJob, SynthesisWorkerParams, SynthesizerBackend, create_offline_tts,
-    native_sample_rate, spawn_mock_worker, spawn_port_worker, spawn_synthesis_worker,
-    synthesis_response,
+    native_sample_rate, spawn_port_worker, spawn_synthesis_worker, synthesis_response,
 };
 
 /// Voice synthesizer and audio player.
@@ -38,6 +41,8 @@ pub struct VoicePlayer {
     pub(super) stopped: Arc<AtomicBool>,
     native_sample_rate: u32,
     device_sample_rate: u32,
+    /// The acknowledgement chime at the output rate, computed once.
+    chime: Vec<f32>,
 }
 
 impl fmt::Debug for VoicePlayer {
@@ -70,14 +75,7 @@ impl VoicePlayer {
         let subscribers = Arc::new(EventHub::new());
         let last_error = Arc::new(Mutex::new(None));
         let generation = Arc::new(AtomicU64::new(0));
-        let queue_state = Arc::new(Mutex::new(PlaybackQueueState {
-            generation: 0,
-            current_utterance: None,
-            current_samples: Vec::new(),
-            current_pos: 0,
-            queue: VecDeque::with_capacity(config.queue_capacity),
-            timings: VecDeque::with_capacity(64),
-        }));
+        let queue_state = Arc::new(Mutex::new(PlaybackQueueState::new(config.queue_capacity)));
 
         let start = |stream_config| {
             start_output_stream(
@@ -139,43 +137,51 @@ impl VoicePlayer {
             stopped,
             native_sample_rate: native_rate,
             device_sample_rate: sample_rate,
+            chime: chime(sample_rate),
         })
     }
 
     /// Creates a mock voice player that runs without requiring model files or physical audio devices.
     ///
+    /// It is the real player with two stand-ins: every sentence synthesizes to 20 ms
+    /// of a 440 Hz tone, and a simulated device plays the queue at 24 kHz in about real
+    /// time, through the same callback and lifecycle events as a sound card.
     /// Ideal for headless testing and CI environments.
     #[must_use]
     pub fn mock() -> Self {
+        const RATE: u32 = 24_000;
+        let config = VoiceConfig::default();
+        let capacity = config.queue_capacity;
         let subscribers = Arc::new(EventHub::new());
         let last_error = Arc::new(Mutex::new(None));
         let generation = Arc::new(AtomicU64::new(0));
-        let queue_state = Arc::new(Mutex::new(PlaybackQueueState {
-            generation: 0,
-            current_utterance: None,
-            current_samples: Vec::new(),
-            current_pos: 0,
-            queue: VecDeque::with_capacity(8),
-            timings: VecDeque::with_capacity(64),
-        }));
-
-        let synthesizer = Arc::new(SynthesizerBackend::Mock {
-            sample_rate: 24_000,
-        });
-        let (job_tx, job_rx) = sync_channel::<SynthesisJob>(8);
+        let queue_state = Arc::new(Mutex::new(PlaybackQueueState::new(capacity)));
+        let synthesizer = Arc::new(SynthesizerBackend::Mock { sample_rate: RATE });
+        let (job_tx, job_rx) = sync_channel::<SynthesisJob>(capacity);
         let stopped = Arc::new(AtomicBool::new(false));
 
-        let worker_handle = spawn_mock_worker(
+        let worker_handle = spawn_synthesis_worker(SynthesisWorkerParams {
             job_rx,
+            synthesizer: Arc::clone(&synthesizer),
+            last_error: Arc::clone(&last_error),
+            queue_state: Arc::clone(&queue_state),
+            generation: Arc::clone(&generation),
+            subscribers: Arc::clone(&subscribers),
+            stopped: Arc::clone(&stopped),
+            device_sample_rate: RATE,
+            speed: 1.0,
+            speaker_id: 0,
+            queue_capacity: capacity,
+        });
+        spawn_simulated_device(
             Arc::clone(&queue_state),
-            Arc::clone(&generation),
             Arc::clone(&subscribers),
             Arc::clone(&stopped),
+            RATE,
         );
-
-        let port_tx = spawn_port_worker(synthesizer, Arc::clone(&stopped), 8, 1.0, 42);
+        let port_tx = spawn_port_worker(synthesizer, Arc::clone(&stopped), capacity, 1.0, 42);
         Self {
-            config: VoiceConfig::default(),
+            config,
             next_id: AtomicU64::new(1),
             generation,
             subscribers,
@@ -186,8 +192,9 @@ impl VoicePlayer {
             _worker_handle: Some(worker_handle),
             _stream: None,
             stopped,
-            native_sample_rate: 24_000,
-            device_sample_rate: 24_000,
+            native_sample_rate: RATE,
+            device_sample_rate: RATE,
+            chime: chime(RATE),
         }
     }
 
@@ -253,15 +260,10 @@ impl VoicePlayer {
             text: trimmed.to_string(),
         };
 
-        {
-            let mut state = self
-                .queue_state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if state.timings.len() >= 64 {
-                state.timings.pop_front();
-            }
-            state.timings.push_back(UtteranceStageTimings {
+        self.queue_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .record(UtteranceStageTimings {
                 id,
                 generation: current_gen,
                 handed_to_tts,
@@ -269,13 +271,51 @@ impl VoicePlayer {
                 first_sample_played: None,
                 playback_finished: None,
             });
-        }
 
         self.job_tx.try_send(job).map_err(|error| match error {
             TrySendError::Full(_) => VoiceError::QueueFull,
             TrySendError::Disconnected(_) => VoiceError::QueueClosed,
         })?;
 
+        Ok(id)
+    }
+
+    /// Queues the acknowledgement chime (two soft rising tones, about 200 ms) for
+    /// playback, as an utterance of its own: it emits [`PlaybackEvent::Started`], with
+    /// empty text, then [`PlaybackEvent::Finished`], or [`PlaybackEvent::Cancelled`]
+    /// like any sentence. Computed when the player started, it skips synthesis: it
+    /// plays right after what is already queued, before sentences still being
+    /// synthesized. Returns its [`UtteranceId`].
+    ///
+    /// # Errors
+    /// Returns [`VoiceError::QueueFull`] when the playback queue is full; no ID is
+    /// returned then.
+    pub fn chime(&self) -> Result<UtteranceId, VoiceError> {
+        let samples = self.chime.clone();
+        let mut state = self
+            .queue_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.queue.len() >= self.config.queue_capacity {
+            return Err(VoiceError::QueueFull);
+        }
+        let id = UtteranceId(self.next_id.fetch_add(1, Ordering::SeqCst));
+        let generation = state.generation;
+        let now = std::time::Instant::now();
+        state.record(UtteranceStageTimings {
+            id,
+            generation,
+            handed_to_tts: now,
+            synthesis_done: Some(now),
+            first_sample_played: None,
+            playback_finished: None,
+        });
+        state.queue.push_back(QueuedSentence {
+            id,
+            generation,
+            text: String::new(),
+            samples,
+        });
         Ok(id)
     }
 
@@ -480,7 +520,12 @@ mod tests {
     #[test]
     fn cancellation_releases_queue_before_publishing_events() {
         let player = Arc::new(VoicePlayer::mock());
-        player.queue_state.lock().unwrap().current_utterance = Some(UtteranceId(77));
+        {
+            // Ten seconds to play, so only the cancellation can clear it.
+            let mut state = player.queue_state.lock().unwrap();
+            state.current_utterance = Some(UtteranceId(77));
+            state.current_samples = vec![0.0; 240_000];
+        }
         let subscribers = player.subscribers.state.senders.lock().unwrap();
         let cancelling = Arc::clone(&player);
         let handle = thread::spawn(move || cancelling.cancel());
@@ -711,6 +756,96 @@ mod tests {
                 || events.contains(&PlaybackEvent::Cancelled { id: id2 })
         );
         assert!(!player.is_playing());
+    }
+
+    /// Events from `rx` until `last` arrives, or none arrives for a second.
+    fn events_until(rx: &Receiver<PlaybackEvent>, last: &PlaybackEvent) -> Vec<PlaybackEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = rx.recv_timeout(Duration::from_secs(1)) {
+            let done = event == *last;
+            events.push(event);
+            if done {
+                break;
+            }
+        }
+        events
+    }
+
+    #[test]
+    fn the_chime_plays_as_an_utterance_of_its_own() {
+        let player = VoicePlayer::mock();
+        let rx = player.subscribe().unwrap();
+        let chime = player.chime().unwrap();
+        assert_eq!(
+            events_until(&rx, &PlaybackEvent::Finished { id: chime }),
+            [
+                PlaybackEvent::Started {
+                    id: chime,
+                    text: String::new()
+                },
+                PlaybackEvent::Finished { id: chime },
+            ]
+        );
+        let timings = player.stage_timings(chime).unwrap();
+        assert!(timings.first_sample_played.is_some());
+        assert!(timings.playback_finished.is_some());
+        // Speech that follows takes the next ID and plays as before.
+        let spoken = player.speak("Oi.").unwrap();
+        assert_eq!(spoken, UtteranceId(chime.0 + 1));
+        assert_eq!(
+            events_until(&rx, &PlaybackEvent::Finished { id: spoken }),
+            [
+                PlaybackEvent::Started {
+                    id: spoken,
+                    text: "Oi.".to_owned()
+                },
+                PlaybackEvent::Finished { id: spoken },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_barge_in_cuts_the_chime_like_speech() {
+        let player = VoicePlayer::mock();
+        let rx = player.subscribe().unwrap();
+        let chime = player.chime().unwrap();
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            PlaybackEvent::Started {
+                id: chime,
+                text: String::new()
+            }
+        );
+        player.cancel();
+        assert_eq!(
+            events_until(&rx, &PlaybackEvent::Cancelled { id: chime }),
+            [PlaybackEvent::Cancelled { id: chime }]
+        );
+        assert!(!player.is_playing());
+        assert!(
+            player
+                .stage_timings(chime)
+                .unwrap()
+                .playback_finished
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn the_chime_is_refused_when_the_playback_queue_is_full() {
+        let player = VoicePlayer::mock();
+        {
+            // Hold the device on a long sentence while the queue fills up.
+            let mut state = player.queue_state.lock().unwrap();
+            state.current_utterance = Some(UtteranceId(900));
+            state.current_samples = vec![0.0; 240_000];
+        }
+        for _ in 0..player.config().queue_capacity {
+            player.chime().unwrap();
+        }
+        assert!(matches!(player.chime(), Err(VoiceError::QueueFull)));
+        player.cancel();
+        assert!(player.chime().is_ok());
     }
 
     #[test]

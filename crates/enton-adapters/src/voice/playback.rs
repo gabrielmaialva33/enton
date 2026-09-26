@@ -1,5 +1,8 @@
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
@@ -26,6 +29,54 @@ pub(super) struct PlaybackQueueState {
     pub(super) current_pos: usize,
     pub(super) queue: VecDeque<QueuedSentence>,
     pub(super) timings: VecDeque<UtteranceStageTimings>,
+}
+
+/// How many utterances keep their stage timings.
+pub(super) const TIMINGS_KEPT: usize = 64;
+
+impl PlaybackQueueState {
+    /// Nothing playing or queued, with room for `capacity` ready sentences.
+    pub(super) fn new(capacity: usize) -> Self {
+        Self {
+            generation: 0,
+            current_utterance: None,
+            current_samples: Vec::new(),
+            current_pos: 0,
+            queue: VecDeque::with_capacity(capacity),
+            timings: VecDeque::with_capacity(TIMINGS_KEPT),
+        }
+    }
+
+    /// Start the stage timings of `id`, forgetting the oldest beyond [`TIMINGS_KEPT`].
+    pub(super) fn record(&mut self, timing: UtteranceStageTimings) {
+        if self.timings.len() >= TIMINGS_KEPT {
+            self.timings.pop_front();
+        }
+        self.timings.push_back(timing);
+    }
+}
+
+/// How often a simulated device pulls audio, and how much it pulls each time.
+const SIMULATED_PERIOD: Duration = Duration::from_millis(5);
+
+/// An output device with no hardware behind it, for the mock player: every few
+/// milliseconds it pulls a period of samples through [`process_output_callback`], the
+/// callback a real output stream runs, so a mock reports the lifecycle of what it plays
+/// exactly as a real player does, in about real time. It stops with the player.
+pub(super) fn spawn_simulated_device(
+    queue_state: Arc<Mutex<PlaybackQueueState>>,
+    subscribers: Arc<EventHub>,
+    stopped: Arc<AtomicBool>,
+    sample_rate: u32,
+) {
+    let frames = usize::try_from(sample_rate / 200).map_or(1, |frames| frames.max(1));
+    thread::spawn(move || {
+        let mut period = vec![0.0_f32; frames];
+        while !stopped.load(Ordering::Relaxed) {
+            thread::sleep(SIMULATED_PERIOD);
+            process_output_callback(&mut period, 1, &queue_state, &subscribers);
+        }
+    });
 }
 
 /// An output device with the config to open it with and the one to fall back to.

@@ -16,7 +16,7 @@ pub enum PlaybackEvent {
     Started {
         /// Utterance identifier.
         id: UtteranceId,
-        /// Full text of the spoken sentence.
+        /// Full text of the spoken sentence; empty for the acknowledgement chime.
         text: String,
     },
     /// Playback of the utterance completed normally.

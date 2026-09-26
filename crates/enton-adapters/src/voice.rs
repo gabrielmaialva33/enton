@@ -9,14 +9,21 @@
 //! Emits lifecycle events ([`PlaybackEvent::Started`], [`PlaybackEvent::Finished`],
 //! [`PlaybackEvent::Cancelled`], [`PlaybackEvent::Failed`]) for each utterance to record what was actually heard
 //! and supports immediate barge-in interruption upon new stimulus.
+//!
+//! [`speakable`] strips what a reply should not say out loud (stage directions,
+//! markup, emojis) before synthesis, and [`VoicePlayer::chime`] plays a short
+//! acknowledgement, computed once, through the same queue and events as speech.
 
+mod chime;
 mod config;
 mod events;
 mod playback;
 mod player;
+mod text;
 mod worker;
 
 pub use config::{KokoroVoice, PiperVoice, VoiceConfig, VoiceEngine, VoiceError, VoiceModel};
 pub use enton_core::UtteranceId;
 pub use events::{PlaybackEvent, PlaybackEventStats, UtteranceStageTimings, VoiceLatencyBreakdown};
 pub use player::VoicePlayer;
+pub use text::speakable;

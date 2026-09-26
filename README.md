@@ -123,7 +123,9 @@ Abstain { reason: Speech, salience: 0.976, why: Cooldown }
 
 "enton" alone is too short to be a request, so Enton **attends** for 5 s and merges the
 continuation into a single thought. The later remark, not addressed to it, lands inside the
-10 s cooldown, so it **abstains** and says why. Type `quit` to exit.
+10 s cooldown, so it **abstains** and says why. Type `Enton, silêncio` to keep its own thoughts to
+itself for an hour (it still answers when called by name) and `Enton, pode falar` to release it
+(see [Quiet mode and quiet hours](#quiet-mode-and-quiet-hours)). Type `quit` to exit.
 
 Everything it perceives and decides is written to its **soul** before it acts, so the next run
 resumes exactly where this one stopped, and a thought interrupted by a crash is never repeated.
@@ -374,7 +376,9 @@ flowchart TD
     CD -- yes --> A_C[["Abstain · Cooldown"]]
     CD -- no --> HAB{"Still above threshold<br/>after habituation?"}
     HAB -- no --> A_H[["Abstain · Habituation"]]
-    HAB -- yes --> HOME{"Owner heard<br/>in the last 30 min?"}
+    HAB -- yes --> QUIET{"Quiet mode<br/>or quiet hours?"}
+    QUIET -- yes --> A_Q[["Abstain · Quiet or QuietHours"]]
+    QUIET -- no --> HOME{"Owner heard<br/>in the last 30 min?"}
     HOME -- no --> A_N[["Abstain · NobodyHome"]]
     HOME -- yes --> BACK{"Cortex backing off<br/>after failures?"}
     BACK -- yes --> A_BO[["Abstain · Backoff"]]
@@ -387,10 +391,11 @@ flowchart TD
 
 Internal drives take the same road on every clock tick: pressure grows, is smoothed, and fires
 `Think { reason: Drive("curiosity") }` when it crosses the threshold, unless the body is in
-torpor, the checklist holds nothing to check, nobody is home, the cortex is backing off, or the
-discretionary budget is empty. A ready drive that cannot think logs that wait once (and again
-if its cause changes), not on every tick, and it never cuts into a conversation: it waits for
-the attention windows to close and for Enton to stop speaking (see [Drives](#drives)).
+torpor, the owner asked for quiet or it is the quiet hours, the checklist holds nothing to check,
+nobody is home, the cortex is backing off, or the discretionary budget is empty. A ready drive
+that cannot think logs that wait once (and again if its cause changes), not on every tick, and it
+never cuts into a conversation: it holds its intent and rides the owner's next request, or thinks
+once the conversation is over (see [Deferred intents](#deferred-intents)).
 
 ### Why Enton did not think
 
@@ -411,6 +416,9 @@ audited later to find false negatives.
 | `NothingToCheck` | A drive was ready, but the checklist holds nothing to bring up |
 | `NobodyHome` | A drive or overheard speech found nobody home: the owner was not heard in the last 30 minutes |
 | `Backoff` | The cortex failed on the last thoughts; thoughts of Enton's own wait out an exponential backoff |
+| `Quiet` | The owner asked for quiet ("Enton, silêncio") and has not released it; thoughts of Enton's own wait |
+| `QuietHours` | It is the quiet hours (23:00 to 07:00 by default); thoughts of Enton's own wait |
+| `Expired` | A drive held its intent through a conversation, and neither a request to ride nor a turn of its own came within 10 minutes: it let go |
 
 ---
 
@@ -472,7 +480,8 @@ Boundaries are crossed only through the core's public API.
 | **Habituation & novelty** | A running expectation of recent cues. Repetition suppresses salience on two timescales: a fast component that a surprise resets, and a slow one that outlasts quiet gaps (a TV that pauses is still a TV) and only ever mutes familiar cues |
 | **Self-echo model** | Adaptive estimate of its own voice at the microphone, barge-in margins, a consecutive barge-in ratchet and a playback watchdog |
 | **Torpor** | Fever or critical battery blocks discretionary thought; being called by name still gets an answer |
-| **Discretion** | A thought of Enton's own (a drive, overheard speech, an explored cue) needs the owner heard in the last 30 minutes (by name, as a follow-up, or in their verified voice) and a cortex that is not backing off; a drive also needs something on the checklist. Cortex failures back off these thoughts exponentially; a reply ends it. Obligations need none of it |
+| **Discretion** | A thought of Enton's own (a drive, overheard speech, an explored cue) needs no quiet mode and no quiet hours, the owner heard in the last 30 minutes (by name, as a follow-up, or in their verified voice) and a cortex that is not backing off; a drive also needs something on the checklist. Cortex failures back off these thoughts exponentially; a reply ends it. Obligations need none of it |
+| **Deferred intents** | A drive ready during a conversation holds its intent (snapshotted) and rides the owner's next request, at no extra paid call; the reply answers it. Once the conversation is over it may think alone; with neither within 10 minutes, it lets go |
 | **Exploration** | Off by default. A cue that evidence turns away close to a threshold may think anyway with a set probability, paid by the discretionary account; the coin comes from a snapshotted generator and every flip logs its propensity, so an offline estimator can learn what abstaining cost |
 
 ### Adapters (`enton-adapters`)
@@ -482,6 +491,7 @@ Boundaries are crossed only through the core's public API.
 | **body** | always | sysfs / procfs | Hottest thermal zone, battery charge, load per core |
 | **clock** | always | `Instant` | Monotonic milliseconds, the only source of time |
 | **checklist** | always | `std::fs` | `CHECKLIST.md`, read at startup and polled every 10 s, never written; only whether it holds something to check enters the core |
+| **initiative** | always (the local clock: `local-time`) | jiff | Recognizes quiet commands in what the owner types or says (pt-BR), watches the quiet hours (only their edges enter the core), and writes the one line a riding drive adds to an answer |
 | **cortex** | `cortex` | reqwest + rustls | OpenAI-compatible client: sentence streaming, middle-out history pruning, single-flight, idempotency cache keyed by thought ID; the persona, read once and never written |
 | **audio** | `audio` | cpal + sherpa-onnx | 16 kHz capture, Silero VAD endpointing, 30 s RAM-only ring, keyword fallback through a bounded Whisper tiny worker (local or SSH) |
 | **voice** | `voice` | sherpa-onnx Kokoro + cpal | pt-BR speech, sentence by sentence, instant cancel on barge-in, lifecycle events for what was actually heard |
@@ -538,6 +548,55 @@ a reply ends it (`Backoff`). Being called by name is never held back by any of t
 that asks a model every 30 minutes whether to speak pays 48 calls a day to stay silent; Enton
 makes that decision in its reducer, for free.
 
+### Deferred intents
+
+A drive that gets ready while Enton is in a conversation (waiting for the rest of a request,
+inside an attention window, or speaking) does not cut the owner off, and it does not just wait
+either: it holds its intent (`Deferred { drive, since, expires }`, kept in snapshots) and rides
+the next answer the owner asks for, by name or as a follow-up. That thought carries the drive
+(`Think { reason: FollowUp, rider: Some("curiosity"), .. }`), the runtime adds one line to its
+prompt (the checklist, flattened, with leave to bring one item up in a sentence; the line never
+enters the conversation history), and its reply answers the drive exactly as the drive's own
+thought would. The owner gets an answer and the drive its turn for one paid call. The idea comes
+from my-neuro's dawn-dusk-line plugin: while the user is talking, patch the next reply instead of
+making an extra call.
+
+A ride buys no thought, so neither the budget nor a cortex backoff holds it back; the body, quiet
+and the checklist do, and somebody must be home. If a ride is lost (a newer request supersedes
+it, or the cortex fails), the intent rides the owner's next request. If the conversation ends
+first, the drive thinks alone, as it always did. An intent that finds neither within 10 minutes
+expires: it is logged once (`Expired`) and let go, as if answered by silence, so the drive asks
+again only once its pressure builds back up.
+
+### Quiet mode and quiet hours
+
+Tell Enton to be quiet and it keeps its own thoughts to itself (an idea from familiar-ai and
+N.E.K.O); calling it by name is still answered, follow-ups included.
+
+| Say or type | Effect |
+|:------------|:-------|
+| `Enton, silêncio` · `Enton, fica quieto` · `Enton, cala a boca` · `Enton, para de falar` | Quiet for an hour |
+| `Enton, silêncio por meia hora` · `... por 10 minutos` · `... por duas horas` | Quiet for that long, at most 12 hours |
+| `Enton, pode falar` · `Enton, chega de silêncio` | Quiet released |
+
+The adapter recognizes the command with a pure function over the text
+(`enton_adapters::initiative::quiet_command`), ignoring case, accents and punctuation. The utterance
+must call Enton by name and be nothing but the command, polite filler ("ei", "por favor") and a
+length, so "Enton, o que é silêncio?" stays a question. The command reaches the core as
+`Event::Quiet { now, until }` in place of its speech cue, so it buys no thought: the terminal
+prints a fixed acknowledgement, and the soul keeps the event. It says the owner is home, drops a
+pending "Enton..." (which would otherwise time out into an answer) and closes the attention
+windows. Until it runs out or is released, every thought of Enton's own abstains (`Quiet`),
+rides included. Today the terminal's typed lines use it; a transcript from the microphone can
+use the same function.
+
+The quiet hours do the same every night, 23:00 to 07:00 local time by default
+(`ENTON_QUIET_HOURS=22:30-06:30` moves them, `off` drops them). The core has no wall clock, so the
+adapter reads the local time every 10 s and sends only the flag
+(`Event::QuietHours { now, active }`), at startup and at each edge: replay stays exact. During the
+band thoughts of Enton's own abstain as `QuietHours`; when both hold, the owner's quiet is named
+first.
+
 ---
 
 ## Profiles
@@ -565,6 +624,7 @@ makes that decision in its reducer, for free.
 | Gap that joins an unfinished name to its continuation | 1 s | 1 s |
 | Owner counts as home after last heard | 30 min | 30 min |
 | Backoff after cortex failures (doubling per failure in a row) | 1 min to 1 h | 1 min to 1 h |
+| A drive's intent, held through a conversation, lets go after | 10 min | 10 min |
 | Habituation half-life | 30 s | 15 s |
 | Slow habituation half-life | 20 min | 10 min |
 | Playback watchdog | 15 s | 20 s |
@@ -591,7 +651,7 @@ cargo run --release -p enton-e1 -- --seeds 0..=31 --summary --with-direction # p
 cargo run --release -p enton-e1 -- --seeds 0..=31 --off-policy  # estimate thresholds from one exploring log
 ```
 
-**Current status** (synthetic proxy, benchmark 3.4.0, reducer v13, speaker, media and end-of-turn
+**Current status** (synthetic proxy, benchmark 3.5.0, reducer v15, speaker, media and end-of-turn
 sensors, report seeds 0 to 31, measured 2026-09-26). One seed is an anecdote, so the table pools 32:
 
 | Criterion (RFC 0001 §7) | Target | Pooled result | Seeds passing | Status |
@@ -696,9 +756,11 @@ against 1877 at 57.4% without the array; confining with the array alone falls be
 Every run also watches the reducer at each step, in the spirit of TigerBeetle's VOPR: one
 decision per speech cue, thought IDs in order, time never running backward, budgets and
 habituation in bounds, a drive thinking only with something to check, `NothingToCheck`,
-`NobodyHome` and `Backoff` holding back only thoughts of Enton's own (and backoff only after an
-unanswered failure), and a snapshot round trip every 1000 steps that must keep stepping in
-lockstep with the live organism. A violation stops the run.
+`NobodyHome`, `Backoff`, `Quiet` and `QuietHours` holding back only thoughts of Enton's own (backoff
+only after an unanswered failure, quiet only while a command or the band holds), no such thought
+bought in quiet, a drive's intent held only at a tick and riding only an answer the owner asked
+for, expiring only once past its deadline, and a snapshot round trip every 1000 steps that must
+keep stepping in lockstep with the live organism. A violation stops the run.
 
 **Something to check, somebody home, a cortex that answers** (benchmark 3.4.0, reducer v13).
 E1's tapes carry no checklist, so E1 assumes one with something on it, read as each run
@@ -727,6 +789,20 @@ before looking at E1. Off policy, exploring now costs 104 extra calls instead of
 108 outcomes, 44 of them a turn the log would have missed. The candidates' actual effects in the
 table below (v11) are unchanged; their IPS estimates move by up to 10 turns and 18 requests
 (`media_llr` 1.5: +24 requests estimated instead of +42, against +33 actual).
+
+**Deferred intents and quiet** (benchmark 3.5.0, reducer v15). E1's generated tapes carry no
+quiet command and no quiet hours, and no t1-ref drive gets ready within a tape, so nothing here
+can move them: the JSON reports of seeds 0 to 95, with and without the directedness detector and
+the array, and the off-policy estimates of seeds 0 to 31, are byte-identical to 3.4.0's apart
+from the version. Tapes may now carry `Quiet` and `QuietHours` records, and a paid thought
+records the drive that rode it. Fixture tapes with eager drives check the rules instead
+(`crates/enton-e1/tests/initiative.rs`). The owner comes home while a drive is ready and asks a
+follow-up: it is served and carries the drive's intent, 2 paid calls and no drive thought, where
+the same tape without the follow-up spends its second call on the drive's own thought. The owner
+asks for quiet, then releases it: the command buys nothing, overheard talk and the ready drive
+wait, both of the owner's calls are answered, and the drive thinks on release, 3 calls against 4
+without quiet; the quiet hours give the same. Nothing was tuned: the 10-minute deferral and the
+one-hour default quiet were chosen before looking at E1.
 
 **Logged exploration and off-policy estimates** (benchmark 3.2.0, reducer v11). A gate only sees
 the outcomes of the calls it made: when Enton abstains, nobody learns whether that was a miss.

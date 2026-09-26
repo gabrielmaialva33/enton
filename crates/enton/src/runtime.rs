@@ -219,10 +219,8 @@ impl RuntimeState {
             self.conversation.push(ConversationTurn::assistant(&text));
         }
         #[cfg(feature = "voice")]
-        self.heard.finished(
-            thought,
-            said.then(|| self.conversation.newest()).flatten(),
-        );
+        self.heard
+            .finished(thought, said.then(|| self.conversation.newest()).flatten());
 
         let now = self.clock.now();
         let outcome = if outcome.is_ok() {
@@ -1138,7 +1136,12 @@ mod heard_tests {
         send(&mut state, &tx, typed(ASKED, 1_000)).await;
         stop_the_call(&mut state);
         send(&mut state, &tx, sentence(1, 0, 1)).await;
-        send(&mut state, &tx, LoopMessage::PlaybackStarted { id: utterance(1) }).await;
+        send(
+            &mut state,
+            &tx,
+            LoopMessage::PlaybackStarted { id: utterance(1) },
+        )
+        .await;
         send(&mut state, &tx, played(1, false)).await;
         // The cortex is still writing when the owner speaks again.
         send(&mut state, &tx, typed(INTERRUPTION, 3_000)).await;
@@ -1169,7 +1172,9 @@ mod heard_tests {
         assert!(state.organism.is_attending());
         let chime = state.chime.expect("the wait chimed");
         assert_eq!(
-            events.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),
+            events
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
             enton_adapters::PlaybackEvent::Started {
                 id: chime,
                 text: String::new()

@@ -13,7 +13,7 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-dea584?style=for-the-badge&logo=rust&logoColor=white)](./Cargo.toml)
 [![unsafe](https://img.shields.io/badge/unsafe-forbidden-991b1b?style=for-the-badge)](./Cargo.toml)
 [![Binary](https://img.shields.io/badge/core_binary-7.0_MiB-15803d?style=for-the-badge)](#build-profiles)
-[![Tests](https://img.shields.io/badge/tests-358_passing-00C853?style=for-the-badge)](./crates)
+[![Tests](https://img.shields.io/badge/tests-450_passing-00C853?style=for-the-badge)](./crates)
 [![License](https://img.shields.io/badge/license-MIT-dc2626?style=for-the-badge)](./LICENSE)
 
 ---
@@ -93,7 +93,7 @@ flowchart LR
 | **Runtime** | tokio `current_thread`: one event loop, bounded channels |
 | **Crates** | 4: core, adapters, binary, E1 harness |
 | **Source** | 17,118 lines of code (tokei, including inline unit tests) + 5,581 lines of tests and examples |
-| **Tests** | 358 passing with default features, 439 with all features, including property tests |
+| **Tests** | 450 passing with default features, 567 with all features, including property tests |
 | **Lean binary** | 7.0 MiB (5.3 MiB on aarch64), no shared libraries |
 | **Cortex** | Any OpenAI-compatible server, local Ollama by default |
 
@@ -170,10 +170,12 @@ but the thought failed: cortex unavailable.`).
 | `--profile t1-ref\|desktop` | `t1-ref` | Hardware profile: thresholds, budgets, torpor limits |
 | `--cortex-url <URL>` | `http://127.0.0.1:11434/v1` | OpenAI-compatible base URL |
 | `--model <MODEL>` | `qwen3.8:27b-gato` | Model identifier sent to the cortex |
+| `--persona <PATH>` | `~/.config/enton/PERSONA.md` if present, else built in | The cortex's persona (see below) |
 | `--soul <PATH>` | `~/.local/share/enton/soul-<profile>.sqlite` | Durable event log the organism resumes from |
 | `--no-soul` | off | Run without recording anything |
 | `--voice` | off | Speak replies out loud (needs the `voice` feature) |
 | `--speaker <ID>` | `42` (`pf_dora`) | Kokoro speaker ID |
+| `--no-chime` | chime on | With `--voice`: stay silent while waiting for the rest of a request |
 
 `enton why [--soul <PATH>] [--profile t1-ref|desktop] [--last <N>] [--since <DURATION>] [--json]`
 explains the last `N` speech cues (default 10) in the soul of that profile; `--since` (`90s`, `5m`,
@@ -184,12 +186,55 @@ If the cortex is unreachable, Enton keeps living and answers with an offline pla
 </details>
 
 <details>
+<summary><strong>Persona</strong></summary>
+
+The persona is the system prompt that gives the cortex Enton's voice. A default is built in; to
+write your own, create `$XDG_CONFIG_HOME/enton/PERSONA.md` (usually `~/.config/enton/PERSONA.md`)
+or pass `--persona <PATH>`. For example:
+
+```markdown
+Você é o Enton, um organismo digital que mora na workstation do Gabriel.
+Você NÃO é um assistente genérico: tem personalidade, humor e opinião própria.
+Responda SEMPRE em português brasileiro informal, com gíria, em no máximo duas frases.
+Seja leal e carinhoso com o Gabriel, mas zoeiro e debochado.
+```
+
+It is read once, at startup, and capped at 8 KiB: a larger file is refused, never truncated.
+Without the file the built-in persona speaks. One startup line says which:
+
+```text
+[enton] Persona: /home/gabriel/.config/enton/PERSONA.md, sha256 e93100801037, 311 bytes
+[enton] Persona: built-in default (no /home/gabriel/.config/enton/PERSONA.md), sha256 6f0c1471b192, 461 bytes
+```
+
+**Enton never writes the persona.** No code path, tool or cortex reply can change the file. This
+is a security property, not an omission: OpenClaw lets its agent rewrite its `SOUL.md`, and
+attackers used that (a zero-click prompt injection rewrote it every two minutes to keep control,
+and a bundled hook could swap it silently). Enton's soul is its hash-chained event log, not a
+persona file.
+
+The soul records which persona each thought was asked with: its SHA-256 (what
+`sha256sum PERSONA.md` prints), its length and whether it was built in, never its text, which is
+not needed to replay a decision. Keep the file in git if you want its history; the hash proves
+which version spoke. `enton why` shows it for every thought and warns when it changed:
+
+```text
+  persona   e93100801037 (file, 311 bytes)
+  warning   the persona changed since thought #1, which was asked with 6f0c1471b192 (built-in default, 461 bytes)
+```
+
+</details>
+
+<details>
 <summary><strong>Voice and microphone</strong></summary>
 
 ```bash
-# Speak replies out loud: Kokoro pt-BR, sentence by sentence, with barge-in
+# Speak replies out loud in pt-BR, sentence by sentence, with barge-in
 cargo build --release -p enton --features audio,voice
-./target/release/enton --profile desktop --voice
+./target/release/enton --profile desktop --voice                       # Kokoro, speaker 42 (pf_dora)
+./target/release/enton --profile desktop --voice --speaker 43          # Kokoro, speaker 43 (pm_alex)
+./target/release/enton --profile desktop --voice --voice-model piper   # Piper faber-medium
+./target/release/enton --profile t1-ref --voice                        # Piper, the T1-ref default
 
 # Microphone diagnostics: VAD endpointing + keyword fallback
 cargo run -p enton-adapters --features audio --example listen -- --list
@@ -197,7 +242,78 @@ cargo run -p enton-adapters --features audio --example listen -- --seconds 30
 cargo run -p enton-adapters --features audio --example listen -- --vad-only
 ```
 
-Models are never downloaded implicitly. Expected layout:
+Two engines speak, both through sherpa-onnx:
+
+| `--voice-model` | Engine | Rate | Speakers | Default for |
+|:----------------|:-------|:-----|:---------|:------------|
+| `kokoro` | Kokoro multi-lang v1.0 | 24 kHz | many: `--speaker <ID>`, 42 `pf_dora` (default), 43 `pm_alex` | `desktop` |
+| `piper` | Piper `pt_BR` faber-medium (VITS) | 22.05 kHz | one | `t1-ref` |
+
+Without `--voice-model` the profile decides. `--speaker` selects a Kokoro speaker; with Piper,
+which has a single speaker, the command line refuses it and asks for `--voice-model kokoro`.
+Piper is the T1-ref default because it is small (63 MB) and fast, but its cost on the ARM board
+still has to be measured. Kokoro loads the fp32 export (`model.onnx`) when it is there and falls
+back to the int8 one (`model.int8.onnx`), so machines that only have int8 keep working. Only
+Kokoro v1.0 speaks Portuguese: v1.1 covers Chinese and English only, so Enton never loads it.
+
+Measured on the desktop (i9-13900K, sherpa-onnx, 8 threads, the same pt-BR sentence, 6.7 s of
+audio), with a listening test through PipeWire ranking the voices from best to worst:
+
+| Model | Synthesis | Real-time factor | Listening rank |
+|:------|----------:|-----------------:|:---------------|
+| Piper `pt_BR` faber-medium | 0.10 s | 0.015 | 1 (best) |
+| Kokoro v1.0 fp32, speaker 43 `pm_alex` | 0.68 s | 0.10 | 2 |
+| Kokoro v1.0 fp32, speaker 42 `pf_dora` | 0.68 s | 0.10 | 3 |
+| Kokoro v1.0 int8, speaker 42 `pf_dora` | 2.70 s | 0.40 | 4 (worst) |
+
+The fp32 timing was measured with speaker 42; speaker 43 runs the same model. On x86 the int8
+export brings nothing: it is 4x slower than fp32 and sounds worst (sherpa-onnx issue #3754 reports
+a steady whine and garbled sentences from it).
+
+Playback runs at the model's native rate when the output device takes it (PipeWire and
+PulseAudio accept any rate), so audio is resampled once, by the sound server, instead of twice.
+A device with no config at that rate plays at its default rate, and Enton resamples each sentence
+before playback. One startup line says which:
+
+```text
+[enton] Voice output enabled (Piper, vits-piper-pt_BR-faber-medium/pt_BR-faber-medium.onnx, 2 threads, cpal)
+[enton] Voice playback at 22050 Hz, the model's native rate (no resampling)
+```
+
+Before a sentence is synthesized, what a voice should not read out is taken off it: `*actions*`,
+`[tags]`, stage directions in parentheses that stand as a sentence of their own (`(risos)`), Markdown
+emphasis and code markers (their words stay), list and heading markers, and emojis. Numbers,
+punctuation and parentheses inside running text stay: `*risos* Tá bom. Custa uns 10 reais (mais ou
+menos). 😄` is spoken as `Tá bom. Custa uns 10 reais (mais ou menos).`
+
+When Enton hears its name alone (`Enton?`) and waits up to five seconds for the rest of the
+request, it plays a short acknowledgement: two soft bell tones rising a fourth (G5 to C6, 200 ms),
+computed once at the output rate, so it costs no model call and needs no file. It goes through the
+same queue and playback events as speech, so the echo model and hangover cover it and it cannot set
+off a thought of its own, and the wait stays open while it plays. `--no-chime` turns it off.
+
+Enton remembers only what was heard. A spoken reply goes out sentence by sentence; when the owner
+cuts it off, the history the cortex sees next keeps the reply's text up to the last sentence that
+finished playing, then `[interrupted: the owner heard only this]` (the idea of Open-LLM-VTuber's
+`handle_interrupt`). The soul records each cut utterance (`PlaybackFinished` with `interrupted`), and
+`enton why` shows the cue that cut Enton off:
+
+```text
+  playback  cut off: Enton stopped speaking for this cue
+```
+
+In text mode, with no voice, every reply is remembered whole.
+
+Models are never downloaded implicitly. The voices come from the sherpa-onnx releases:
+
+```bash
+cd ~/.cache/enton/models
+curl -LO https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2
+curl -LO https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pt_BR-faber-medium.tar.bz2
+tar xf kokoro-multi-lang-v1_0.tar.bz2 && tar xf vits-piper-pt_BR-faber-medium.tar.bz2
+```
+
+Expected layout:
 
 ```text
 ~/.cache/enton/models/
@@ -206,12 +322,17 @@ Models are never downloaded implicitly. Expected layout:
 │   ├── tiny-encoder.int8.onnx
 │   ├── tiny-decoder.int8.onnx
 │   └── tiny-tokens.txt
-├── kokoro-int8-multi-lang-v1_1/             # voice (falls back to v1_0)
-│   ├── model.int8.onnx
+├── kokoro-multi-lang-v1_0/                  # voice: kokoro (fp32, preferred)
+│   ├── model.onnx
 │   ├── voices.bin
 │   ├── tokens.txt
 │   ├── espeak-ng-data/
 │   └── dict/                                # optional
+├── kokoro-int8-multi-lang-v1_0/             # voice: kokoro fallback, same layout with model.int8.onnx
+├── vits-piper-pt_BR-faber-medium/           # voice: piper
+│   ├── pt_BR-faber-medium.onnx
+│   ├── tokens.txt
+│   └── espeak-ng-data/
 └── 3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx   # voice-id probe
 ```
 
@@ -253,7 +374,11 @@ flowchart TD
     CD -- yes --> A_C[["Abstain · Cooldown"]]
     CD -- no --> HAB{"Still above threshold<br/>after habituation?"}
     HAB -- no --> A_H[["Abstain · Habituation"]]
-    HAB -- yes --> DIS["Discretionary budget"]
+    HAB -- yes --> HOME{"Owner heard<br/>in the last 30 min?"}
+    HOME -- no --> A_N[["Abstain · NobodyHome"]]
+    HOME -- yes --> BACK{"Cortex backing off<br/>after failures?"}
+    BACK -- yes --> A_BO[["Abstain · Backoff"]]
+    BACK -- no --> DIS["Discretionary budget"]
     OBL --> PAY{"Can pay?"}
     DIS --> PAY
     PAY -- no --> A_E[["Abstain · OutOfEnergy"]]
@@ -262,7 +387,10 @@ flowchart TD
 
 Internal drives take the same road on every clock tick: pressure grows, is smoothed, and fires
 `Think { reason: Drive("curiosity") }` when it crosses the threshold, unless the body is in
-torpor or the discretionary budget is empty.
+torpor, the checklist holds nothing to check, nobody is home, the cortex is backing off, or the
+discretionary budget is empty. A ready drive that cannot think logs that wait once (and again
+if its cause changes), not on every tick, and it never cuts into a conversation: it waits for
+the attention windows to close and for Enton to stop speaking (see [Drives](#drives)).
 
 ### Why Enton did not think
 
@@ -280,6 +408,9 @@ audited later to find false negatives.
 | `OtherSpeaker` | Inside an attention window, the evidence ruled out the owner speaking live |
 | `Media` | The sound was reproduced media (TV, radio, music), not a live voice |
 | `Undirected` | Inside an attention window, the speech was addressed to someone else |
+| `NothingToCheck` | A drive was ready, but the checklist holds nothing to bring up |
+| `NobodyHome` | A drive or overheard speech found nobody home: the owner was not heard in the last 30 minutes |
+| `Backoff` | The cortex failed on the last thoughts; thoughts of Enton's own wait out an exponential backoff |
 
 ---
 
@@ -341,6 +472,7 @@ Boundaries are crossed only through the core's public API.
 | **Habituation & novelty** | A running expectation of recent cues. Repetition suppresses salience on two timescales: a fast component that a surprise resets, and a slow one that outlasts quiet gaps (a TV that pauses is still a TV) and only ever mutes familiar cues |
 | **Self-echo model** | Adaptive estimate of its own voice at the microphone, barge-in margins, a consecutive barge-in ratchet and a playback watchdog |
 | **Torpor** | Fever or critical battery blocks discretionary thought; being called by name still gets an answer |
+| **Discretion** | A thought of Enton's own (a drive, overheard speech, an explored cue) needs the owner heard in the last 30 minutes (by name, as a follow-up, or in their verified voice) and a cortex that is not backing off; a drive also needs something on the checklist. Cortex failures back off these thoughts exponentially; a reply ends it. Obligations need none of it |
 | **Exploration** | Off by default. A cue that evidence turns away close to a threshold may think anyway with a set probability, paid by the discretionary account; the coin comes from a snapshotted generator and every flip logs its propensity, so an offline estimator can learn what abstaining cost |
 
 ### Adapters (`enton-adapters`)
@@ -349,10 +481,11 @@ Boundaries are crossed only through the core's public API.
 |:-------|:--------|:--------|:------------|
 | **body** | always | sysfs / procfs | Hottest thermal zone, battery charge, load per core |
 | **clock** | always | `Instant` | Monotonic milliseconds, the only source of time |
-| **cortex** | `cortex` | reqwest + rustls | OpenAI-compatible client: sentence streaming, middle-out history pruning, single-flight, idempotency cache keyed by thought ID |
+| **checklist** | always | `std::fs` | `CHECKLIST.md`, read at startup and polled every 10 s, never written; only whether it holds something to check enters the core |
+| **cortex** | `cortex` | reqwest + rustls | OpenAI-compatible client: sentence streaming, middle-out history pruning, single-flight, idempotency cache keyed by thought ID; the persona, read once and never written |
 | **audio** | `audio` | cpal + sherpa-onnx | 16 kHz capture, Silero VAD endpointing, 30 s RAM-only ring, keyword fallback through a bounded Whisper tiny worker (local or SSH) |
 | **voice** | `voice` | sherpa-onnx Kokoro + cpal | pt-BR speech, sentence by sentence, instant cancel on barge-in, lifecycle events for what was actually heard |
-| **soul** | `soul` | SQLite (WAL, `synchronous=FULL`) | Durable, gap-detecting, replayable event log with organism snapshots, retention and a size cap |
+| **soul** | `soul` | SQLite (WAL, `synchronous=FULL`) | Durable, gap-detecting, replayable event log with organism snapshots, retention and a size cap; each thought linked to the hash of the persona it was asked with |
 | **voice-id** | `voice-id` | sherpa-onnx CAM++ | `owner_probe` example: measures EER, d′, FAR and FRR for owner speaker verification |
 
 > [!TIP]
@@ -368,12 +501,42 @@ Boundaries are crossed only through the core's public API.
 
 | Drive | Weight | Growth per minute | Satisfied by |
 |:------|:------:|:-----------------:|:-------------|
-| `curiosity` | 0.6 | 0.004 | Nothing yet |
-| `social` | 0.6 | 0.003 | Every cortex reply (−0.3) |
-| `rest` | 0.2 | 0.002 | Nothing yet |
+| `curiosity` | 0.6 | 0.004 | The reply to its own thought, silence included (back to zero) |
+| `social` | 0.6 | 0.003 | Every cortex reply (−0.3), and the reply to its own thought (back to zero) |
+| `rest` | 0.2 | 0.002 | The reply to its own thought, silence included (back to zero) |
 
 These are conservative scaffold values, not calibrated physiology: after an hour of silence their
-combined pressure is still below both profiles' thresholds. Enton is quiet by default.
+combined pressure is still below both profiles' thresholds (t1-ref's takes about three and a half
+hours to reach). Enton is quiet by default.
+
+A drive's thought is answered by its reply, whatever it says: the drive drops to zero and asks
+again only once its pressure builds back up, hours later. If the thought fails, or the owner's
+call supersedes it, the drive is still unanswered and may ask again, after the backoff or once
+the conversation is over. A thought for anything else never uses up a drive's turn.
+
+**What a drive may bring up.** A drive needs something to say, so it reads the owner's checklist:
+`$XDG_CONFIG_HOME/enton/CHECKLIST.md` (usually `~/.config/enton/CHECKLIST.md`), Markdown you
+write by hand. Enton reads it at startup and whenever it changes (it polls the file's size and
+modification time every 10 s), and never writes it. Only whether it holds something to check
+reaches the core and the soul; the text goes to the cortex with the drive's thought, which may
+answer `NOTHING_TO_SAY` (or nothing): silence is never spoken, and answers the drive like any
+reply. A missing file, one over 4 KiB, or one with nothing but blank lines, headings, empty list
+items (`- [ ]`), thematic breaks and one-line HTML comments (OpenClaw's rule for an effectively
+empty `HEARTBEAT.md`) holds nothing to check: a ready drive then abstains (`NothingToCheck`) and
+spends nothing.
+
+```markdown
+# Checklist
+- [ ] Remind me to water the plants on Saturdays
+- [ ] If I have not had lunch by 14:00, ask about it
+```
+
+A drive, or overheard speech, also needs somebody home: the owner heard in the last 30 minutes,
+by name, as a follow-up, or in their verified voice (`NobodyHome` otherwise). After a cortex
+failure these thoughts back off, 1 minute doubling with each failure in a row up to an hour, and
+a reply ends it (`Backoff`). Being called by name is never held back by any of this. An agent
+that asks a model every 30 minutes whether to speak pays 48 calls a day to stay silent; Enton
+makes that decision in its reducer, for free.
 
 ---
 
@@ -397,9 +560,11 @@ combined pressure is still below both profiles' thresholds. Enton is quiet by de
 | Extra strictness while the TV is on | 2 nats | 2 nats |
 | Half-life of the TV lines that teach where the TV is | 10 min | 10 min |
 | Recent TV lines before a direction of arrival is weighed | 20 | 20 |
-| A direction confines the TV caution to the loudspeaker alternative | no | no |
+| A direction confines the TV caution to the loudspeaker alternative | when directedness also judged the cue | when directedness also judged the cue |
 | Whole request: length (3 nats/s from 900 ms) plus end-of-turn evidence | ≥ 0 | ≥ 0 |
 | Gap that joins an unfinished name to its continuation | 1 s | 1 s |
+| Owner counts as home after last heard | 30 min | 30 min |
+| Backoff after cortex failures (doubling per failure in a row) | 1 min to 1 h | 1 min to 1 h |
 | Habituation half-life | 30 s | 15 s |
 | Slow habituation half-life | 20 min | 10 min |
 | Playback watchdog | 15 s | 20 s |
@@ -426,15 +591,15 @@ cargo run --release -p enton-e1 -- --seeds 0..=31 --summary --with-direction # p
 cargo run --release -p enton-e1 -- --seeds 0..=31 --off-policy  # estimate thresholds from one exploring log
 ```
 
-**Current status** (synthetic proxy, benchmark 3.3.0, reducer v12, speaker, media and end-of-turn
+**Current status** (synthetic proxy, benchmark 3.4.0, reducer v13, speaker, media and end-of-turn
 sensors, report seeds 0 to 31, measured 2026-09-26). One seed is an anecdote, so the table pools 32:
 
 | Criterion (RFC 0001 §7) | Target | Pooled result | Seeds passing | Status |
 |:------------------------|:------:|:--------------|:-------------:|:------:|
-| Fewer cortex calls than the simple controller | ≥ 50 % | 53.6 % (6020 vs 12968) | 27 / 32 | ⚠️ |
+| Fewer cortex calls than the simple controller | ≥ 50 % | 53.8 % (5992 vs 12968) | 27 / 32 | ⚠️ |
 | Relevant requests served (E1a) | ≥ 99 / 100 | 1769 / 3200 | 0 / 32 | ❌ |
 | Commands served (E1b) | 10 / 10 | 320 / 320 | 32 / 32 | ✅ |
-| Cortex calls during 50 min of noise (E1b) | 0 | 29 (0.9 per seed, at most 2) | 6 / 32 | ❌ |
+| Cortex calls during 50 min of noise (E1b) | 0 | 10 (0.3 per seed, at most 2) | 24 / 32 | ❌ |
 | Self-ignitions | 0 | needs physical measurement (synthetic proxy: 0) | | pending |
 | Added p95 latency | ≤ 100 ms | needs physical measurement | | pending |
 | Core RSS over 24 h | stable | needs physical measurement | | pending |
@@ -514,24 +679,54 @@ without the array.
 | Speaker, media, end of turn | 1769 | 3831 | 75.8% / 45.0% / 43.8% | 53.6% (27 / 32 seeds) | 29 |
 | + direction of arrival | 1754 | 3795 | 75.8% / 43.7% / 43.0% | 54.7% (27 / 32 seeds) | 29 |
 | + directedness | 1896 | 4045 | 82.1% / 45.7% / 44.0% | 58.2% (30 / 32 seeds) | 29 |
-| + both | 1879 | 4000 | 82.1% / 44.1% / 43.1% | 58.6% (30 / 32 seeds) | 29 |
+| + both | 1998 | 4450 | 82.1% / 58.8% / 54.9% | 55.1% (28 / 32 seeds) | 29 |
 
-Plainly: as shipped, the array does not help. It only adds evidence against a cue: it cuts waste on
-TV lines from 449 calls to 346, but also turns away an owner who sits in line with the TV, and costs
-15 requests. With the TV on, what fails the owner is not the TV alternative but the TV caution, which
+Plainly: alone, the array does not help. It only adds evidence against a cue: it cuts waste on TV
+lines from 449 calls to 346, but also turns away an owner who sits in line with the TV, and costs 15
+requests. With the TV on, what fails the owner is not the TV alternative but the TV caution, which
 also raises the bar against another person's voice, where a direction says nothing. The separation
-only pays off when a direction confines the caution to the loudspeaker alternative
-(`direction_confines_tv_caution`). Measured on seeds 0 to 31, not chosen: with the three sensors that
-serves 1792 requests and 53.5% / 50.2% of turns with the TV moderate / loud, but other people's
-voices come in as with the TV off and calls fall only 50.4% below the simple controller (18 / 32
-seeds pass); with the directedness detector as well it serves 1998 requests, 4450 turns and 58.8% /
-54.9% with the TV on, at 55.1% fewer calls (28 / 32 seeds). The rule was fixed on the array alone,
-where confining falls below the 52% floor (49.7 to 50.3% on seeds 100 to 131), so it stays off.
+pays off when a direction confines the caution to the loudspeaker alternative and something else
+answers for other people: the directedness detector. So the caution is confined only for a cue both
+sensors judged (`TvCautionConfinement::WithDirectedness`, the default). The same rule as always,
+applied on seeds 100 to 131, picks it: with both sensors it serves 1981 requests at 54.6% fewer calls,
+against 1877 at 57.4% without the array; confining with the array alone falls below the 52% floor
+(49.7 to 50.3%). On seeds 0 to 31, with both sensors, the owner's turns with the TV on go from 45.7% /
+44.0% (moderate / loud) to 58.8% / 54.9%: the first real gain where Enton was stuck.
 
 Every run also watches the reducer at each step, in the spirit of TigerBeetle's VOPR: one
 decision per speech cue, thought IDs in order, time never running backward, budgets and
-habituation in bounds, and a snapshot round trip every 1000 steps that must keep stepping in
+habituation in bounds, a drive thinking only with something to check, `NothingToCheck`,
+`NobodyHome` and `Backoff` holding back only thoughts of Enton's own (and backoff only after an
+unanswered failure), and a snapshot round trip every 1000 steps that must keep stepping in
 lockstep with the live organism. A violation stops the run.
+
+**Something to check, somebody home, a cortex that answers** (benchmark 3.4.0, reducer v13).
+E1's tapes carry no checklist, so E1 assumes one with something on it, read as each run
+starts (`enton_e1::run::CHECKLIST_ACTIONABLE`): drives decide as they always did, and E1 stays
+comparable. It moves nothing either way, since tapes last at most two hours and t1-ref's drives
+need about three and a half hours of unrelieved pressure to ignite: no E1 run has ever bought a
+drive thought, before or after, and the Internal waste (98 calls) is keyword timeouts in both. A fixture tape with drives
+made eager checks the rule itself: with the checklist assumed, one drive thought; with a tape that
+reads an empty checklist (tapes may now carry `Checklist` records), or with nobody home, none.
+E1's cortex never fails, so the backoff moves nothing either. What moves E1 is the presence gate
+on overheard speech. On seeds 0 to 31, v12 against v13:
+
+| Sensors | Requests (E1a) | Fewer calls than simple | Wasted on overheard speech | Noise calls (E1b) |
+|:--------|:--------------:|:-----------------------:|:--------------------------:|:-----------------:|
+| Speaker, media, end of turn | 1769 → 1769 | 53.6% → 53.8% (27 / 32 seeds) | 67 → 40 | 29 → 10 (6 → 24 / 32 seeds) |
+| + directedness | 1896 → 1896 | 58.2% → 58.4% (30 / 32) | 68 → 41 | 29 → 10 |
+| + direction of arrival | 1754 → 1754 | 54.7% → 54.9% (27 / 32) | 67 → 40 | 29 → 10 |
+| + both | 1998 → 1998 | 55.1% → 55.3% (28 / 32) | 68 → 41 | 29 → 10 |
+
+Plainly: it costs no request and no turn. All 29 noise calls came in E1b's first five minutes,
+before the owner's first command said anyone was home; the 10 left follow another person's voice
+that the verifier took for the owner's (0.1 nats is a low bar), which puts Enton at home. With the
+default sensors, waste falls from 1869 calls to 1841: TV lines 463 to 440, other people 716 to 711,
+everything else unchanged. Nothing was tuned: the 30-minute window and the backoff were chosen
+before looking at E1. Off policy, exploring now costs 104 extra calls instead of 108 and still buys
+108 outcomes, 44 of them a turn the log would have missed. The candidates' actual effects in the
+table below (v11) are unchanged; their IPS estimates move by up to 10 turns and 18 requests
+(`media_llr` 1.5: +24 requests estimated instead of +42, against +33 actual).
 
 **Logged exploration and off-policy estimates** (benchmark 3.2.0, reducer v11). A gate only sees
 the outcomes of the calls it made: when Enton abstains, nobody learns whether that was a miss.
@@ -597,7 +792,7 @@ for the freeze owner.
 | **Senses** | YOLO, Whisper, CLAP, InsightFace, FER | Body signals, VAD and keyword before any transcription |
 | **Memory** | Qdrant episodes | Durable, replayable event log |
 | **Voice** | Kokoro in Python | Kokoro via sherpa-onnx, with barge-in |
-| **Proof** | 136 unit tests | 358 tests, property tests and a refutation experiment |
+| **Proof** | 136 unit tests | 450 tests, property tests and a refutation experiment |
 | **Footprint** | CUDA + PyTorch | 7.0 MiB binary, no native runtime in the lean build |
 
 Vision is deliberately out of scope for milestone 1.

@@ -13,7 +13,7 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-dea584?style=for-the-badge&logo=rust&logoColor=white)](./Cargo.toml)
 [![unsafe](https://img.shields.io/badge/unsafe-forbidden-991b1b?style=for-the-badge)](./Cargo.toml)
 [![Binary](https://img.shields.io/badge/core_binary-7.0_MiB-15803d?style=for-the-badge)](#build-profiles)
-[![Tests](https://img.shields.io/badge/tests-309_passing-00C853?style=for-the-badge)](./crates)
+[![Tests](https://img.shields.io/badge/tests-358_passing-00C853?style=for-the-badge)](./crates)
 [![License](https://img.shields.io/badge/license-MIT-dc2626?style=for-the-badge)](./LICENSE)
 
 ---
@@ -93,7 +93,7 @@ flowchart LR
 | **Runtime** | tokio `current_thread`: one event loop, bounded channels |
 | **Crates** | 4: core, adapters, binary, E1 harness |
 | **Source** | 17,118 lines of code (tokei, including inline unit tests) + 5,581 lines of tests and examples |
-| **Tests** | 309 passing with default features, 390 with all features, including property tests |
+| **Tests** | 358 passing with default features, 439 with all features, including property tests |
 | **Lean binary** | 7.0 MiB (5.3 MiB on aarch64), no shared libraries |
 | **Cortex** | Any OpenAI-compatible server, local Ollama by default |
 
@@ -127,6 +127,8 @@ continuation into a single thought. The later remark, not addressed to it, lands
 
 Everything it perceives and decides is written to its **soul** before it acts, so the next run
 resumes exactly where this one stopped, and a thought interrupted by a crash is never repeated.
+Events form a SHA-256 hash chain and snapshots carry checksums, so a damaged or edited record is
+refused by its sequence number, never replayed.
 
 **Why did Enton not answer?** Because the reducer is deterministic, the soul can recompute every
 decision bit for bit. `enton why` replays it read-only (safe while Enton runs) and explains the
@@ -393,6 +395,9 @@ combined pressure is still below both profiles' thresholds. Enton is quiet by de
 | Speech clearly addressed to Enton (≥ 1.5 nats) may use the 10 s window | yes | yes |
 | Evidence treated as TV/radio | 1 nat | 1 nat |
 | Extra strictness while the TV is on | 2 nats | 2 nats |
+| Half-life of the TV lines that teach where the TV is | 10 min | 10 min |
+| Recent TV lines before a direction of arrival is weighed | 20 | 20 |
+| A direction confines the TV caution to the loudspeaker alternative | no | no |
 | Whole request: length (3 nats/s from 900 ms) plus end-of-turn evidence | ≥ 0 | ≥ 0 |
 | Gap that joins an unfinished name to its continuation | 1 s | 1 s |
 | Habituation half-life | 30 s | 15 s |
@@ -417,10 +422,11 @@ models, audio and budget. The thesis is refuted if Enton fails any criterion.
 cargo run --release -p enton-e1 -- --seed 42               # one seed, full report
 cargo run --release -p enton-e1 -- --seeds 0..=31 --summary # pooled over 32 seeds
 cargo run --release -p enton-e1 -- --seeds 0..=31 --summary --with-directed # plus a directedness detector
+cargo run --release -p enton-e1 -- --seeds 0..=31 --summary --with-direction # plus a microphone array
 cargo run --release -p enton-e1 -- --seeds 0..=31 --off-policy  # estimate thresholds from one exploring log
 ```
 
-**Current status** (synthetic proxy, benchmark 3.2.0, reducer v11, speaker, media and end-of-turn
+**Current status** (synthetic proxy, benchmark 3.3.0, reducer v12, speaker, media and end-of-turn
 sensors, report seeds 0 to 31, measured 2026-09-26). One seed is an anecdote, so the table pools 32:
 
 | Criterion (RFC 0001 §7) | Target | Pooled result | Seeds passing | Status |
@@ -477,6 +483,50 @@ Waste on the owner's asides falls from 371 calls to 127, on other people from 70
 TV from 449 to 137. The turns it adds are where the TV is off (far from the device, 72% to 80%);
 with the TV on, 44 to 47% of turns are served as before, and 28 of the 29 noise calls are overheard
 speech outside any window, where directedness is not consulted.
+
+**With a simulated microphone array** (benchmark 3.3.0, reducer v12). The TV does not move, so an
+array that estimates each segment's direction of arrival can learn where it stands. Benchmark 3.3.0
+gives every cue a direction on its own random stream, following a measurement on 240 simulated living
+rooms (2, 4 and 6 microphones, SRP-PHAT) in its cautious form: a TV line lands around the TV (von
+Mises, concentration 15) or anywhere 15% of the time; the owner sits at a measured angle from the TV
+(within 30 degrees in a quarter of the three-minute blocks) with a persistent offset per block; with
+the TV on, 10% (moderate) to 25% (loud) of the owner's readings point at the TV instead. E1 withholds
+the reading unless run with `--with-direction`, and without it reducer v12 decides every call exactly
+as v11 did: the JSON of seeds 0 to 95 is byte-identical apart from the version, with and without the
+directedness detector, so the tables above stand.
+
+Reducer v12 learns where the TV is from the lines that voice and tagger already mark as the TV, never
+from its own verdicts (which would confirm a wrong start), as a sum of unit vectors with a 10-minute
+half-life, trusted after 20 recent lines that agree. While the TV is on, and never over Enton's own
+playback (its loudspeaker dominates the array), a cue's direction is weighed against it: up to 2.12
+nats for the TV within about 30 degrees, down to -1.90 beyond about 43, with IEEE arithmetic only.
+That is evidence for a loudspeaker: it joins voice and tagger on the loudspeaker alternative of the
+owner speaking live and in the TV-line test, and counts as one more independent objection to a
+continuation right after an unfinished name. It never turns a cue away on its own, because the owner
+sometimes sits in line with the TV. Half-life and line count were chosen on seeds 100 to 131 by a rule
+fixed beforehand: the most E1a requests with at least 52% fewer calls and no more E1b noise calls than
+without the array.
+
+**Result with the array** (seeds 0 to 31):
+
+| Sensors | Requests (E1a) | Turns (E1a) | Turns with the TV off / moderate / loud | Fewer calls than simple | Noise calls (E1b) |
+|:--------|:--------------:|:-----------:|:---------------------------------------:|:-----------------------:|:-----------------:|
+| Speaker, media, end of turn | 1769 | 3831 | 75.8% / 45.0% / 43.8% | 53.6% (27 / 32 seeds) | 29 |
+| + direction of arrival | 1754 | 3795 | 75.8% / 43.7% / 43.0% | 54.7% (27 / 32 seeds) | 29 |
+| + directedness | 1896 | 4045 | 82.1% / 45.7% / 44.0% | 58.2% (30 / 32 seeds) | 29 |
+| + both | 1879 | 4000 | 82.1% / 44.1% / 43.1% | 58.6% (30 / 32 seeds) | 29 |
+
+Plainly: as shipped, the array does not help. It only adds evidence against a cue: it cuts waste on
+TV lines from 449 calls to 346, but also turns away an owner who sits in line with the TV, and costs
+15 requests. With the TV on, what fails the owner is not the TV alternative but the TV caution, which
+also raises the bar against another person's voice, where a direction says nothing. The separation
+only pays off when a direction confines the caution to the loudspeaker alternative
+(`direction_confines_tv_caution`). Measured on seeds 0 to 31, not chosen: with the three sensors that
+serves 1792 requests and 53.5% / 50.2% of turns with the TV moderate / loud, but other people's
+voices come in as with the TV off and calls fall only 50.4% below the simple controller (18 / 32
+seeds pass); with the directedness detector as well it serves 1998 requests, 4450 turns and 58.8% /
+54.9% with the TV on, at 55.1% fewer calls (28 / 32 seeds). The rule was fixed on the array alone,
+where confining falls below the 52% floor (49.7 to 50.3% on seeds 100 to 131), so it stays off.
 
 Every run also watches the reducer at each step, in the spirit of TigerBeetle's VOPR: one
 decision per speech cue, thought IDs in order, time never running backward, budgets and
@@ -547,7 +597,7 @@ for the freeze owner.
 | **Senses** | YOLO, Whisper, CLAP, InsightFace, FER | Body signals, VAD and keyword before any transcription |
 | **Memory** | Qdrant episodes | Durable, replayable event log |
 | **Voice** | Kokoro in Python | Kokoro via sherpa-onnx, with barge-in |
-| **Proof** | 136 unit tests | 309 tests, property tests and a refutation experiment |
+| **Proof** | 136 unit tests | 358 tests, property tests and a refutation experiment |
 | **Footprint** | CUDA + PyTorch | 7.0 MiB binary, no native runtime in the lean build |
 
 Vision is deliberately out of scope for milestone 1.

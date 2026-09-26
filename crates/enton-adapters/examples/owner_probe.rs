@@ -976,7 +976,7 @@ mod enabled {
 
             let lines = [
                 "================================================================================",
-                "Enton Owner Voice Probe — Speaker Verification Report (Task 0013)",
+                "Enton Owner Voice Probe: Speaker Verification Report (Task 0013)",
                 "================================================================================",
                 "Counts:",
                 &format!("  Target (genuine owner):      {} files", self.target_count),
@@ -1388,7 +1388,7 @@ mod enabled {
     }
 
     fn print_usage() {
-        println!("enton owner_probe — speaker verification measurement tool");
+        println!("enton owner_probe: speaker verification measurement tool");
         println!();
         println!("USAGE:");
         println!("  owner_probe enroll <dir> [--out <voiceprint_file>] [--model <model_file>]");

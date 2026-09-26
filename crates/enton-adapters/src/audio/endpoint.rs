@@ -61,7 +61,7 @@ pub struct EndpointDetector {
 }
 
 impl EndpointDetector {
-    /// Maximum utterance span, rounded down to 32 ms; allowed range 1–15 seconds.
+    /// Maximum utterance span, rounded down to 32 ms; allowed range 1 to 15 seconds.
     /// Returns a configuration error outside that range.
     pub fn new(max_segment_ms: u32) -> Result<Self, AudioError> {
         if !(1_000..=15_000).contains(&max_segment_ms) {

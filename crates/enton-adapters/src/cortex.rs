@@ -175,7 +175,7 @@ struct StreamDelta {
 /// Kokoro is a neural TTS model whose phonemizer and prosody predictor require
 /// sufficient phonetic context to generate natural pitch contours and prevent
 /// choppy, clipped audio on short fragments (e.g. "Oi," or "Sim,"). A threshold
-/// of 20 characters provides 3–5 words of prosodic context while enabling
+/// of 20 characters provides 3 to 5 words of prosodic context while enabling
 /// sub-second time-to-first-audio (TTFA).
 pub const MIN_FIRST_CLAUSE_CHARS: usize = 20;
 

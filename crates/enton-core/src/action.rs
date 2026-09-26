@@ -58,6 +58,12 @@ pub enum Action {
         reason: Reason,
         /// Priority measure from 0 to 1, computed from stimulus features.
         salience: f32,
+        /// Probability with which the organism chose to think here, when it was a coin
+        /// flip: a borderline cue it explored (see [`crate::ExplorationPolicy`]). `None`
+        /// means the decision was deterministic, probability one. An offline estimator
+        /// weighs the outcome by its inverse.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        propensity: Option<f32>,
     },
     /// Speak a response.
     Speak {
@@ -78,5 +84,24 @@ pub enum Action {
         salience: f32,
         /// Why the cortex was not called.
         why: Abstention,
+        /// Probability with which the organism chose to abstain here, when it was a coin
+        /// flip: a borderline cue it could have explored and did not. `None` means the
+        /// decision was deterministic, probability one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        propensity: Option<f32>,
     },
+}
+
+impl Action {
+    /// The probability with which the organism took this action: the logged propensity
+    /// of an explored or explorable decision, and one for everything else.
+    #[must_use]
+    pub fn propensity(&self) -> f32 {
+        match self {
+            Self::Think { propensity, .. } | Self::Abstain { propensity, .. } => {
+                propensity.unwrap_or(1.0)
+            }
+            Self::Speak { .. } | Self::Attend { .. } => 1.0,
+        }
+    }
 }

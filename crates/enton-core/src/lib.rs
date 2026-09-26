@@ -1,9 +1,10 @@
 //! Enton's brainstem (RFC 0001).
 //!
-//! This crate is **pure**: no I/O, clock reads, or internal randomness.
+//! This crate is **pure**: no I/O, clock reads, or entropy of its own.
 //! Inputs arrive as [`Event`] values and decisions leave as [`Action`] values.
 //! Replaying the same event tape with the same profile reproduces the same
-//! decisions.
+//! decisions: even exploration's coin flips come from a generator seeded by the
+//! profile and kept in the organism's state (see [`ExplorationPolicy`]).
 //!
 //! The LLM is the cortex, not the heart: the organism only requests a thought
 //! ([`Action::Think`]) when ignition and the budget permit it. Abstentions
@@ -27,6 +28,6 @@ pub use evidence::{DirectedModel, Evidence, Senses, SourceModel, TurnModel, Voic
 pub use ignition::Ignition;
 pub use organism::{Organism, PlaybackStatus, REDUCER_VERSION, contains_keyword_word};
 pub use profile::{
-    AttentionPolicy, BodyLimits, BudgetPolicy, EchoPolicy, HabituationPolicy, IgnitionPolicy,
-    InvalidProfile, Profile, SaliencePolicy, SourcePolicy,
+    AttentionPolicy, BodyLimits, BudgetPolicy, EchoPolicy, ExplorationPolicy, HabituationPolicy,
+    IgnitionPolicy, InvalidProfile, Profile, SaliencePolicy, SourcePolicy,
 };

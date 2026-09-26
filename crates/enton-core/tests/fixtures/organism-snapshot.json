@@ -47,6 +47,9 @@
     "tv_half_life_ms": 30000,
     "tv_on_level": 0.5,
     "tv_caution_llr": 2.0,
+    "explore_probability": 0.0,
+    "explore_margin_nats": 1.0,
+    "explore_seed": 0,
     "senses": {
       "voice": {
         "owner": [
@@ -177,5 +180,6 @@
   "consecutive_barge_ins": 0,
   "speaking_for_obligation": true,
   "tv_presence": 0.8199052,
-  "tv_heard_at": 106000
+  "tv_heard_at": 106000,
+  "explore_state": 0
 }

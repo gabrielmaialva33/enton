@@ -41,18 +41,20 @@ impl Budget {
         }
     }
 
+    /// Whether [`Budget::try_spend`] would accept `cost` now, without spending it.
+    #[must_use]
+    pub fn can_spend(&self, cost: f32) -> bool {
+        cost.is_finite() && cost >= 0.0 && self.available - cost >= 0.0
+    }
+
     /// Spend atomically; a cost the balance cannot cover, or an invalid or
     /// negative cost, is rejected without changing the balance.
     #[must_use]
     pub fn try_spend(&mut self, cost: f32) -> bool {
-        if !cost.is_finite() || cost < 0.0 {
+        if !self.can_spend(cost) {
             return false;
         }
-        let remaining = self.available - cost;
-        if remaining < 0.0 {
-            return false;
-        }
-        self.available = remaining;
+        self.available -= cost;
         true
     }
 }

@@ -36,6 +36,10 @@ pub struct Profile {
     /// Which sounds count as a live voice at all.
     #[serde(flatten)]
     pub source: SourcePolicy,
+    /// Logged exploration near the evidence thresholds, for offline evaluation.
+    /// Off unless `explore_probability` is above zero.
+    #[serde(flatten)]
+    pub exploration: ExplorationPolicy,
     /// What each sensor's reading is worth: the calibration of this body's
     /// microphone and models.
     #[serde(default)]
@@ -70,6 +74,47 @@ pub struct SourcePolicy {
     /// TV on, most voices in a window are the TV's.
     #[serde(default = "default_tv_caution_llr")]
     pub tv_caution_llr: f32,
+}
+
+/// Logged exploration: how often, and how close to a threshold, a cue that an evidence
+/// objection turns away gets a thought anyway, so that an offline estimator can learn what
+/// the abstention cost.
+///
+/// A cue is borderline when an evidence objection (a loudspeaker, another voice, speech
+/// addressed to someone else, or a voice the longer window did not verify) turns it away,
+/// every sensor that objects is at most `explore_margin_nats` past its threshold, and
+/// without the objection it would have bought a thought. Only such a cue explores, never
+/// during Enton's own playback, never in torpor, never for a keyword, and never unless
+/// the discretionary account can pay: exploration spends only that account. The draw
+/// comes from a generator in the organism's state, seeded here and snapshotted with it,
+/// so replay decides every coin flip the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ExplorationPolicy {
+    /// Probability, from zero to one, that a borderline cue thinks anyway. Zero, the
+    /// default, never explores and never draws, so decisions are those of a profile
+    /// without exploration. The generator draws 24 bits, so the probability applied, and
+    /// logged as the thought's propensity, is this one rounded up to a multiple of 2^-24.
+    #[serde(default)]
+    pub explore_probability: f32,
+    /// How far past its threshold, in nats, every objecting sensor may be for a cue to
+    /// count as borderline. An offline estimate is only supported for candidate thresholds
+    /// that stay within this margin of the logging profile's. One nat was chosen with E1's
+    /// calibration seeds.
+    #[serde(default = "default_explore_margin_nats")]
+    pub explore_margin_nats: f32,
+    /// Seed of the exploration generator.
+    #[serde(default)]
+    pub explore_seed: u64,
+}
+
+impl Default for ExplorationPolicy {
+    fn default() -> Self {
+        Self {
+            explore_probability: 0.0,
+            explore_margin_nats: default_explore_margin_nats(),
+            explore_seed: 0,
+        }
+    }
 }
 
 /// Body signals that force torpor.
@@ -261,6 +306,13 @@ fn default_directed_window_llr() -> f32 {
     1.5
 }
 
+/// 2^24: the exploration generator draws 24 uniform bits, an integer that f32 holds exactly.
+pub(crate) const DRAW_SCALE: f32 = 16_777_216.0;
+
+fn default_explore_margin_nats() -> f32 {
+    1.0
+}
+
 fn default_verified_barge_in_margin() -> f32 {
     0.05
 }
@@ -398,6 +450,7 @@ impl Profile {
                 tv_on_level: default_tv_on_level(),
                 tv_caution_llr: default_tv_caution_llr(),
             },
+            exploration: ExplorationPolicy::default(),
             senses: Senses::calibrated(),
         }
     }
@@ -469,6 +522,7 @@ impl Profile {
                 tv_on_level: default_tv_on_level(),
                 tv_caution_llr: default_tv_caution_llr(),
             },
+            exploration: ExplorationPolicy::default(),
             senses: Senses::calibrated(),
         }
     }
@@ -487,6 +541,7 @@ impl Profile {
             && self.habituation.is_valid()
             && self.echo.is_valid()
             && self.source.is_valid()
+            && self.exploration.is_valid()
             && self.senses.is_valid();
         if valid {
             Ok(())
@@ -510,6 +565,23 @@ impl SourcePolicy {
             && self.tv_on_level < 1.0
             && self.tv_caution_llr.is_finite()
             && self.tv_caution_llr >= 0.0
+    }
+}
+
+impl ExplorationPolicy {
+    /// The probability exploration actually applies, and logs as an explored thought's
+    /// propensity: `explore_probability` rounded up to a multiple of 2^-24, the resolution
+    /// of the generator's draws. An abstention kept by the coin logs one minus this, which
+    /// f32 holds exactly too.
+    #[must_use]
+    pub fn applied_probability(&self) -> f32 {
+        (self.explore_probability * DRAW_SCALE).ceil() / DRAW_SCALE
+    }
+
+    fn is_valid(&self) -> bool {
+        (0.0..=1.0).contains(&self.explore_probability)
+            && self.explore_margin_nats.is_finite()
+            && self.explore_margin_nats >= 0.0
     }
 }
 

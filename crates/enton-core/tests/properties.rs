@@ -292,6 +292,8 @@ struct Watch {
     next_thought: u64,
     last_seen: Millis,
     capacities: [f32; 2],
+    /// Budgets after the previous step: a speech cue refills nothing, so it finds these.
+    budgets: [Budget; 2],
 }
 
 impl Watch {
@@ -300,6 +302,7 @@ impl Watch {
             next_thought: 1,
             last_seen: organism.last_seen(),
             capacities: budgets(organism).map(|budget| budget.capacity),
+            budgets: budgets(organism),
         }
     }
 
@@ -314,7 +317,53 @@ impl Watch {
         self.check_thought_ids(actions)?;
         self.check_time(organism, event)?;
         self.check_budgets(organism)?;
+        self.check_exploration(organism, event, actions)?;
         check_levels(organism)
+    }
+
+    /// A coin flip happens only at a speech cue, logs the applied exploration probability
+    /// (a thought) or its complement (an abstention), and an explored thought is paid by
+    /// the discretionary account alone.
+    fn check_exploration(
+        &mut self,
+        organism: &Organism,
+        event: &Event,
+        actions: &[Action],
+    ) -> Result<(), TestCaseError> {
+        let [obligation, discretionary] = std::mem::replace(&mut self.budgets, budgets(organism));
+        let explore = organism.profile().exploration.applied_probability();
+        for action in actions {
+            let (logged, expected, explored) = match action {
+                Action::Think {
+                    propensity: Some(logged),
+                    ..
+                } => (*logged, explore, true),
+                Action::Abstain {
+                    propensity: Some(logged),
+                    ..
+                } => (*logged, 1.0 - explore, false),
+                _ => continue,
+            };
+            prop_assert!(
+                matches!(event, Event::Speech { .. }) && explore > 0.0,
+                "only a speech cue flips a coin, and only while exploring: {action:?}"
+            );
+            prop_assert_eq!(logged.to_bits(), expected.to_bits(), "{:?}", action);
+            if explored {
+                let cost = organism.profile().budgets.think_cost;
+                prop_assert_eq!(
+                    organism.obligation_budget().available.to_bits(),
+                    obligation.available.to_bits(),
+                    "an explored thought never touches the obligation account"
+                );
+                prop_assert_eq!(
+                    organism.discretionary_budget().available.to_bits(),
+                    (discretionary.available - cost).to_bits(),
+                    "an explored thought is paid by the discretionary account"
+                );
+            }
+        }
+        Ok(())
     }
 
     fn check_thought_ids(&mut self, actions: &[Action]) -> Result<(), TestCaseError> {
@@ -486,6 +535,16 @@ fn starved() -> Profile {
     profile
 }
 
+/// `base` flipping a fair coin at any cue an objection turns away within three nats of
+/// its threshold, so random tapes reach exploration often.
+fn exploring(base: Profile) -> Profile {
+    let mut profile = base;
+    profile.exploration.explore_probability = 0.5;
+    profile.exploration.explore_margin_nats = 3.0;
+    profile.exploration.explore_seed = 11;
+    profile
+}
+
 /// Run `tape` on `profile`, checking every step, then restore a JSON snapshot
 /// taken before step `cut` and check that it decides the rest of the tape, and
 /// ends, exactly like the live organism.
@@ -567,21 +626,26 @@ fn replay_from_json(profile: Profile, tape: &Tape) -> Result<(), TestCaseError> 
 proptest! {
     #![proptest_config(config(192))]
 
-    /// Every step keeps the reducer invariants on both shipped profiles and a
-    /// starved one, and a snapshot at a random step replays the rest exactly.
+    /// Every step keeps the reducer invariants on both shipped profiles, a starved
+    /// one and two exploring ones, and a snapshot at a random step replays the rest
+    /// exactly, coin flips included.
     #[test]
     fn every_step_keeps_the_reducer_invariants(tape in tape(true), cut in any::<Index>()) {
         run_with_snapshot(Profile::t1_ref(), &tape, cut)?;
         run_with_snapshot(Profile::desktop(), &tape, cut)?;
         run_with_snapshot(starved(), &tape, cut)?;
+        run_with_snapshot(exploring(Profile::t1_ref()), &tape, cut)?;
+        run_with_snapshot(exploring(starved()), &tape, cut)?;
     }
 
-    /// Canonical events read back from JSON decide exactly like the live ones.
-    /// Body readings stay finite here; the next property covers broken ones.
+    /// Canonical events read back from JSON decide exactly like the live ones, coin
+    /// flips included. Body readings stay finite here; the next property covers
+    /// broken ones.
     #[test]
     fn canonical_events_replay_from_json_like_they_ran_live(tape in tape(false)) {
         replay_from_json(Profile::t1_ref(), &tape)?;
         replay_from_json(Profile::desktop(), &tape)?;
+        replay_from_json(exploring(Profile::t1_ref()), &tape)?;
     }
 
     /// Bug: `Event::canonical` canonicalizes speech cues only, so a body signal

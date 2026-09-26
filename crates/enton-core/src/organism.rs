@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::profile::{InvalidProfile, Profile};
+use crate::profile::{DRAW_SCALE, InvalidProfile, Profile};
 use crate::{
     Abstention, Action, Budget, DriveTable, Event, Evidence, Ignition, Millis, PriceTable, Reason,
     SpeechCue, ThoughtId, UtteranceId,
@@ -67,7 +67,29 @@ impl Objections {
 const CONTINUATION_JITTER_MS: u64 = 50;
 
 /// The version of the brainstem reducer and snapshot schema.
-pub const REDUCER_VERSION: u32 = 10;
+pub const REDUCER_VERSION: u32 = 11;
+
+/// Which account pays for a thought.
+#[derive(Debug, Clone, Copy)]
+enum Payment {
+    /// A turn Enton owes an answer: the obligation account.
+    Obligation,
+    /// A thought Enton chose on its own: the discretionary account.
+    Discretionary,
+    /// A borderline cue explored with this probability: the discretionary account pays
+    /// and the thought carries the probability as its propensity.
+    Explored(f32),
+}
+
+/// One flip of the exploration coin at a borderline cue, with the probability of the
+/// side that came up.
+#[derive(Debug, Clone, Copy)]
+enum Draw {
+    /// Think anyway.
+    Explore(f32),
+    /// Keep the objection and abstain.
+    Keep(f32),
+}
 
 /// The physical playback / vocalization state of the organism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -131,6 +153,10 @@ pub struct Organism {
     tv_presence: f32,
     #[serde(default)]
     tv_heard_at: Millis,
+    /// State of the exploration generator (`SplitMix64`), seeded from the profile and
+    /// advanced once per coin flip, so a snapshot resumes the same sequence of draws.
+    #[serde(default)]
+    explore_state: u64,
 }
 
 impl Organism {
@@ -142,6 +168,7 @@ impl Organism {
     pub fn new(profile: Profile) -> Result<Self, InvalidProfile> {
         profile.validate()?;
         let echo_initial_energy = profile.echo.echo_initial_energy;
+        let explore_state = profile.exploration.explore_seed;
         Ok(Self {
             drives: DriveTable::default_m1(),
             prices: PriceTable {
@@ -174,7 +201,35 @@ impl Organism {
             speaking_for_obligation: false,
             tv_presence: 0.0,
             tv_heard_at: Millis(0),
+            explore_state,
         })
+    }
+
+    /// The decisions `profile` would take on `event` from this organism's exact state,
+    /// which is left untouched: what an offline evaluation asks of every logged decision.
+    ///
+    /// Only the policy that reads the state changes. The state itself (budgets, drives,
+    /// ignition, windows, beliefs and the exploration generator) stays as this organism
+    /// built it, so the answer is exact for profiles that differ in how they read
+    /// evidence (the evidence thresholds and exploration) and approximate for profiles
+    /// that would also have shaped the state differently (budget capacities and the
+    /// ignition threshold, which the state holds).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidProfile`] if `profile` fails validation.
+    pub fn counterfactual(
+        &self,
+        profile: &Profile,
+        event: &Event,
+    ) -> Result<Vec<Action>, InvalidProfile> {
+        profile.validate()?;
+        let mut twin = self.clone();
+        twin.profile = profile.clone();
+        twin.prices = PriceTable {
+            think: profile.budgets.think_cost,
+        };
+        Ok(twin.step(event))
     }
 
     /// The immutable policy used by this organism.
@@ -284,6 +339,21 @@ impl Organism {
     #[must_use]
     pub fn last_seen(&self) -> Millis {
         self.last_seen.max(self.last_tick)
+    }
+
+    /// Whether the body is in torpor (fever or a critical battery level), as of
+    /// the last body reading. Read-only, for audits such as `enton why`.
+    #[must_use]
+    pub fn is_torpid(&self) -> bool {
+        self.torpor
+    }
+
+    /// Belief, from zero to one, that a TV is playing at `now`: the value a cue
+    /// at that instant is weighed against, decayed since the last overheard line.
+    /// Read-only, for audits such as `enton why`.
+    #[must_use]
+    pub fn tv_presence_as_of(&self, now: Millis) -> f32 {
+        self.tv_presence_at(now)
     }
 
     /// Consume a recorded event and return decisions without executing effects.
@@ -423,7 +493,8 @@ impl Organism {
         {
             // Window closed with no continuation: think then ("Enton?" alone still gets an answer)
             // Obligation turn: spends obligation_budget; keyword bypasses torpor
-            let action = self.pay_and_think_obligation(now, Reason::Keyword, pending.salience);
+            let action =
+                self.pay_and_think(now, Reason::Keyword, pending.salience, Payment::Obligation);
             if let Action::Think { thought, .. } = action {
                 self.conversation_thought = Some(thought);
             }
@@ -454,10 +525,11 @@ impl Organism {
                 reason,
                 salience,
                 why: Abstention::Torpor,
+                propensity: None,
             }
         } else {
             // Discretionary drive thought spends discretionary budget
-            self.pay_and_think_discretionary(now, reason, salience)
+            self.pay_and_think(now, reason, salience, Payment::Discretionary)
         });
         actions
     }
@@ -477,6 +549,7 @@ impl Organism {
                 reason: Reason::FollowUp,
                 salience: self.calculate_base_salience(norm_energy, norm_vad, norm_dur),
                 why: Abstention::Media,
+                propensity: None,
             };
         }
         let echo = self.profile.echo;
@@ -543,6 +616,7 @@ impl Organism {
                 reason,
                 salience,
                 why,
+                propensity: None,
             };
         }
 
@@ -576,10 +650,11 @@ impl Organism {
                 reason: Reason::FollowUp,
                 salience,
                 why: Abstention::Torpor,
+                propensity: None,
             };
         }
         self.open_attention(now);
-        let action = self.pay_and_think_obligation(now, Reason::FollowUp, salience);
+        let action = self.pay_and_think(now, Reason::FollowUp, salience, Payment::Obligation);
         if let Action::Think { thought, .. } = action {
             self.conversation_thought = Some(thought);
         }
@@ -614,11 +689,70 @@ impl Organism {
         if self.is_in_attention_window(now, cue) {
             return self.speech_in_window(now, cue, norm_energy, norm_vad, norm_dur);
         }
+        if let Some(action) = self.explore_unverified(now, cue, norm_energy, norm_vad, norm_dur) {
+            return action;
+        }
 
         // Overheard speech, outside any attention window: the TV makes a loudspeaker
         // likelier here too.
-        let media = self.window_vetoes(now, cue).alone.media;
-        self.speech_unaddressed(now, media, norm_energy, norm_vad, norm_dur)
+        let media = self.media_objection(now, cue);
+        self.speech_unaddressed(now, media, true, norm_energy, norm_vad, norm_dur)
+    }
+
+    /// A cue inside the longer window only, in a voice that fell short of verification,
+    /// is heard as overheard speech. When that would abstain, the shortfall (and any
+    /// objection the window itself would raise) is borderline and, heard in the window,
+    /// the cue would buy a thought, flip the exploration coin: think as a follow-up, or
+    /// abstain as overheard speech, both logged with their probability. `None` leaves the
+    /// cue to the overheard path.
+    fn explore_unverified(
+        &mut self,
+        now: Millis,
+        cue: &SpeechCue,
+        norm_energy: f32,
+        norm_vad: f32,
+        norm_dur: f32,
+    ) -> Option<Action> {
+        let policy = self.profile.exploration;
+        let in_longer_window = self
+            .verified_attention_until
+            .is_some_and(|until| now < until);
+        if policy.explore_probability <= 0.0 || !in_longer_window || cue.speaker_sim.is_none() {
+            return None;
+        }
+        let shortfall = self.profile.attention.verified_voice_llr - self.evidence(cue).owner_live();
+        let depth = if self.window_objection(now, cue, norm_vad).is_some() {
+            shortfall.max(self.objection_depth(now, cue, norm_vad))
+        } else {
+            shortfall
+        };
+        let thinks_without = self.thinks_in_window(cue, norm_vad);
+        if depth > policy.explore_margin_nats || !thinks_without {
+            return None;
+        }
+        // Only a cue that the overheard path turns away is an abstention to explore: ask
+        // a copy, so this state moves only along the path actually taken.
+        let media = self.media_objection(now, cue);
+        let heard =
+            self.clone()
+                .speech_unaddressed(now, media, false, norm_energy, norm_vad, norm_dur);
+        if !matches!(heard, Action::Abstain { .. }) {
+            return None;
+        }
+        Some(match self.flip(depth, thinks_without)? {
+            Draw::Explore(probability) => self.accept_in_window(
+                now,
+                cue,
+                norm_energy,
+                norm_vad,
+                norm_dur,
+                Payment::Explored(probability),
+            ),
+            Draw::Keep(probability) => logged(
+                self.speech_unaddressed(now, media, false, norm_energy, norm_vad, norm_dur),
+                probability,
+            ),
+        })
     }
 
     /// Enton was called by name: answer now, or wait for the rest of the request.
@@ -640,6 +774,7 @@ impl Organism {
                 reason: Reason::Keyword,
                 salience: base_salience,
                 why: Abstention::OtherSpeaker,
+                propensity: None,
             };
         }
         // Addressed speech is never habituated
@@ -659,7 +794,7 @@ impl Organism {
         self.pending_attend = None;
         self.open_attention(now);
         // Keyword bypasses torpor and non-keyword cooldown; spends obligation_budget
-        let action = self.pay_and_think_obligation(now, Reason::Keyword, base_salience);
+        let action = self.pay_and_think(now, Reason::Keyword, base_salience, Payment::Obligation);
         if let Action::Think { thought, .. } = action {
             self.conversation_thought = Some(thought);
         }
@@ -708,12 +843,62 @@ impl Organism {
         norm_dur: f32,
     ) -> Action {
         if let Some(why) = self.window_objection(now, cue, norm_vad) {
-            return Action::Abstain {
+            let salience = self.calculate_base_salience(norm_energy, norm_vad, norm_dur);
+            let abstain = |propensity| Action::Abstain {
                 reason: Reason::FollowUp,
-                salience: self.calculate_base_salience(norm_energy, norm_vad, norm_dur),
+                salience,
                 why,
+                propensity,
+            };
+            let depth = self.objection_depth(now, cue, norm_vad);
+            let thinks_without = self.thinks_in_window(cue, norm_vad);
+            return match self.flip(depth, thinks_without) {
+                Some(Draw::Explore(probability)) => self.accept_in_window(
+                    now,
+                    cue,
+                    norm_energy,
+                    norm_vad,
+                    norm_dur,
+                    Payment::Explored(probability),
+                ),
+                Some(Draw::Keep(probability)) => abstain(Some(probability)),
+                None => abstain(None),
             };
         }
+        self.accept_in_window(
+            now,
+            cue,
+            norm_energy,
+            norm_vad,
+            norm_dur,
+            Payment::Obligation,
+        )
+    }
+
+    /// Whether a cue in a window, with no evidence against it, would buy a thought rather
+    /// than wait for the rest of a request or abstain for its VAD or for torpor.
+    fn thinks_in_window(&self, cue: &SpeechCue, norm_vad: f32) -> bool {
+        norm_vad >= self.profile.attention.follow_up_min_vad
+            && if self.pending_attend.is_some() {
+                !self
+                    .turn_evidence(cue)
+                    .is_some_and(|finished| finished < 0.0)
+            } else {
+                !self.torpor
+            }
+    }
+
+    /// A cue in a window that no evidence turned away (or that exploration let through):
+    /// the rest of a pending request or a follow-up, paid as `payment` says.
+    fn accept_in_window(
+        &mut self,
+        now: Millis,
+        cue: &SpeechCue,
+        norm_energy: f32,
+        norm_vad: f32,
+        norm_dur: f32,
+        payment: Payment,
+    ) -> Action {
         // Addressed speech is never habituated
         if let Some(pending) = self.pending_attend.take() {
             if norm_vad < self.profile.attention.follow_up_min_vad {
@@ -724,6 +909,7 @@ impl Organism {
                     reason: Reason::FollowUp,
                     salience,
                     why: Abstention::BelowThreshold,
+                    propensity: None,
                 };
             }
 
@@ -746,7 +932,7 @@ impl Organism {
                 return Action::Attend { until };
             }
             self.open_attention(now);
-            let action = self.pay_and_think_obligation(now, Reason::Keyword, combined_salience);
+            let action = self.pay_and_think(now, Reason::Keyword, combined_salience, payment);
             if let Action::Think { thought, .. } = action {
                 self.conversation_thought = Some(thought);
             }
@@ -760,6 +946,7 @@ impl Organism {
                 reason: Reason::FollowUp,
                 salience,
                 why: Abstention::Torpor,
+                propensity: None,
             };
         }
         if norm_vad < self.profile.attention.follow_up_min_vad {
@@ -767,11 +954,12 @@ impl Organism {
                 reason: Reason::FollowUp,
                 salience,
                 why: Abstention::BelowThreshold,
+                propensity: None,
             };
         }
 
         // Follow-up needs only minimal VAD, bypasses non-keyword cooldown, pays obligation_budget
-        let action = self.pay_and_think_obligation(now, Reason::FollowUp, salience);
+        let action = self.pay_and_think(now, Reason::FollowUp, salience, payment);
         if let Action::Think { thought, .. } = action {
             self.conversation_thought = Some(thought);
             self.open_attention(now);
@@ -779,10 +967,14 @@ impl Organism {
         action
     }
 
+    /// Overheard speech: novelty, habituation and the discretionary threshold decide.
+    /// `media` is how far past its threshold the tagger's objection is, when it objects;
+    /// `explore` lets a borderline objection flip the exploration coin.
     fn speech_unaddressed(
         &mut self,
         now: Millis,
-        media: bool,
+        media: Option<f32>,
+        explore: bool,
         norm_energy: f32,
         norm_vad: f32,
         norm_dur: f32,
@@ -821,12 +1013,34 @@ impl Organism {
         }
 
         // Media still trains habituation above, so the few TV cues the tagger misses
-        // arrive already familiar; tagged ones never buy a thought.
-        if media {
-            return Action::Abstain {
+        // arrive already familiar; tagged ones never buy a thought, unless a borderline
+        // one is explored.
+        if let Some(depth) = media {
+            let abstain = |propensity| Action::Abstain {
                 reason: Reason::Speech,
                 salience: effective_salience,
                 why: Abstention::Media,
+                propensity,
+            };
+            let threshold = self.profile.ignition.discretionary_threshold;
+            let thinks_without = !self.torpor
+                && salience_with_novelty >= threshold
+                && !self.ignition.in_cooldown(now)
+                && effective_salience >= threshold;
+            let draw = if explore {
+                self.flip(depth, thinks_without)
+            } else {
+                None
+            };
+            return match draw {
+                Some(Draw::Explore(probability)) => self.pay_and_think(
+                    now,
+                    Reason::Speech,
+                    effective_salience,
+                    Payment::Explored(probability),
+                ),
+                Some(Draw::Keep(probability)) => abstain(Some(probability)),
+                None => abstain(None),
             };
         }
 
@@ -835,6 +1049,7 @@ impl Organism {
                 reason: Reason::Speech,
                 salience: effective_salience,
                 why: Abstention::Torpor,
+                propensity: None,
             };
         }
 
@@ -843,6 +1058,7 @@ impl Organism {
                 reason: Reason::Speech,
                 salience: effective_salience,
                 why: Abstention::BelowThreshold,
+                propensity: None,
             };
         }
 
@@ -851,6 +1067,7 @@ impl Organism {
                 reason: Reason::Speech,
                 salience: effective_salience,
                 why: Abstention::Cooldown,
+                propensity: None,
             };
         }
 
@@ -859,10 +1076,16 @@ impl Organism {
                 reason: Reason::Speech,
                 salience: effective_salience,
                 why: Abstention::Habituation,
+                propensity: None,
             };
         }
 
-        self.pay_and_think_discretionary(now, Reason::Speech, effective_salience)
+        self.pay_and_think(
+            now,
+            Reason::Speech,
+            effective_salience,
+            Payment::Discretionary,
+        )
     }
 
     /// Open (or reopen) the attention windows at `from`: the short one for any cue,
@@ -976,17 +1199,68 @@ impl Organism {
         self.tv_heard_at = now;
     }
 
+    /// How many nats less evidence a loudspeaker or another voice needs to be turned
+    /// away at `now`: `tv_caution_llr` while the TV is on, none otherwise.
+    fn tv_caution(&self, now: Millis) -> f32 {
+        let source = self.profile.source;
+        if self.tv_presence_at(now) >= source.tv_on_level {
+            source.tv_caution_llr
+        } else {
+            0.0
+        }
+    }
+
+    /// How far past its threshold the tagger's objection to an overheard cue is, in
+    /// nats, when the tagger objects at all.
+    fn media_objection(&self, now: Millis, cue: &SpeechCue) -> Option<f32> {
+        self.window_vetoes(now, cue).alone.media.then(|| {
+            let limit = -(self.profile.source.media_llr - self.tv_caution(now));
+            limit - self.evidence(cue).live_over_reproduced
+        })
+    }
+
+    /// The smallest loosening, in nats, of every evidence threshold at once that would let
+    /// a cue through a window: how far past its threshold the deepest objection that
+    /// matters is. A sensor that did not run never objects. An adjacent continuation needs
+    /// only all but one independent sensor lifted (see [`Self::window_objection`]).
+    fn objection_depth(&self, now: Millis, cue: &SpeechCue, norm_vad: f32) -> f32 {
+        let attention = self.profile.attention;
+        let caution = self.tv_caution(now);
+        let evidence = self.evidence(cue);
+        let other_llr = -(attention.other_voice_llr - caution);
+        let ran = |sensor: Option<f32>, depth: f32| sensor.map_or(f32::NEG_INFINITY, |_| depth);
+        let media = ran(
+            cue.media,
+            -(self.profile.source.media_llr - caution) - evidence.live_over_reproduced,
+        );
+        let voice = ran(
+            cue.speaker_sim,
+            other_llr
+                - evidence
+                    .owner_over_other
+                    .min(evidence.owner_over_reproduced),
+        );
+        let other = ran(cue.speaker_sim, other_llr - evidence.owner_live());
+        let undirected = ran(
+            cue.directed,
+            -attention.undirected_llr - evidence.addressed_over_not,
+        );
+        let every = media.max(other).max(undirected);
+        if !self.is_adjacent_continuation(now, cue, norm_vad) {
+            return every;
+        }
+        // Lifting all but the deepest of the independent sensors: the second deepest.
+        let second = media.min(voice).max(media.max(voice).min(undirected));
+        every.min(second)
+    }
+
     /// Whether a cue is reproduced media, whether it is someone else's voice, and
     /// whether it was addressed to someone else. While the TV is on, the first two
     /// take `tv_caution_llr` less evidence, but only for a sensor that ran: a cue
     /// without one is never turned away for the TV.
     fn window_vetoes(&self, now: Millis, cue: &SpeechCue) -> Vetoes {
         let source = self.profile.source;
-        let caution = if self.tv_presence_at(now) >= source.tv_on_level {
-            source.tv_caution_llr
-        } else {
-            0.0
-        };
+        let caution = self.tv_caution(now);
         let evidence = self.evidence(cue);
         let other_llr = -(self.profile.attention.other_voice_llr - caution);
         let voice = evidence
@@ -1059,47 +1333,113 @@ impl Organism {
         self.next_thought == u64::MAX
     }
 
-    fn pay_and_think_obligation(&mut self, now: Millis, reason: Reason, salience: f32) -> Action {
-        if self.thoughts_exhausted() || !self.obligation_budget.try_spend(self.prices.think) {
-            return Action::Abstain {
-                reason,
-                salience,
-                why: Abstention::OutOfEnergy,
-            };
-        }
-        let thought = ThoughtId(self.next_thought);
-        self.next_thought = self.next_thought.saturating_add(1);
-        self.ignition.fired(now);
-        self.speaking_for_obligation = true;
-        Action::Think {
-            thought,
-            reason,
-            salience,
-        }
-    }
-
-    fn pay_and_think_discretionary(
+    /// Buy a thought from the account `payment` names, or abstain as out of energy.
+    fn pay_and_think(
         &mut self,
         now: Millis,
         reason: Reason,
         salience: f32,
+        payment: Payment,
     ) -> Action {
-        if self.thoughts_exhausted() || !self.discretionary_budget.try_spend(self.prices.think) {
+        let exhausted = self.thoughts_exhausted();
+        let cost = self.prices.think;
+        let account = match payment {
+            Payment::Obligation => &mut self.obligation_budget,
+            Payment::Discretionary | Payment::Explored(_) => &mut self.discretionary_budget,
+        };
+        if exhausted || !account.try_spend(cost) {
             return Action::Abstain {
                 reason,
                 salience,
                 why: Abstention::OutOfEnergy,
+                propensity: None,
             };
         }
         let thought = ThoughtId(self.next_thought);
         self.next_thought = self.next_thought.saturating_add(1);
         self.ignition.fired(now);
-        self.speaking_for_obligation = false;
+        let (answers_turn, propensity) = match payment {
+            Payment::Obligation => (true, None),
+            Payment::Discretionary => (false, None),
+            // An explored thought answers a turn exactly when its reason is one.
+            Payment::Explored(probability) => (
+                matches!(reason, Reason::Keyword | Reason::FollowUp),
+                Some(probability),
+            ),
+        };
+        self.speaking_for_obligation = answers_turn;
         Action::Think {
             thought,
             reason,
             salience,
+            propensity,
         }
+    }
+
+    /// Flip the exploration coin for a borderline cue: one an evidence objection turns
+    /// away, whose deepest objecting sensor is `depth` nats past its threshold, and that
+    /// would have bought a thought without the objection (`thinks_without`). `None` when
+    /// the cue may not explore: exploration is off, the cue is not borderline, the body is
+    /// in torpor, or the discretionary account cannot pay for the thought. The generator
+    /// advances only when the coin is flipped.
+    fn flip(&mut self, depth: f32, thinks_without: bool) -> Option<Draw> {
+        let policy = self.profile.exploration;
+        let eligible = policy.explore_probability > 0.0
+            && thinks_without
+            && depth <= policy.explore_margin_nats
+            && !self.torpor
+            && !self.thoughts_exhausted()
+            && self.discretionary_budget.can_spend(self.prices.think);
+        if !eligible {
+            return None;
+        }
+        // The draw and the cut are integers of at most 24 bits, exact in f32, so the coin
+        // comes up `explore` exactly with the applied probability, and the two logged
+        // propensities sum to exactly one.
+        let explore = policy.applied_probability();
+        Some(if (self.next_draw() as f32) < explore * DRAW_SCALE {
+            Draw::Explore(explore)
+        } else {
+            Draw::Keep(1.0 - explore)
+        })
+    }
+
+    /// The next 24 uniform bits of the exploration generator (`SplitMix64`).
+    fn next_draw(&mut self) -> u32 {
+        self.explore_state = self.explore_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.explore_state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        u32::try_from((z ^ (z >> 31)) >> 40).unwrap_or(0)
+    }
+}
+
+/// The same decision, logged with the probability with which it was taken.
+fn logged(action: Action, probability: f32) -> Action {
+    match action {
+        Action::Think {
+            thought,
+            reason,
+            salience,
+            ..
+        } => Action::Think {
+            thought,
+            reason,
+            salience,
+            propensity: Some(probability),
+        },
+        Action::Abstain {
+            reason,
+            salience,
+            why,
+            ..
+        } => Action::Abstain {
+            reason,
+            salience,
+            why,
+            propensity: Some(probability),
+        },
+        other => other,
     }
 }
 
@@ -1192,6 +1532,56 @@ mod tests {
             profile.attention.directed_window_llr = broken;
             assert!(profile.validate().is_err(), "directed window {broken}");
         }
+        for broken in [-0.1, 1.5, f32::NAN, f32::INFINITY] {
+            let mut profile = Profile::t1_ref();
+            profile.exploration.explore_probability = broken;
+            assert!(profile.validate().is_err(), "probability {broken}");
+        }
+        for broken in [-0.1, f32::NAN, f32::INFINITY] {
+            let mut profile = Profile::t1_ref();
+            profile.exploration.explore_margin_nats = broken;
+            assert!(profile.validate().is_err(), "margin {broken}");
+        }
+        for fine in [0.0, 1.0] {
+            let mut profile = Profile::t1_ref();
+            profile.exploration.explore_probability = fine;
+            profile.exploration.explore_margin_nats = fine;
+            assert!(profile.validate().is_ok(), "{fine}");
+        }
+    }
+
+    #[test]
+    fn a_profile_stored_before_exploration_reads_back_with_it_off() {
+        for shipped in [Profile::t1_ref(), Profile::desktop()] {
+            assert_eq!(shipped.exploration, crate::ExplorationPolicy::default());
+            let mut stored = serde_json::to_value(&shipped).unwrap();
+            let fields = stored.as_object_mut().unwrap();
+            for key in ["explore_probability", "explore_margin_nats", "explore_seed"] {
+                assert!(fields.remove(key).is_some(), "{key}");
+            }
+            let profile: Profile = serde_json::from_value(stored).unwrap();
+            assert_eq!(profile, shipped);
+            assert_eq!(profile.exploration.explore_probability.to_bits(), 0);
+        }
+    }
+
+    #[test]
+    fn the_applied_probability_is_a_multiple_of_the_draw_resolution() {
+        let applied = |probability| {
+            crate::ExplorationPolicy {
+                explore_probability: probability,
+                ..crate::ExplorationPolicy::default()
+            }
+            .applied_probability()
+        };
+        for exact in [0.0_f32, 0.25, 0.5, 1.0] {
+            assert_eq!(applied(exact).to_bits(), exact.to_bits());
+        }
+        // 0.1 is not a multiple of 2^-24: it rounds up by less than one step.
+        let step = 1.0 / DRAW_SCALE;
+        assert!(applied(0.1) >= 0.1 && applied(0.1) - 0.1 < step);
+        assert_eq!((applied(0.1) * DRAW_SCALE).fract().to_bits(), 0);
+        assert_eq!(applied(1e-12).to_bits(), step.to_bits());
     }
 
     #[test]

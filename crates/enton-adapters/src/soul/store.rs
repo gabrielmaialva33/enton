@@ -3,9 +3,12 @@
 use std::path::Path;
 
 use enton_core::{Action, Event, ThoughtId};
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 use super::{ActionStatus, Error, SeqNo, Soul, SoulConfig};
+
+/// Size of the header every SQLite database file starts with.
+const SQLITE_HEADER_BYTES: u64 = 100;
 
 impl Soul {
     /// Open a log at `path`, creating the file when it does not exist yet.
@@ -23,6 +26,13 @@ impl Soul {
         }
 
         let path = path.as_ref().to_path_buf();
+        // SQLite reads a file shorter than its header as an empty database and
+        // would write a fresh schema over it: a soul cut that short lost its history.
+        if let Ok(meta) = std::fs::metadata(&path)
+            && (1..SQLITE_HEADER_BYTES).contains(&meta.len())
+        {
+            return Err(Error::Damaged("the file is shorter than a database header"));
+        }
         let conn = Connection::open(&path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "FULL")?;
@@ -34,49 +44,88 @@ impl Soul {
             });
         }
         Self::migrate(&conn)?;
+        Self::check_history(&conn, &config)?;
 
-        // Check for incompatible history
-        {
+        Ok(Self { conn, config, path })
+    }
+
+    /// Open an existing log at `path` for reading only, to audit it.
+    ///
+    /// Nothing is created, migrated or written, so this is safe while Enton runs:
+    /// in WAL mode a reader never blocks the writer. A log closed cleanly (no
+    /// `-wal` file beside it, so no writer has it open) is opened immutable, which
+    /// leaves no `-wal` or `-shm` behind; a writer that opens it during the read
+    /// only appends to its own `-wal`, which this reader then does not see.
+    /// Appends, resolutions, snapshots and retention through the returned handle
+    /// fail with a storage error. Returns a storage error when the file does not
+    /// exist and [`Error::UnsupportedSchema`] unless the file has exactly this
+    /// version's schema (an older one needs the migration [`Soul::open`] performs).
+    pub fn open_read_only(path: impl AsRef<Path>, config: SoulConfig) -> Result<Self, Error> {
+        let path = path.as_ref().to_path_buf();
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let mut wal = path.clone().into_os_string();
+        wal.push("-wal");
+        let immutable = if Path::new(&wal).exists() {
+            None
+        } else {
+            immutable_uri(&path)
+        };
+        let conn = match immutable {
+            Some(uri) => Connection::open_with_flags(uri, flags | OpenFlags::SQLITE_OPEN_URI)?,
+            None => Connection::open_with_flags(&path, flags)?,
+        };
+        let found = Self::schema_version(&conn)?;
+        if found != Self::SCHEMA_VERSION {
+            return Err(Error::UnsupportedSchema {
+                found,
+                expected: Self::SCHEMA_VERSION,
+            });
+        }
+        Self::check_history(&conn, &config)?;
+        Ok(Self { conn, config, path })
+    }
+
+    /// Reject a log whose latest snapshot (or, without one, latest event) was
+    /// reduced by another reducer version, and a pruned log left with no anchor.
+    fn check_history(conn: &Connection, config: &SoulConfig) -> Result<(), Error> {
+        let mut stmt =
+            conn.prepare("SELECT reducer_version FROM snapshots ORDER BY seq DESC LIMIT 1")?;
+        let mut rows = stmt.query([])?;
+        if let Some(row) = rows.next()? {
+            let rv: u32 = row.get(0)?;
+            if rv != config.reducer_version {
+                return Err(Error::IncompatibleHistory {
+                    kind: "snapshot",
+                    found: rv,
+                    expected: config.reducer_version,
+                });
+            }
+        } else {
             let mut stmt =
-                conn.prepare("SELECT reducer_version FROM snapshots ORDER BY seq DESC LIMIT 1")?;
+                conn.prepare("SELECT reducer_version FROM events ORDER BY seq DESC LIMIT 1")?;
             let mut rows = stmt.query([])?;
             if let Some(row) = rows.next()? {
                 let rv: u32 = row.get(0)?;
                 if rv != config.reducer_version {
                     return Err(Error::IncompatibleHistory {
-                        kind: "snapshot",
+                        kind: "event",
                         found: rv,
                         expected: config.reducer_version,
                     });
                 }
             } else {
                 let mut stmt =
-                    conn.prepare("SELECT reducer_version FROM events ORDER BY seq DESC LIMIT 1")?;
+                    conn.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'events'")?;
                 let mut rows = stmt.query([])?;
                 if let Some(row) = rows.next()? {
-                    let rv: u32 = row.get(0)?;
-                    if rv != config.reducer_version {
-                        return Err(Error::IncompatibleHistory {
-                            kind: "event",
-                            found: rv,
-                            expected: config.reducer_version,
-                        });
-                    }
-                } else {
-                    let mut stmt =
-                        conn.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'events'")?;
-                    let mut rows = stmt.query([])?;
-                    if let Some(row) = rows.next()? {
-                        let seq: i64 = row.get(0)?;
-                        if seq > 0 {
-                            return Err(Error::PrunedWithoutAnchor);
-                        }
+                    let seq: i64 = row.get(0)?;
+                    if seq > 0 {
+                        return Err(Error::PrunedWithoutAnchor);
                     }
                 }
             }
         }
-
-        Ok(Self { conn, config, path })
+        Ok(())
     }
 
     /// The database file backing this log. The journal keeps `-wal` and
@@ -149,6 +198,33 @@ impl Soul {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// The recorded status of `thought` and the small JSON result it was
+    /// resolved with, or `None` when the thought was never recorded (a log
+    /// written without a cortex, or a thought pruned by retention).
+    pub fn thought_status(
+        &self,
+        thought: ThoughtId,
+    ) -> Result<Option<(ActionStatus, Option<String>)>, Error> {
+        let thought_id = i64::try_from(thought.0)
+            .map_err(|_| Error::Storage(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX)))?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT status, result_json FROM actions WHERE thought_id = ?1")?;
+        let mut rows = stmt.query([thought_id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let status: String = row.get(0)?;
+        let result: Option<String> = row.get(1)?;
+        // The schema's CHECK constraint admits only these three strings.
+        let status = match status.as_str() {
+            "done" => ActionStatus::Done,
+            "failed" => ActionStatus::Failed,
+            _ => ActionStatus::Pending,
+        };
+        Ok(Some((status, result)))
     }
 
     /// Read up to `limit` events after `cursor`, in sequence order.
@@ -366,4 +442,29 @@ impl Soul {
         }
         Ok(total)
     }
+}
+
+/// An SQLite URI that opens `path` immutable: no locks, no `-wal` or `-shm`
+/// files. `None` for a path that is not UTF-8, which then opens normally.
+pub(super) fn immutable_uri(path: &Path) -> Option<String> {
+    let text = path.to_str()?;
+    // An absolute path gets an empty authority, so a leading `//` stays a path.
+    let mut uri = String::from(if text.starts_with('/') {
+        "file://"
+    } else {
+        "file:"
+    });
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~/".contains(&byte) {
+            uri.push(char::from(byte));
+        } else {
+            uri.push('%');
+            for nibble in [byte >> 4, byte & 0x0f] {
+                let digit = char::from_digit(u32::from(nibble), 16).unwrap_or('0');
+                uri.push(digit.to_ascii_uppercase());
+            }
+        }
+    }
+    uri.push_str("?immutable=1");
+    Some(uri)
 }

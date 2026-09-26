@@ -79,6 +79,9 @@ pub enum Error {
     /// The soul configuration is invalid.
     #[error("invalid configuration: {0}")]
     InvalidConfig(&'static str),
+    /// The file is damaged in a way that opening it would silently hide.
+    #[error("damaged soul: {0}")]
+    Damaged(&'static str),
     /// The database contains events or snapshots from an incompatible reducer version.
     #[error("incompatible {kind} reducer version: found {found}, expected {expected}")]
     IncompatibleHistory {

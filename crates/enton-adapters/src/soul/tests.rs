@@ -423,3 +423,213 @@ fn v1_snapshot_is_rejected_as_incompatible_by_the_current_default() {
 
     cleanup(&path);
 }
+
+fn files_beside(path: &Path) -> Vec<String> {
+    ["", "-wal", "-shm"]
+        .into_iter()
+        .filter(|suffix| {
+            let mut sibling = path.as_os_str().to_owned();
+            sibling.push(suffix);
+            Path::new(&sibling).exists()
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn a_read_only_soul_audits_without_writing() {
+    let missing = temp_path("read_only_missing");
+    assert!(matches!(
+        Soul::open_read_only(&missing, SoulConfig::default()),
+        Err(Error::Storage(_))
+    ));
+    assert!(files_beside(&missing).is_empty(), "looking created a file");
+
+    let path = temp_path("read_only");
+    let profile = enton_core::Profile::t1_ref();
+    {
+        let soul = Soul::open(&path, SoulConfig::default()).expect("open");
+        soul.append_event(&tick(100)).expect("append");
+        let asked = soul.append_event(&keyword_speech(300)).expect("append");
+        soul.record_pending(ThoughtId(1), asked).expect("pending");
+        soul.mark_failed(ThoughtId(1), r#"{"reason":"cortex unavailable"}"#)
+            .expect("fail");
+        let last = soul.append_event(&tick(1_300)).expect("append");
+        // A clean shutdown: the latest snapshot leaves an empty tail.
+        let (organism, _) = soul.replay_organism(&profile).expect("replay");
+        soul.save_organism_snapshot(last, &organism)
+            .expect("snapshot");
+    }
+    assert_eq!(files_beside(&path), [""], "a clean close leaves no journal");
+
+    let soul = Soul::open_read_only(&path, SoulConfig::default()).expect("open read-only");
+    assert!(soul.append_event(&tick(2_000)).is_err());
+    assert_eq!(
+        soul.thought_status(ThoughtId(1)).expect("status"),
+        Some((
+            ActionStatus::Failed,
+            Some(r#"{"reason":"cortex unavailable"}"#.to_owned())
+        ))
+    );
+    assert_eq!(soul.thought_status(ThoughtId(2)).expect("status"), None);
+
+    // The log still holds its first event, so the audit replays all of it and
+    // lands where the snapshot says the organism stopped.
+    let (mut organism, cursor) = soul.earliest_organism(&profile).expect("earliest");
+    assert_eq!(cursor, 0);
+    let events = soul.read_after(cursor, 16).expect("read");
+    assert_eq!(events.len(), 3);
+    let mut actions = Vec::new();
+    for (_, event) in &events {
+        actions.extend(organism.step(event));
+    }
+    assert!(matches!(
+        actions.first(),
+        Some(Action::Think {
+            thought: ThoughtId(1),
+            ..
+        })
+    ));
+    let (restored, tail) = soul.replay_organism(&profile).expect("replay");
+    assert!(tail.is_empty());
+    assert_eq!(organism, restored);
+    drop(soul);
+    assert_eq!(files_beside(&path), [""], "the audit left files behind");
+
+    // Another profile is refused, even though replay would start fresh.
+    let desktop = enton_core::Profile::desktop();
+    assert!(matches!(
+        Soul::open_read_only(&path, SoulConfig::default())
+            .expect("open read-only")
+            .earliest_organism(&desktop),
+        Err(Error::Json(_))
+    ));
+
+    cleanup(&path);
+}
+
+#[test]
+fn a_read_only_soul_reads_alongside_its_writer() {
+    let path = temp_path("read_only_live");
+    let writer = Soul::open(&path, SoulConfig::default()).expect("open");
+    writer.append_event(&tick(100)).expect("append");
+    let reader = Soul::open_read_only(&path, SoulConfig::default()).expect("open read-only");
+    writer.append_event(&tick(200)).expect("append");
+    assert_eq!(reader.read_after(0, 16).expect("read").len(), 2);
+    drop(reader);
+    drop(writer);
+    cleanup(&path);
+}
+
+#[test]
+fn a_pruned_soul_replays_from_the_snapshot_its_events_continue() {
+    let path = temp_path("earliest_pruned");
+    let profile = enton_core::Profile::t1_ref();
+    let soul = Soul::open(&path, SoulConfig::default()).expect("open");
+    let mut organism = enton_core::Organism::new(profile.clone()).expect("organism");
+    for now in [100, 200, 300, 400] {
+        let event = tick(now);
+        let seq = soul.append_event(&event).expect("append");
+        organism.step(&event);
+        if seq == 2 || seq == 3 {
+            soul.save_organism_snapshot(seq, &organism)
+                .expect("snapshot");
+        }
+    }
+
+    soul.conn
+        .execute("DELETE FROM events WHERE seq <= 2", [])
+        .expect("prune");
+    let (at_two, cursor) = soul.earliest_organism(&profile).expect("earliest");
+    assert_eq!(cursor, 2, "the snapshot at 2 is continued by event 3");
+    assert_eq!(at_two.last_seen(), enton_core::Millis(200));
+
+    soul.conn
+        .execute("DELETE FROM events WHERE seq <= 3", [])
+        .expect("prune");
+    assert_eq!(soul.earliest_organism(&profile).expect("earliest").1, 3);
+
+    soul.conn
+        .execute("DELETE FROM snapshots WHERE seq = 3", [])
+        .expect("drop snapshot");
+    assert!(matches!(
+        soul.earliest_organism(&profile),
+        Err(Error::ReplayGap {
+            expected: 1,
+            found: 4
+        })
+    ));
+
+    cleanup(&path);
+}
+
+#[test]
+fn an_immutable_uri_escapes_what_a_uri_reserves() {
+    assert_eq!(
+        store::immutable_uri(Path::new("/tmp/my soul?#%.sqlite")).as_deref(),
+        Some("file:///tmp/my%20soul%3F%23%25.sqlite?immutable=1")
+    );
+    assert_eq!(
+        store::immutable_uri(Path::new("soul.sqlite")).as_deref(),
+        Some("file:soul.sqlite?immutable=1")
+    );
+}
+
+/// Write a schema-1 log by hand, as an older Enton left it, with one event.
+fn legacy_v1_soul(path: &Path) -> rusqlite::Result<()> {
+    let conn = rusqlite::Connection::open(path)?;
+    conn.execute_batch(
+        "CREATE TABLE events (
+             seq INTEGER PRIMARY KEY AUTOINCREMENT,
+             at_ms INTEGER NOT NULL,
+             payload_json TEXT NOT NULL,
+             reducer_version INTEGER NOT NULL,
+             config_version INTEGER NOT NULL
+         );
+         CREATE TABLE actions (
+             thought_id INTEGER PRIMARY KEY,
+             status TEXT NOT NULL CHECK (status IN ('pending', 'done', 'failed')),
+             created_seq INTEGER NOT NULL,
+             result_json TEXT
+         );
+         PRAGMA user_version = 1;",
+    )?;
+    let payload = serde_json::to_string(&tick(100)).unwrap_or_default();
+    conn.execute(
+        "INSERT INTO events (at_ms, payload_json, reducer_version, config_version) VALUES (100, ?1, ?2, 1)",
+        rusqlite::params![payload, enton_core::REDUCER_VERSION],
+    )?;
+    Ok(())
+}
+
+#[test]
+fn a_migration_left_half_done_by_older_code_completes() {
+    // A crash after `CREATE TABLE events_v2` (and after the copy) left a stray table.
+    let stray = temp_path("migration_stray_copy");
+    legacy_v1_soul(&stray).unwrap();
+    rusqlite::Connection::open(&stray)
+        .unwrap()
+        .execute_batch("CREATE TABLE events_v2 (seq INTEGER PRIMARY KEY);")
+        .unwrap();
+    let soul = Soul::open(&stray, SoulConfig::default()).unwrap();
+    assert_eq!(soul.read_after(0, 10).unwrap().len(), 1);
+
+    // A crash between `DROP TABLE events` and the rename left only the copy.
+    let renamed = temp_path("migration_interrupted_rename");
+    legacy_v1_soul(&renamed).unwrap();
+    rusqlite::Connection::open(&renamed)
+        .unwrap()
+        .execute_batch("ALTER TABLE events RENAME TO events_v2;")
+        .unwrap();
+    let soul = Soul::open(&renamed, SoulConfig::default()).unwrap();
+    assert_eq!(soul.read_after(0, 10).unwrap().len(), 1);
+}
+
+#[test]
+fn a_file_shorter_than_a_database_header_is_damaged_not_new() {
+    let path = temp_path("shorter_than_header");
+    std::fs::write(&path, [0x53]).unwrap();
+    let err = Soul::open(&path, SoulConfig::default()).unwrap_err();
+    assert!(matches!(err, Error::Damaged(_)), "{err}");
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 1, "left untouched");
+}

@@ -49,19 +49,74 @@ impl Soul {
         let fresh = Organism::new(profile.clone())?;
         self.replay(
             || fresh,
-            |blob| {
-                let Snapshot::V1 { state } = serde_json::from_slice::<Snapshot<Organism>>(blob)?;
-                if state.profile() != profile {
-                    return Err(serde_json::Error::custom(
-                        "organism snapshot profile differs from the requested replay profile",
-                    )
-                    .into());
-                }
-                Ok(state)
-            },
+            |blob| decode_organism(blob, profile),
             Organism::step,
         )
     }
+
+    /// The organism at the earliest point from which the stored log replays
+    /// without a gap, and the sequence number it stands at.
+    ///
+    /// [`Soul::replay_organism`] starts from the latest snapshot, the fastest way
+    /// to resume; after a clean shutdown its tail is empty. An audit wants the
+    /// opposite: every stored event. This starts from a fresh organism while the
+    /// log still holds its first event, and otherwise from the earliest
+    /// compatible snapshot that the stored events continue. Reduce the rest by
+    /// paging [`Soul::read_after`] from the returned sequence number through
+    /// [`Organism::step`]: the reducer is deterministic, so this recomputes every
+    /// stored decision exactly.
+    ///
+    /// Snapshots are checked against `profile` even when replay starts fresh, so
+    /// a wrong profile fails here instead of replaying different decisions.
+    /// Returns [`Error::ReplayGap`] when the log was pruned and no snapshot
+    /// anchors what is left. Read-only; no actuators are invoked.
+    pub fn earliest_organism(&self, profile: &Profile) -> Result<(Organism, SeqNo), Error> {
+        let first: Option<i64> = self
+            .conn
+            .query_row("SELECT MIN(seq) FROM events", [], |row| row.get(0))?;
+        let first = first.map(|seq| u64::try_from(seq).unwrap_or(0));
+        // A snapshot anchors the log when the event right after it is stored.
+        let floor = first.map_or(0, |seq| seq.saturating_sub(1));
+        let floor = i64::try_from(floor)
+            .map_err(|_| Error::Storage(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX)))?;
+        let anchor: Option<(i64, Vec<u8>)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT seq, blob FROM snapshots WHERE reducer_version = ?1 AND seq >= ?2 \
+                 ORDER BY seq ASC LIMIT 1",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![self.config.reducer_version, floor])?;
+            match rows.next()? {
+                Some(row) => Some((row.get(0)?, row.get(1)?)),
+                None => None,
+            }
+        };
+        match (first, anchor) {
+            (Some(1), anchor) => {
+                if let Some((_, blob)) = anchor {
+                    decode_organism(&blob, profile)?;
+                }
+                Ok((Organism::new(profile.clone())?, 0))
+            }
+            (_, Some((seq, blob))) => Ok((
+                decode_organism(&blob, profile)?,
+                u64::try_from(seq).unwrap_or(0),
+            )),
+            (None, None) => Ok((Organism::new(profile.clone())?, 0)),
+            (Some(found), None) => Err(Error::ReplayGap { expected: 1, found }),
+        }
+    }
+}
+
+/// Decode an organism snapshot blob, which must hold exactly `profile`.
+fn decode_organism(blob: &[u8], profile: &Profile) -> Result<Organism, Error> {
+    let Snapshot::V1 { state } = serde_json::from_slice::<Snapshot<Organism>>(blob)?;
+    if state.profile() != profile {
+        return Err(serde_json::Error::custom(
+            "organism snapshot profile differs from the requested replay profile",
+        )
+        .into());
+    }
+    Ok(state)
 }
 
 impl Soul {

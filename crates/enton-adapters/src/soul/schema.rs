@@ -4,6 +4,9 @@ use rusqlite::Connection;
 
 use super::{Error, Soul};
 
+/// `PRAGMA auto_vacuum` value for FULL.
+const AUTO_VACUUM_FULL: u32 = 1;
+
 impl Soul {
     pub(super) fn schema_version(conn: &Connection) -> Result<u32, Error> {
         let version: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -11,11 +14,25 @@ impl Soul {
     }
 
     pub(super) fn migrate(conn: &Connection) -> Result<(), Error> {
-        let mut current_version = Self::schema_version(conn)?;
-        if current_version == Self::SCHEMA_VERSION {
-            return Ok(());
+        if Self::schema_version(conn)? != Self::SCHEMA_VERSION {
+            // Every schema change and the version that records it commit together:
+            // a crash leaves the old schema or the new one, never half of each.
+            let tx = conn.unchecked_transaction()?;
+            Self::migrate_steps(&tx)?;
+            tx.pragma_update(None, "user_version", Self::SCHEMA_VERSION)?;
+            tx.commit()?;
         }
+        // `auto_vacuum` only takes effect through a VACUUM, which cannot run in a
+        // transaction; checked on every open, so a crash between the two heals.
+        let auto_vacuum: u32 = conn.query_row("PRAGMA auto_vacuum", [], |row| row.get(0))?;
+        if auto_vacuum != AUTO_VACUUM_FULL {
+            conn.execute_batch("PRAGMA auto_vacuum = FULL; VACUUM;")?;
+        }
+        Ok(())
+    }
 
+    fn migrate_steps(conn: &Connection) -> Result<(), Error> {
+        let mut current_version = Self::schema_version(conn)?;
         if current_version == 0 {
             conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS events (
@@ -32,16 +49,21 @@ impl Soul {
                      result_json TEXT
                  );
                  CREATE INDEX IF NOT EXISTS idx_actions_pending
-                     ON actions (status, created_seq);
-                 PRAGMA auto_vacuum = FULL;
-                 VACUUM;",
+                     ON actions (status, created_seq);",
             )?;
             current_version = 1;
         }
 
         if current_version == 1 {
+            // Older code ran each statement of this step on its own, so a crash may
+            // have left it half done. Finish an interrupted rename, drop a stray
+            // copy, then copy again.
+            if !Self::table_exists(conn, "events")? && Self::table_exists(conn, "events_v2")? {
+                conn.execute_batch("ALTER TABLE events_v2 RENAME TO events;")?;
+            }
             conn.execute_batch(
-                "CREATE TABLE events_v2 (
+                "DROP TABLE IF EXISTS events_v2;
+                 CREATE TABLE events_v2 (
                      seq INTEGER PRIMARY KEY AUTOINCREMENT,
                      at_ms INTEGER NOT NULL,
                      payload_json TEXT NOT NULL,
@@ -51,9 +73,7 @@ impl Soul {
                  INSERT INTO events_v2 (seq, at_ms, payload_json, reducer_version, config_version)
                      SELECT seq, at_ms, payload_json, reducer_version, config_version FROM events;
                  DROP TABLE events;
-                 ALTER TABLE events_v2 RENAME TO events;
-                 PRAGMA auto_vacuum = FULL;
-                 VACUUM;",
+                 ALTER TABLE events_v2 RENAME TO events;",
             )?;
             current_version = 2;
         }
@@ -67,8 +87,15 @@ impl Soul {
                  );",
             )?;
         }
-
-        conn.pragma_update(None, "user_version", Self::SCHEMA_VERSION)?;
         Ok(())
+    }
+
+    fn table_exists(conn: &Connection, name: &str) -> Result<bool, Error> {
+        let found: u32 = conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [name],
+            |row| row.get(0),
+        )?;
+        Ok(found > 0)
     }
 }

@@ -28,9 +28,10 @@ fn critical_battery_enters_torpor_at_the_exact_boundary() {
 
 #[test]
 fn rejection_priority_is_torpor_then_threshold_then_cooldown_then_energy() {
-    let mut organism = Organism::new(Profile {
-        discretionary_budget_per_hour: 1.0,
-        ..Profile::t1_ref()
+    let mut organism = Organism::new({
+        let mut profile = Profile::t1_ref();
+        profile.budgets.discretionary_budget_per_hour = 1.0;
+        profile
     })
     .unwrap();
     assert_thought(&organism.step(&speech(0, false)), 1, &Reason::Speech);

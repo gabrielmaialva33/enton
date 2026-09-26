@@ -108,9 +108,10 @@ fn keyword_only_turn_thinks_on_timeout_when_no_continuation_arrives() {
 
 #[test]
 fn attention_window_follow_up_bypasses_cooldown_and_pays_normal_energy() {
-    let mut organism = Organism::new(Profile {
-        obligation_budget_per_hour: 2.0,
-        ..Profile::t1_ref()
+    let mut organism = Organism::new({
+        let mut profile = Profile::t1_ref();
+        profile.budgets.obligation_budget_per_hour = 2.0;
+        profile
     })
     .unwrap();
 

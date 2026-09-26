@@ -1,4 +1,4 @@
-//! A bounded budget with a protected keyword reserve.
+//! A bounded budget that refills over time.
 
 use serde::{Deserialize, Serialize};
 
@@ -16,14 +16,12 @@ pub struct Budget {
     pub capacity: f32,
     /// Spendable balance, decreases on use, refilled over time.
     pub available: f32,
-    /// Protected balance, expressed in budget units rather than a fraction.
-    pub reserve: f32,
 }
 
 impl Budget {
-    /// Create a full budget; clamp the reserve to the available capacity.
+    /// Create a full budget; a negative or non-finite capacity becomes zero.
     #[must_use]
-    pub fn new(capacity: f32, reserve: f32) -> Self {
+    pub fn new(capacity: f32) -> Self {
         let capacity = if capacity.is_finite() {
             capacity.max(0.0)
         } else {
@@ -32,7 +30,6 @@ impl Budget {
         Self {
             capacity,
             available: capacity,
-            reserve: reserve.max(0.0).min(capacity),
         }
     }
 
@@ -44,16 +41,15 @@ impl Budget {
         }
     }
 
-    /// Spend atomically, preserving the reserve unless explicitly allowed.
-    /// Invalid or negative costs are rejected without changing the balance.
+    /// Spend atomically; a cost the balance cannot cover, or an invalid or
+    /// negative cost, is rejected without changing the balance.
     #[must_use]
-    pub fn try_spend(&mut self, cost: f32, allow_reserve: bool) -> bool {
+    pub fn try_spend(&mut self, cost: f32) -> bool {
         if !cost.is_finite() || cost < 0.0 {
             return false;
         }
         let remaining = self.available - cost;
-        let floor = if allow_reserve { 0.0 } else { self.reserve };
-        if remaining < floor {
+        if remaining < 0.0 {
             return false;
         }
         self.available = remaining;

@@ -53,12 +53,13 @@ pub(crate) fn tv_cue(now: u64) -> Event {
 }
 
 pub(crate) fn sensitive_profile() -> Profile {
-    Profile {
-        threshold: 0.01,
-        hysteresis: 0.002,
-        ema_alpha: 1.0,
-        cooldown_ms: 0,
-        ..Profile::t1_ref()
+    {
+        let mut profile = Profile::t1_ref();
+        profile.ignition.threshold = 0.01;
+        profile.ignition.hysteresis = 0.002;
+        profile.ignition.ema_alpha = 1.0;
+        profile.ignition.cooldown_ms = 0;
+        profile
     }
 }
 

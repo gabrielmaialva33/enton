@@ -16,12 +16,15 @@ pub mod event;
 pub mod ignition;
 pub mod organism;
 pub mod ports;
+pub mod profile;
 
 pub use action::{Abstention, Action, Reason, ThoughtId};
 pub use drive::{Drive, DriveTable};
 pub use energy::{Budget, PriceTable};
 pub use event::{BodySignals, Event, Millis, SpeechCue, UtteranceId};
 pub use ignition::Ignition;
-pub use organism::{
-    InvalidProfile, Organism, PlaybackStatus, Profile, REDUCER_VERSION, contains_keyword_word,
+pub use organism::{Organism, PlaybackStatus, REDUCER_VERSION, contains_keyword_word};
+pub use profile::{
+    AttentionPolicy, BodyLimits, BudgetPolicy, EchoPolicy, HabituationPolicy, IgnitionPolicy,
+    InvalidProfile, Profile, SaliencePolicy,
 };

@@ -3,19 +3,18 @@
 use enton_core::{Budget, Drive, DriveTable, Ignition, Millis};
 
 #[test]
-fn reserve_is_a_floor_for_ordinary_spending_not_an_extra_balance() {
-    let mut budget = Budget::new(4.0, 2.0);
-    assert!(budget.try_spend(2.0, false));
-    assert!(!budget.try_spend(0.1, false));
-    assert!(budget.try_spend(2.0, true));
-    assert!(!budget.try_spend(0.1, true));
+fn spending_stops_at_zero_and_never_overdraws() {
+    let mut budget = Budget::new(4.0);
+    assert!(budget.try_spend(2.0));
+    assert!(budget.try_spend(2.0));
+    assert!(!budget.try_spend(0.1));
     assert!(budget.available.abs() < f32::EPSILON);
 }
 
 #[test]
 fn refill_is_proportional_to_elapsed_time_and_capped() {
-    let mut budget = Budget::new(4.0, 1.0);
-    assert!(budget.try_spend(4.0, true));
+    let mut budget = Budget::new(4.0);
+    assert!(budget.try_spend(4.0));
     budget.refill(900_000, 4.0);
     assert!((budget.available - 1.0).abs() < f32::EPSILON);
     budget.refill(u64::MAX, 4.0);
@@ -24,11 +23,11 @@ fn refill_is_proportional_to_elapsed_time_and_capped() {
 
 #[test]
 fn invalid_costs_and_rates_do_not_create_energy() {
-    let mut budget = Budget::new(4.0, 1.0);
-    assert!(budget.try_spend(2.0, false));
+    let mut budget = Budget::new(4.0);
+    assert!(budget.try_spend(2.0));
     let previous = budget;
     for invalid in [-1.0, f32::NAN, f32::INFINITY] {
-        assert!(!budget.try_spend(invalid, true));
+        assert!(!budget.try_spend(invalid));
         budget.refill(3_600_000, invalid);
         assert_eq!(budget, previous);
     }

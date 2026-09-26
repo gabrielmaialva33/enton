@@ -15,9 +15,9 @@ pub struct Economy {
 }
 impl Economy {
     pub(crate) fn from_profile(profile: &Profile) -> Result<Self, Error> {
-        let capacity = f64::from(profile.obligation_budget_per_hour)
-            + f64::from(profile.discretionary_budget_per_hour);
-        let thought_cost = f64::from(profile.think_cost);
+        let capacity = f64::from(profile.budgets.obligation_budget_per_hour)
+            + f64::from(profile.budgets.discretionary_budget_per_hour);
+        let thought_cost = f64::from(profile.budgets.think_cost);
         if !capacity.is_finite()
             || capacity <= 0.0
             || !thought_cost.is_finite()

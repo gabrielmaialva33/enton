@@ -1,319 +1,16 @@
-//! The deterministic brainstem reducer and its hardware profiles.
+//! The deterministic brainstem reducer.
 
 use serde::{Deserialize, Serialize};
 
+use crate::profile::{InvalidProfile, Profile};
 use crate::{
     Abstention, Action, Budget, DriveTable, Event, Ignition, Millis, PriceTable, Reason, SpeechCue,
     ThoughtId, UtteranceId,
 };
 
-/// Hardware-specific scaffold policy. Prices are provisional budget units.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Profile {
-    /// Human-readable identifier for this profile.
-    pub name: String,
-    /// Enter torpor at or above this temperature, in degrees Celsius.
-    pub fever_c: f32,
-    /// Enter torpor at or below this normalized battery charge.
-    pub lethargy_battery: f32,
-    /// Cost to buy one thought.
-    pub think_cost: f32,
-    /// Both the hourly refill rate and the maximum budget balance (legacy alias).
-    pub budget_per_hour: f32,
-    /// Fraction protected from non-keyword thoughts (legacy alias).
-    pub reserve_fraction: f32,
-    /// Hourly budget refill rate and capacity for directed obligation turns (`Keyword`, `FollowUp`, timeout `Attend`).
-    pub obligation_budget_per_hour: f32,
-    /// Hourly budget refill rate and capacity for discretionary thoughts (`Drive`, undirected `Speech`).
-    pub discretionary_budget_per_hour: f32,
-    /// Minimum salience required to ignite a thought.
-    pub threshold: f32,
-    /// Threshold for discretionary non-addressed speech (`Reason::Speech`).
-    pub discretionary_threshold: f32,
-    /// Amount to subtract from threshold on firing, prevents cascade.
-    pub hysteresis: f32,
-    /// Milliseconds between allowable ignitions of different thoughts.
-    pub cooldown_ms: u64,
-    /// Exponential moving average smoothing factor.
-    pub ema_alpha: f32,
-    /// Duration in milliseconds for an active attention window when addressed.
-    pub attention_ms: u64,
-    /// Cues with keyword shorter than this are treated as keyword-only turns (ms).
-    pub keyword_only_ms: u32,
-    /// Minimal VAD confidence required to trigger a follow-up inside attention window.
-    pub follow_up_min_vad: f32,
-    /// Minimum voice similarity for a follow-up, continuation or non-keyword barge-in
-    /// to count as the addressed speaker. Cues without speaker verification pass.
-    #[serde(default = "default_follow_up_min_speaker_sim")]
-    pub follow_up_min_speaker_sim: f32,
-    /// Weight of VAD confidence in base speech salience.
-    pub salience_vad_weight: f32,
-    /// Weight of signal energy in base speech salience.
-    pub salience_energy_weight: f32,
-    /// Weight of duration in base speech salience.
-    pub salience_duration_weight: f32,
-    /// Maximum duration normalization cap in milliseconds.
-    pub salience_duration_max_ms: u32,
-    /// Half-life in milliseconds for habituation decay on tick.
-    pub habituation_decay_half_life_ms: u64,
-    /// Step increase in habituation on similar non-addressed cues.
-    pub habituation_step: f32,
-    /// Weight of prediction error in novelty salience bonus.
-    pub novelty_weight: f32,
-    /// Maximum novelty bonus added to salience.
-    pub novelty_max: f32,
-    /// Cues with similarity above this cutoff contribute to habituation.
-    #[serde(default = "default_similarity_cutoff")]
-    pub similarity_cutoff: f32,
-    /// Learning rate for updating the running cue expectation on new cues.
-    #[serde(default = "default_expectation_coefficient")]
-    pub expectation_coefficient: f32,
-    /// Half-life in milliseconds of long-term habituation, which survives quiet gaps
-    /// that erase the fast component (a TV that pauses for a minute is still a TV).
-    #[serde(default = "default_slow_habituation_half_life_ms")]
-    pub slow_habituation_half_life_ms: u64,
-    /// Fraction of each fast habituation increment that also accrues long-term.
-    #[serde(default = "default_slow_habituation_rate")]
-    pub slow_habituation_rate: f32,
-    /// Duration in milliseconds for echo reverberation hangover after playback finishes.
-    #[serde(default = "default_echo_hangover_ms")]
-    pub echo_hangover_ms: u64,
-    /// Conservative initial speaker-to-mic coupling ceiling before empirical adaptation.
-    #[serde(default = "default_echo_initial_energy")]
-    pub echo_initial_energy: f32,
-    /// Required energy excess (near-end acoustic dominance) for double-talk detection over loudspeaker output.
-    #[serde(default = "default_echo_barge_in_margin")]
-    pub echo_barge_in_margin: f32,
-    /// Minimum energy margin over expected echo for unpredicted keywords, rejecting TTS phonetic false positives.
-    #[serde(default = "default_keyword_barge_in_margin")]
-    pub keyword_barge_in_margin: f32,
-    /// Exponential moving average coefficient alpha for tracking dynamic volume changes across an utterance.
-    #[serde(default = "default_echo_learning_rate")]
-    pub echo_learning_rate: f32,
-    /// Watchdog timeout bounds maximum unbroken vocalization before forcing playback termination.
-    #[serde(default = "default_max_playback_ms")]
-    pub max_playback_ms: u64,
-}
-
-fn default_follow_up_min_speaker_sim() -> f32 {
-    0.6
-}
-
-fn default_similarity_cutoff() -> f32 {
-    0.4
-}
-
-fn default_expectation_coefficient() -> f32 {
-    0.25
-}
-
-fn default_slow_habituation_half_life_ms() -> u64 {
-    1_200_000
-}
-
-fn default_slow_habituation_rate() -> f32 {
-    0.1
-}
-
-fn default_echo_hangover_ms() -> u64 {
-    200
-}
-
-fn default_echo_initial_energy() -> f32 {
-    0.75
-}
-
-fn default_echo_barge_in_margin() -> f32 {
-    0.15
-}
-
-fn default_keyword_barge_in_margin() -> f32 {
-    0.0
-}
-
-fn default_echo_learning_rate() -> f32 {
-    0.20
-}
-
-fn default_max_playback_ms() -> u64 {
-    15_000
-}
-
 fn default_echo_energy_expectation() -> f32 {
     0.75
 }
-
-impl Profile {
-    /// Conservative defaults for the resource-constrained Acer reference.
-    /// Thermal limits must be calibrated before deployment on another device.
-    #[must_use]
-    pub fn t1_ref() -> Self {
-        Self {
-            name: "t1-ref".to_owned(),
-            fever_c: 80.0,
-            lethargy_battery: 0.1,
-            think_cost: 1.0,
-            budget_per_hour: 12.0,
-            reserve_fraction: 0.25,
-            obligation_budget_per_hour: 120.0,
-            discretionary_budget_per_hour: 12.0,
-            threshold: 0.7,
-            discretionary_threshold: 0.7,
-            hysteresis: 0.1,
-            cooldown_ms: 10_000,
-            ema_alpha: 0.1,
-            attention_ms: 5_000,
-            keyword_only_ms: 900,
-            follow_up_min_vad: 0.5,
-            follow_up_min_speaker_sim: 0.6,
-            salience_vad_weight: 0.60,
-            salience_energy_weight: 0.25,
-            salience_duration_weight: 0.15,
-            salience_duration_max_ms: 1_000,
-            habituation_decay_half_life_ms: 30_000,
-            habituation_step: 0.35,
-            novelty_weight: 0.10,
-            novelty_max: 0.05,
-            similarity_cutoff: 0.4,
-            expectation_coefficient: 0.25,
-            slow_habituation_half_life_ms: 1_200_000,
-            slow_habituation_rate: 0.1,
-            echo_hangover_ms: 200,
-            echo_initial_energy: 0.75,
-            echo_barge_in_margin: 0.15,
-            keyword_barge_in_margin: 0.0,
-            echo_learning_rate: 0.20,
-            max_playback_ms: 15_000,
-        }
-    }
-
-    /// Provisional desktop policy with a larger thought allowance.
-    #[must_use]
-    pub fn desktop() -> Self {
-        Self {
-            name: "desktop".to_owned(),
-            fever_c: 90.0,
-            lethargy_battery: 0.05,
-            think_cost: 1.0,
-            budget_per_hour: 60.0,
-            reserve_fraction: 0.1,
-            obligation_budget_per_hour: 300.0,
-            discretionary_budget_per_hour: 60.0,
-            threshold: 0.65,
-            discretionary_threshold: 0.65,
-            hysteresis: 0.1,
-            cooldown_ms: 5_000,
-            ema_alpha: 0.2,
-            attention_ms: 5_000,
-            keyword_only_ms: 900,
-            follow_up_min_vad: 0.45,
-            follow_up_min_speaker_sim: 0.6,
-            salience_vad_weight: 0.60,
-            salience_energy_weight: 0.25,
-            salience_duration_weight: 0.15,
-            salience_duration_max_ms: 1_000,
-            habituation_decay_half_life_ms: 15_000,
-            habituation_step: 0.20,
-            novelty_weight: 0.10,
-            novelty_max: 0.05,
-            similarity_cutoff: 0.4,
-            expectation_coefficient: 0.25,
-            slow_habituation_half_life_ms: 600_000,
-            slow_habituation_rate: 0.1,
-            echo_hangover_ms: 150,
-            echo_initial_energy: 0.70,
-            echo_barge_in_margin: 0.15,
-            keyword_barge_in_margin: 0.0,
-            echo_learning_rate: 0.20,
-            max_playback_ms: 20_000,
-        }
-    }
-
-    /// Validates that all profile parameters are within allowable ranges.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InvalidProfile`] if any parameter is out of range.
-    pub fn validate(&self) -> Result<(), InvalidProfile> {
-        let valid = self.fever_c.is_finite()
-            && (0.0..=1.0).contains(&self.lethargy_battery)
-            && self.think_cost.is_finite()
-            && self.think_cost >= 0.0
-            && self.budget_per_hour.is_finite()
-            && self.budget_per_hour >= 0.0
-            && (0.0..=1.0).contains(&self.reserve_fraction)
-            && self.obligation_budget_per_hour.is_finite()
-            && self.obligation_budget_per_hour >= 0.0
-            && self.discretionary_budget_per_hour.is_finite()
-            && self.discretionary_budget_per_hour >= 0.0
-            && self.threshold.is_finite()
-            && self.threshold > 0.0
-            && self.discretionary_threshold.is_finite()
-            && self.discretionary_threshold > 0.0
-            && (0.0..self.threshold).contains(&self.hysteresis)
-            && self.ema_alpha > 0.0
-            && self.ema_alpha <= 1.0
-            && self.attention_ms > 0
-            && self.keyword_only_ms > 0
-            && (0.0..=1.0).contains(&self.follow_up_min_vad)
-            && (0.0..=1.0).contains(&self.follow_up_min_speaker_sim)
-            && self.salience_vad_weight.is_finite()
-            && self.salience_vad_weight > 0.0
-            && self.salience_energy_weight.is_finite()
-            && self.salience_energy_weight >= 0.0
-            && self.salience_duration_weight.is_finite()
-            && self.salience_duration_weight >= 0.0
-            && self.salience_duration_max_ms > 0
-            && self.habituation_decay_half_life_ms > 0
-            && self.habituation_step.is_finite()
-            && self.habituation_step >= 0.0
-            && self.slow_habituation_half_life_ms > 0
-            && (0.0..=1.0).contains(&self.slow_habituation_rate)
-            && self.novelty_weight.is_finite()
-            && self.novelty_weight >= 0.0
-            && self.novelty_max.is_finite()
-            && self.novelty_max >= 0.0
-            && (0.0..=1.0).contains(&self.similarity_cutoff)
-            && (0.0..=1.0).contains(&self.expectation_coefficient)
-            && self.expectation_coefficient > 0.0
-            && self.echo_hangover_ms > 0
-            && (0.0..=1.0).contains(&self.echo_initial_energy)
-            && self.echo_barge_in_margin.is_finite()
-            && self.echo_barge_in_margin >= 0.0
-            && self.keyword_barge_in_margin.is_finite()
-            && self.keyword_barge_in_margin >= 0.0
-            && (0.0..=1.0).contains(&self.echo_learning_rate)
-            && self.echo_learning_rate > 0.0
-            && self.max_playback_ms > 0;
-
-        if valid {
-            Ok(())
-        } else {
-            Err(InvalidProfile {
-                name: self.name.clone(),
-            })
-        }
-    }
-}
-
-/// Error returned when an organism profile fails validation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InvalidProfile {
-    /// Name of the invalid profile.
-    pub name: String,
-}
-
-impl std::fmt::Display for InvalidProfile {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "invalid organism profile '{}': a parameter is out of range",
-            self.name
-        )
-    }
-}
-
-impl std::error::Error for InvalidProfile {}
 
 /// Running expectation of recent cues for novelty detection (RFC P5).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -398,19 +95,19 @@ impl Organism {
     /// Returns [`InvalidProfile`] if the profile fails validation.
     pub fn new(profile: Profile) -> Result<Self, InvalidProfile> {
         profile.validate()?;
-        let echo_initial_energy = profile.echo_initial_energy;
+        let echo_initial_energy = profile.echo.echo_initial_energy;
         Ok(Self {
             drives: DriveTable::default_m1(),
             prices: PriceTable {
-                think: profile.think_cost,
+                think: profile.budgets.think_cost,
             },
-            obligation_budget: Budget::new(profile.obligation_budget_per_hour, 0.0),
-            discretionary_budget: Budget::new(profile.discretionary_budget_per_hour, 0.0),
+            obligation_budget: Budget::new(profile.budgets.obligation_budget_per_hour),
+            discretionary_budget: Budget::new(profile.budgets.discretionary_budget_per_hour),
             ignition: Ignition::new(
-                profile.threshold,
-                profile.hysteresis,
-                profile.cooldown_ms,
-                profile.ema_alpha,
+                profile.ignition.threshold,
+                profile.ignition.hysteresis,
+                profile.ignition.cooldown_ms,
+                profile.ignition.ema_alpha,
             ),
             profile,
             last_tick: Millis(0),
@@ -535,10 +232,10 @@ impl Organism {
             Event::Body { signals, .. } => {
                 self.torpor = signals
                     .temperature_c
-                    .is_some_and(|value| value >= self.profile.fever_c)
+                    .is_some_and(|value| value >= self.profile.body.fever_c)
                     || signals
                         .battery
-                        .is_some_and(|value| value <= self.profile.lethargy_battery);
+                        .is_some_and(|value| value <= self.profile.body.lethargy_battery);
                 Vec::new()
             }
             Event::Speech { now, cue } => vec![self.speech(*now, cue)],
@@ -547,7 +244,8 @@ impl Organism {
                 self.self_speech_has_keyword = contains_keyword_word(text, "enton");
                 if Some(*thought) == self.conversation_thought {
                     self.conversation_thought = None;
-                    let new_until = Millis(now.0.saturating_add(self.profile.attention_ms));
+                    let new_until =
+                        Millis(now.0.saturating_add(self.profile.attention.attention_ms));
                     if new_until > self.last_tick {
                         self.attention_until = Some(match self.attention_until {
                             Some(current) => current.max(new_until),
@@ -573,14 +271,16 @@ impl Organism {
                     && active == *utterance
                 {
                     let hangover_until =
-                        Millis(now.0.saturating_add(self.profile.echo_hangover_ms));
+                        Millis(now.0.saturating_add(self.profile.echo.echo_hangover_ms));
                     self.playback_status = PlaybackStatus::Hangover {
                         utterance: *utterance,
                         until: hangover_until,
                     };
                     if self.speaking_for_obligation {
                         self.attention_until = Some(Millis(
-                            hangover_until.0.saturating_add(self.profile.attention_ms),
+                            hangover_until
+                                .0
+                                .saturating_add(self.profile.attention.attention_ms),
                         ));
                     }
                 }
@@ -592,7 +292,7 @@ impl Organism {
     fn advance_playback_status(&mut self, now: Millis) {
         match self.playback_status {
             PlaybackStatus::Speaking { started_at, .. } => {
-                if now.since(started_at) >= self.profile.max_playback_ms {
+                if now.since(started_at) >= self.profile.echo.max_playback_ms {
                     // Watchdog: terminate playback to prevent permanent deafness
                     self.playback_status = PlaybackStatus::Idle;
                     self.self_speech_has_keyword = false;
@@ -611,7 +311,7 @@ impl Organism {
     fn is_in_echo_period(&self, now: Millis) -> bool {
         match self.playback_status {
             PlaybackStatus::Speaking { started_at, .. } => {
-                now.since(started_at) < self.profile.max_playback_ms
+                now.since(started_at) < self.profile.echo.max_playback_ms
             }
             PlaybackStatus::Hangover { until, .. } => now < until,
             PlaybackStatus::Idle => false,
@@ -626,21 +326,21 @@ impl Organism {
             // 1. Metabolic updates applied BEFORE any decision at this timestamp (A7)
             self.drives.advance(dt_ms);
             self.obligation_budget
-                .refill(dt_ms, self.profile.obligation_budget_per_hour);
+                .refill(dt_ms, self.profile.budgets.obligation_budget_per_hour);
             self.discretionary_budget
-                .refill(dt_ms, self.profile.discretionary_budget_per_hour);
+                .refill(dt_ms, self.profile.budgets.discretionary_budget_per_hour);
             self.ignition.advance(self.drives.pressure());
 
             // Decay both habituation components with their half-lives on tick
             self.habituation = decay(
                 self.habituation,
                 dt_ms,
-                self.profile.habituation_decay_half_life_ms,
+                self.profile.habituation.habituation_decay_half_life_ms,
             );
             self.slow_habituation = decay(
                 self.slow_habituation,
                 dt_ms,
-                self.profile.slow_habituation_half_life_ms,
+                self.profile.habituation.slow_habituation_half_life_ms,
             );
         }
 
@@ -699,16 +399,17 @@ impl Organism {
         let is_barge_in = if cue.keyword {
             if self.self_speech_has_keyword {
                 // Predicted keyword in self-speech: requires full double-talk margin
-                norm_energy > self.echo_energy_expectation + self.profile.echo_barge_in_margin
+                norm_energy > self.echo_energy_expectation + self.profile.echo.echo_barge_in_margin
             } else {
                 // Unpredicted keyword: requires reduced margin over expected echo to reject TTS phonetic false positives
-                norm_energy >= self.echo_energy_expectation + self.profile.keyword_barge_in_margin
+                norm_energy
+                    >= self.echo_energy_expectation + self.profile.echo.keyword_barge_in_margin
             }
         } else {
             // Non-keyword speech cue: requires full double-talk margin, minimal follow-up VAD
             // and the addressed speaker's voice (anyone may still interrupt by name)
-            norm_energy > self.echo_energy_expectation + self.profile.echo_barge_in_margin
-                && norm_vad >= self.profile.follow_up_min_vad
+            norm_energy > self.echo_energy_expectation + self.profile.echo.echo_barge_in_margin
+                && norm_vad >= self.profile.attention.follow_up_min_vad
                 && self.is_addressed_speaker(cue)
         };
 
@@ -716,7 +417,7 @@ impl Organism {
             // Stimulus rejected as self-echo: adapt forward model on rejected cues only,
             // guarding against non-finite (NaN, inf) values from upstream audio bugs.
             if cue.energy.is_finite() {
-                let alpha = self.profile.echo_learning_rate;
+                let alpha = self.profile.echo.echo_learning_rate;
                 self.echo_energy_expectation = (self.echo_energy_expectation
                     + alpha * (norm_energy - self.echo_energy_expectation))
                     .clamp(0.0, 1.0);
@@ -746,7 +447,7 @@ impl Organism {
             | PlaybackStatus::Hangover { utterance, .. } => utterance,
             PlaybackStatus::Idle => UtteranceId(0),
         };
-        let hangover_until = Millis(now.0.saturating_add(self.profile.echo_hangover_ms));
+        let hangover_until = Millis(now.0.saturating_add(self.profile.echo.echo_hangover_ms));
         self.playback_status = PlaybackStatus::Hangover {
             utterance,
             until: hangover_until,
@@ -760,7 +461,9 @@ impl Organism {
 
         if cue.keyword {
             let base_salience = self.calculate_base_salience(norm_energy, norm_vad, norm_dur) + 1.0;
-            self.attention_until = Some(Millis(now.0.saturating_add(self.profile.attention_ms)));
+            self.attention_until = Some(Millis(
+                now.0.saturating_add(self.profile.attention.attention_ms),
+            ));
             let action = self.pay_and_think_obligation(now, Reason::Keyword, base_salience);
             if let Action::Think { thought, .. } = action {
                 self.conversation_thought = Some(thought);
@@ -776,7 +479,9 @@ impl Organism {
                 why: Abstention::Torpor,
             };
         }
-        self.attention_until = Some(Millis(now.0.saturating_add(self.profile.attention_ms)));
+        self.attention_until = Some(Millis(
+            now.0.saturating_add(self.profile.attention.attention_ms),
+        ));
         let action = self.pay_and_think_obligation(now, Reason::FollowUp, salience);
         if let Action::Think { thought, .. } = action {
             self.conversation_thought = Some(thought);
@@ -789,8 +494,10 @@ impl Organism {
 
         let norm_energy = normalized(cue.energy);
         let norm_vad = normalized(cue.vad_confidence);
-        let norm_dur = (cue.duration_ms.min(self.profile.salience_duration_max_ms) as f32)
-            / (self.profile.salience_duration_max_ms as f32);
+        let norm_dur = (cue
+            .duration_ms
+            .min(self.profile.salience.salience_duration_max_ms) as f32)
+            / (self.profile.salience.salience_duration_max_ms as f32);
 
         if self.is_in_echo_period(now) {
             return self.speech_during_echo(now, cue, norm_energy, norm_vad, norm_dur);
@@ -803,8 +510,8 @@ impl Organism {
         if cue.keyword {
             let base_salience = self.calculate_base_salience(norm_energy, norm_vad, norm_dur) + 1.0;
             // Addressed speech is never habituated
-            if cue.duration_ms < self.profile.keyword_only_ms {
-                let until = Millis(now.0.saturating_add(self.profile.attention_ms));
+            if cue.duration_ms < self.profile.attention.keyword_only_ms {
+                let until = Millis(now.0.saturating_add(self.profile.attention.attention_ms));
                 self.attention_until = Some(until);
                 self.pending_attend = Some(PendingAttend {
                     until,
@@ -815,7 +522,9 @@ impl Organism {
             }
 
             self.pending_attend = None;
-            self.attention_until = Some(Millis(now.0.saturating_add(self.profile.attention_ms)));
+            self.attention_until = Some(Millis(
+                now.0.saturating_add(self.profile.attention.attention_ms),
+            ));
             // Keyword bypasses torpor and non-keyword cooldown; spends obligation_budget
             let action = self.pay_and_think_obligation(now, Reason::Keyword, base_salience);
             if let Action::Think { thought, .. } = action {
@@ -838,7 +547,7 @@ impl Organism {
             }
             // Addressed speech is never habituated
             if let Some(pending) = self.pending_attend.take() {
-                if norm_vad < self.profile.follow_up_min_vad {
+                if norm_vad < self.profile.attention.follow_up_min_vad {
                     // Not valid continuation: restore pending attend and record abstention
                     self.pending_attend = Some(pending);
                     let salience = self.calculate_base_salience(norm_energy, norm_vad, norm_dur);
@@ -853,8 +562,9 @@ impl Organism {
                 let continuation_salience =
                     self.calculate_base_salience(norm_energy, norm_vad, norm_dur);
                 let combined_salience = pending.salience.max(continuation_salience + 1.0);
-                self.attention_until =
-                    Some(Millis(now.0.saturating_add(self.profile.attention_ms)));
+                self.attention_until = Some(Millis(
+                    now.0.saturating_add(self.profile.attention.attention_ms),
+                ));
                 let action = self.pay_and_think_obligation(now, Reason::Keyword, combined_salience);
                 if let Action::Think { thought, .. } = action {
                     self.conversation_thought = Some(thought);
@@ -871,7 +581,7 @@ impl Organism {
                     why: Abstention::Torpor,
                 };
             }
-            if norm_vad < self.profile.follow_up_min_vad {
+            if norm_vad < self.profile.attention.follow_up_min_vad {
                 return Action::Abstain {
                     reason: Reason::FollowUp,
                     salience,
@@ -883,8 +593,9 @@ impl Organism {
             let action = self.pay_and_think_obligation(now, Reason::FollowUp, salience);
             if let Action::Think { thought, .. } = action {
                 self.conversation_thought = Some(thought);
-                self.attention_until =
-                    Some(Millis(now.0.saturating_add(self.profile.attention_ms)));
+                self.attention_until = Some(Millis(
+                    now.0.saturating_add(self.profile.attention.attention_ms),
+                ));
             }
             return action;
         }
@@ -904,32 +615,32 @@ impl Organism {
             self.update_novelty_and_similarity(norm_energy, norm_vad, norm_dur);
 
         // A sufficient prediction error resets habituation (A9)
-        if similarity <= self.profile.similarity_cutoff {
+        if similarity <= self.profile.habituation.similarity_cutoff {
             self.habituation = 0.0;
         }
 
         let base_salience = self.calculate_base_salience(norm_energy, norm_vad, norm_dur);
         let salience_with_novelty = if norm_vad <= 0.4 {
             // Sound with VAD <= 0.4 never reaches threshold
-            base_salience.min(self.profile.discretionary_threshold - 0.01)
+            base_salience.min(self.profile.ignition.discretionary_threshold - 0.01)
         } else {
             base_salience + novelty
         };
 
         // Habituation suppresses in proportion to similarity with habituated expectation (A9).
         // The long-term component is stimulus-specific: it never touches a novel cue.
-        let familiar = similarity > self.profile.similarity_cutoff;
+        let familiar = similarity > self.profile.habituation.similarity_cutoff;
         let long_term = if familiar { self.slow_habituation } else { 0.0 };
         let suppression = (self.habituation + long_term).min(1.0) * similarity;
         let effective_salience = (salience_with_novelty - suppression).max(0.0);
 
         // Update habituation for subsequent cues if stimulus is similar to running expectation
         if familiar {
-            let hab_inc =
-                (similarity - self.profile.similarity_cutoff) * self.profile.habituation_step;
+            let hab_inc = (similarity - self.profile.habituation.similarity_cutoff)
+                * self.profile.habituation.habituation_step;
             self.habituation = (self.habituation + hab_inc).clamp(0.0, 1.0);
             self.slow_habituation = (self.slow_habituation
-                + hab_inc * self.profile.slow_habituation_rate)
+                + hab_inc * self.profile.habituation.slow_habituation_rate)
                 .clamp(0.0, 1.0);
         }
 
@@ -941,7 +652,7 @@ impl Organism {
             };
         }
 
-        if salience_with_novelty < self.profile.discretionary_threshold {
+        if salience_with_novelty < self.profile.ignition.discretionary_threshold {
             return Action::Abstain {
                 reason: Reason::Speech,
                 salience: effective_salience,
@@ -957,7 +668,7 @@ impl Organism {
             };
         }
 
-        if effective_salience < self.profile.discretionary_threshold {
+        if effective_salience < self.profile.ignition.discretionary_threshold {
             return Action::Abstain {
                 reason: Reason::Speech,
                 salience: effective_salience,
@@ -971,13 +682,13 @@ impl Organism {
     /// Whether a cue may speak for the current turn: a matching voice, or no verification.
     fn is_addressed_speaker(&self, cue: &SpeechCue) -> bool {
         cue.speaker_sim
-            .is_none_or(|sim| sim >= self.profile.follow_up_min_speaker_sim)
+            .is_none_or(|sim| sim >= self.profile.attention.follow_up_min_speaker_sim)
     }
 
     fn calculate_base_salience(&self, norm_energy: f32, norm_vad: f32, norm_dur: f32) -> f32 {
-        self.profile.salience_vad_weight * norm_vad
-            + self.profile.salience_energy_weight * norm_energy
-            + self.profile.salience_duration_weight * norm_dur
+        self.profile.salience.salience_vad_weight * norm_vad
+            + self.profile.salience.salience_energy_weight * norm_energy
+            + self.profile.salience.salience_duration_weight * norm_dur
     }
 
     fn update_novelty_and_similarity(
@@ -992,9 +703,10 @@ impl Organism {
             let diff_dur = (norm_dur - exp.dur).abs();
             let error = (diff_energy + diff_vad + diff_dur) / 3.0;
             let similarity = (1.0 - error).clamp(0.0, 1.0);
-            let novelty = (error * self.profile.novelty_weight).min(self.profile.novelty_max);
+            let novelty = (error * self.profile.salience.novelty_weight)
+                .min(self.profile.salience.novelty_max);
 
-            let alpha = self.profile.expectation_coefficient;
+            let alpha = self.profile.habituation.expectation_coefficient;
             exp.energy += alpha * (norm_energy - exp.energy);
             exp.vad += alpha * (norm_vad - exp.vad);
             exp.dur += alpha * (norm_dur - exp.dur);
@@ -1006,12 +718,12 @@ impl Organism {
                 vad: norm_vad,
                 dur: norm_dur,
             });
-            (self.profile.novelty_max, 0.0)
+            (self.profile.salience.novelty_max, 0.0)
         }
     }
 
     fn pay_and_think_obligation(&mut self, now: Millis, reason: Reason, salience: f32) -> Action {
-        if !self.obligation_budget.try_spend(self.prices.think, true) {
+        if !self.obligation_budget.try_spend(self.prices.think) {
             return Action::Abstain {
                 reason,
                 salience,
@@ -1035,7 +747,7 @@ impl Organism {
         reason: Reason,
         salience: f32,
     ) -> Action {
-        if !self.discretionary_budget.try_spend(self.prices.think, true) {
+        if !self.discretionary_budget.try_spend(self.prices.think) {
             return Action::Abstain {
                 reason,
                 salience,
@@ -1088,7 +800,7 @@ mod tests {
         assert!(Profile::desktop().validate().is_ok());
 
         let mut invalid = Profile::t1_ref();
-        invalid.hysteresis = invalid.threshold;
+        invalid.ignition.hysteresis = invalid.ignition.threshold;
         assert_eq!(
             invalid.validate(),
             Err(InvalidProfile {

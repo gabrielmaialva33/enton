@@ -4,11 +4,12 @@ use super::support::{assert_abstention, assert_thought, sensitive_profile, speec
 
 #[test]
 fn directed_requests_served_when_discretionary_zeroed() {
-    let mut organism = Organism::new(Profile {
-        obligation_budget_per_hour: 10.0,
-        discretionary_budget_per_hour: 0.0,
-        cooldown_ms: 0,
-        ..Profile::t1_ref()
+    let mut organism = Organism::new({
+        let mut profile = Profile::t1_ref();
+        profile.budgets.obligation_budget_per_hour = 10.0;
+        profile.budgets.discretionary_budget_per_hour = 0.0;
+        profile.ignition.cooldown_ms = 0;
+        profile
     })
     .unwrap();
     // Directed turns: Keyword and FollowUp succeed despite discretionary being 0
@@ -27,11 +28,12 @@ fn directed_requests_served_when_discretionary_zeroed() {
 
 #[test]
 fn optional_thoughts_never_spend_obligation() {
-    let mut organism = Organism::new(Profile {
-        obligation_budget_per_hour: 2.0,
-        discretionary_budget_per_hour: 10.0,
-        cooldown_ms: 0,
-        ..Profile::t1_ref()
+    let mut organism = Organism::new({
+        let mut profile = Profile::t1_ref();
+        profile.budgets.obligation_budget_per_hour = 2.0;
+        profile.budgets.discretionary_budget_per_hour = 10.0;
+        profile.ignition.cooldown_ms = 0;
+        profile
     })
     .unwrap();
     // Discretionary speech spends discretionary budget
@@ -47,11 +49,12 @@ fn optional_thoughts_never_spend_obligation() {
 
 #[test]
 fn only_new_tick_time_refills_the_budget() {
-    let mut organism = Organism::new(Profile {
-        obligation_budget_per_hour: 2.0,
-        discretionary_budget_per_hour: 0.0,
-        cooldown_ms: 0,
-        ..Profile::t1_ref()
+    let mut organism = Organism::new({
+        let mut profile = Profile::t1_ref();
+        profile.budgets.obligation_budget_per_hour = 2.0;
+        profile.budgets.discretionary_budget_per_hour = 0.0;
+        profile.ignition.cooldown_ms = 0;
+        profile
     })
     .unwrap();
     organism.step(&speech(0, true));
@@ -97,11 +100,9 @@ fn only_new_tick_time_refills_the_budget() {
 
 #[test]
 fn a_ready_drive_cannot_spend_a_keyword_only_budget() {
-    let mut organism = Organism::new(Profile {
-        discretionary_budget_per_hour: 0.0,
-        ..sensitive_profile()
-    })
-    .unwrap();
+    let mut profile = sensitive_profile();
+    profile.budgets.discretionary_budget_per_hour = 0.0;
+    let mut organism = Organism::new(profile).unwrap();
     assert_abstention(
         &organism.step(&Event::Tick {
             now: Millis(3_600_000),
@@ -117,10 +118,11 @@ fn a_ready_drive_cannot_spend_a_keyword_only_budget() {
 
 #[test]
 fn a7_timeout_spends_after_elapsed_refill_without_intermediate_ticks() {
-    let profile = Profile {
-        obligation_budget_per_hour: 1.0,
-        think_cost: 1.0,
-        ..Profile::t1_ref()
+    let profile = {
+        let mut profile = Profile::t1_ref();
+        profile.budgets.obligation_budget_per_hour = 1.0;
+        profile.budgets.think_cost = 1.0;
+        profile
     };
     let mut organism = Organism::new(profile).unwrap();
 
@@ -170,10 +172,11 @@ fn a7_timeout_spends_after_elapsed_refill_without_intermediate_ticks() {
 
 #[test]
 fn a7_timeout_spends_after_elapsed_refill_with_intermediate_ticks() {
-    let profile = Profile {
-        obligation_budget_per_hour: 1.0,
-        think_cost: 1.0,
-        ..Profile::t1_ref()
+    let profile = {
+        let mut profile = Profile::t1_ref();
+        profile.budgets.obligation_budget_per_hour = 1.0;
+        profile.budgets.think_cost = 1.0;
+        profile
     };
     let mut organism = Organism::new(profile).unwrap();
 

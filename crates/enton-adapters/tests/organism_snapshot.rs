@@ -258,7 +258,7 @@ fn corrupt_unknown_format_and_mismatched_profiles_do_not_fall_back() {
     organism.step(&event);
     soul.save_organism_snapshot(seq, &organism).unwrap();
     let mut changed = Profile::t1_ref();
-    changed.attention_ms += 1;
+    changed.attention.attention_ms += 1;
     assert!(matches!(
         soul.replay_organism(&changed),
         Err(Error::Json(_))
@@ -281,8 +281,8 @@ fn snapshots_preserve_custom_profile_names_and_policy() {
     let soul = Soul::open(directory.database(), SoulConfig::default()).unwrap();
     let mut profile = Profile::t1_ref();
     profile.name = "custom-owned-policy".into();
-    profile.obligation_budget_per_hour = 17.0;
-    profile.attention_ms = 2345;
+    profile.budgets.obligation_budget_per_hour = 17.0;
+    profile.attention.attention_ms = 2345;
     let mut organism = Organism::new(profile.clone()).unwrap();
     let event = speech(123, true, 300);
     let seq = soul.append_event(&event).unwrap();
@@ -360,7 +360,7 @@ fn replay_organism_rejects_invalid_profile() {
     let directory = TestDirectory::new();
     let soul = Soul::open(directory.database(), SoulConfig::default()).unwrap();
     let mut invalid = Profile::t1_ref();
-    invalid.hysteresis = invalid.threshold;
+    invalid.ignition.hysteresis = invalid.ignition.threshold;
     assert!(matches!(
         soul.replay_organism(&invalid),
         Err(Error::InvalidProfile(_))

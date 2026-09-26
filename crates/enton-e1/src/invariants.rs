@@ -117,7 +117,7 @@ impl Watch {
             return Err(self.violation(event, "habituation and echo levels stay within [0, 1]"));
         }
         let profile = organism.profile();
-        let reach = profile.attention_ms + profile.echo_hangover_ms;
+        let reach = profile.attention.attention_ms + profile.echo.echo_hangover_ms;
         if organism
             .attention_until()
             .is_some_and(|until| until.0 > organism.last_seen().0.saturating_add(reach))

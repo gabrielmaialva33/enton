@@ -151,6 +151,96 @@ impl ControllerResult {
     }
 }
 
+/// Which sensor readings reach the controllers. A tape always carries every reading;
+/// a sensor that is off is stripped at the policy boundary, from exogenous and feedback
+/// cues alike, so an ablation never changes the tape itself.
+// One independent on/off switch per sensor, which is what an ablation varies: the
+// flags are not the states of one machine, the case this pedantic lint guards against.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Sensors {
+    /// Speaker verification against the owner's voiceprint (`speaker_sim`).
+    pub speaker: bool,
+    /// Live voice versus loudspeaker audio tagger (`media`).
+    pub media: bool,
+    /// End-of-turn model (`turn_complete`).
+    pub turn: bool,
+    /// Device-directedness detector (`directed`). Off by default: it needs
+    /// speech-to-text inside the window and about 0.5 s of CPU per segment for a 4B
+    /// model, so it is a desktop-first sensor.
+    pub directed: bool,
+}
+
+impl Sensors {
+    /// The sensors every E1 report has used: speaker, media and end of turn.
+    pub const DEFAULT: Self = Self {
+        speaker: true,
+        media: true,
+        turn: true,
+        directed: false,
+    };
+
+    /// The default sensors plus the device-directedness detector.
+    pub const WITH_DIRECTED: Self = Self {
+        directed: true,
+        ..Self::DEFAULT
+    };
+
+    /// The cue as the controllers perceive it: readings of a sensor that is off
+    /// become `None`, what a cue without that sensor carries.
+    #[must_use]
+    pub fn sense(self, cue: SpeechCue) -> SpeechCue {
+        SpeechCue {
+            speaker_sim: cue.speaker_sim.filter(|_| self.speaker),
+            media: cue.media.filter(|_| self.media),
+            turn_complete: cue.turn_complete.filter(|_| self.turn),
+            directed: cue.directed.filter(|_| self.directed),
+            ..cue
+        }
+    }
+
+    /// The event as the controllers perceive it (see [`Sensors::sense`]).
+    #[must_use]
+    pub fn perceive(self, event: &Event) -> Event {
+        match event {
+            Event::Speech { now, cue } => Event::Speech {
+                now: *now,
+                cue: self.sense(*cue),
+            },
+            other => other.clone(),
+        }
+    }
+
+    fn names(self) -> Vec<&'static str> {
+        [
+            (self.speaker, "speaker verification"),
+            (self.media, "media tagger"),
+            (self.turn, "end of turn"),
+            (self.directed, "directedness"),
+        ]
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect()
+    }
+}
+
+impl Default for Sensors {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+impl std::fmt::Display for Sensors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names = self.names();
+        if names.is_empty() {
+            f.write_str("none")
+        } else {
+            f.write_str(&names.join(", "))
+        }
+    }
+}
+
 /// Three independently executed controllers on one versioned exogenous tape.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ExperimentRun {
@@ -160,6 +250,8 @@ pub struct ExperimentRun {
     pub kind: TapeKind,
     /// Tape seed.
     pub seed: u64,
+    /// Sensor readings that reached the controllers.
+    pub sensors: Sensors,
     /// Identical account/price contract for all controllers.
     pub economy: Economy,
     /// Organism result.
@@ -170,30 +262,38 @@ pub struct ExperimentRun {
     pub fixed_window: ControllerResult,
 }
 
-/// Run all three policies on the same validated tape without audio, network or models.
-/// Returns errors on resource overflow or a violated shared-budget invariant.
+/// Run all three policies on the same validated tape without audio, network or models,
+/// with the default sensors. Returns errors on resource overflow or a violated
+/// shared-budget invariant.
 pub fn run_tape(tape: &Tape) -> Result<ExperimentRun, Error> {
-    run_tape_with(tape, &Profile::t1_ref())
+    run_tape_with(tape, &Profile::t1_ref(), Sensors::DEFAULT)
 }
 
-/// Run one tape with a candidate organism profile, for calibration sweeps on
-/// calibration seeds. The comparators and the shared account keep the reference
-/// profile, so only the organism differs between candidates.
+/// Run one tape with a candidate organism profile and a sensor set, for calibration
+/// sweeps and ablations on calibration seeds. The comparators and the shared account
+/// keep the reference profile, so only the organism differs between candidates; every
+/// controller perceives the same sensors.
 ///
 /// # Errors
 ///
 /// Returns an error if the tape is invalid or a limit is exceeded.
-pub fn run_tape_with(tape: &Tape, organism_profile: &Profile) -> Result<ExperimentRun, Error> {
+pub fn run_tape_with(
+    tape: &Tape,
+    organism_profile: &Profile,
+    sensors: Sensors,
+) -> Result<ExperimentRun, Error> {
     let profile = Profile::t1_ref();
     let economy = Economy::from_profile(&profile)?;
+    let run = |controller, profile| run_controller(tape, controller, profile, economy, sensors);
     Ok(ExperimentRun {
         version: BENCHMARK_VERSION.into(),
         kind: tape.kind(),
         seed: tape.seed(),
+        sensors,
         economy,
-        organism: run_controller(tape, Controller::Organism, organism_profile, economy)?,
-        simple: run_controller(tape, Controller::Simple, &profile, economy)?,
-        fixed_window: run_controller(tape, Controller::FixedWindow, &profile, economy)?,
+        organism: run(Controller::Organism, organism_profile)?,
+        simple: run(Controller::Simple, &profile)?,
+        fixed_window: run(Controller::FixedWindow, &profile)?,
     })
 }
 
@@ -238,6 +338,8 @@ const SELF_ECHO_SPEAKER_SIM: f32 = 0.15;
 const SELF_ECHO_MEDIA: f32 = 0.4;
 /// Enton speaks whole sentences.
 const SELF_ECHO_TURN_COMPLETE: f32 = 0.8;
+/// Enton's replies are addressed to the owner, not to Enton: clearly undirected.
+const SELF_ECHO_DIRECTED: f32 = 0.15;
 
 struct Feedback {
     pending: BTreeMap<(Millis, u64), Record>,
@@ -306,6 +408,7 @@ impl Feedback {
                         speaker_sim: Some(SELF_ECHO_SPEAKER_SIM),
                         media: Some(SELF_ECHO_MEDIA),
                         turn_complete: Some(SELF_ECHO_TURN_COMPLETE),
+                        directed: Some(SELF_ECHO_DIRECTED),
                     },
                 },
                 annotation: Annotation::Speech {
@@ -405,6 +508,7 @@ struct Execution<'a> {
     economy: Economy,
     tape: &'a Tape,
     segment_sources: BTreeMap<SegmentId, Stimulus>,
+    sensors: Sensors,
 }
 impl<'a> Execution<'a> {
     fn new(
@@ -413,6 +517,7 @@ impl<'a> Execution<'a> {
         economy: Economy,
         tape: &'a Tape,
         horizon: Millis,
+        sensors: Sensors,
     ) -> Result<Self, Error> {
         let mut segment_sources = BTreeMap::new();
         for r in tape.records() {
@@ -432,6 +537,7 @@ impl<'a> Execution<'a> {
             economy,
             tape,
             segment_sources,
+            sensors,
         })
     }
 
@@ -487,8 +593,10 @@ impl<'a> Execution<'a> {
         let now = record.event.now();
         self.account.advance(now);
         self.feedback.observe_barge_in(record, &mut self.result);
-        // Only Event crosses the policy boundary. No labels, segment IDs or turns.
-        let actions = self.machine.step(&record.event, self.account.can_pay())?;
+        // Only Event crosses the policy boundary. No labels, segment IDs or turns, and
+        // no reading of a sensor that is off.
+        let event = self.sensors.perceive(&record.event);
+        let actions = self.machine.step(&event, self.account.can_pay())?;
         let attending = self.machine.attending();
         if record.annotation.turn().is_some() {
             self.count_turn_segment_decision(&actions);
@@ -622,6 +730,7 @@ fn run_controller(
     controller: Controller,
     profile: &Profile,
     economy: Economy,
+    sensors: Sensors,
 ) -> Result<ControllerResult, Error> {
     let horizon = Millis(tape.duration().0 + 12_000);
     let drain = (1..=12).map(|second| Record {
@@ -631,7 +740,7 @@ fn run_controller(
         annotation: Annotation::Clock,
     });
     let mut events = tape.records().iter().cloned().chain(drain).peekable();
-    let mut execution = Execution::new(controller, profile, economy, tape, horizon)?;
+    let mut execution = Execution::new(controller, profile, economy, tape, horizon, sensors)?;
     let mut processed = 0;
     loop {
         let endogenous = match (events.peek(), execution.feedback.pending.first_key_value()) {
@@ -685,6 +794,7 @@ mod tests {
                     speaker_sim: None,
                     media: None,
                     turn_complete: None,
+                    directed: None,
                 },
             },
             annotation: Annotation::Speech {
@@ -771,8 +881,15 @@ mod tests {
         let tape = fixture(true);
         let profile = Profile::t1_ref();
         let economy = Economy::from_profile(&profile).unwrap();
-        let mut e =
-            Execution::new(Controller::Simple, &profile, economy, &tape, Millis(15_000)).unwrap();
+        let mut e = Execution::new(
+            Controller::Simple,
+            &profile,
+            economy,
+            &tape,
+            Millis(15_000),
+            Sensors::DEFAULT,
+        )
+        .unwrap();
         let record = tape.records().first().unwrap();
         e.paid_thought(record, ThoughtId(1), Reason::Keyword, false)
             .unwrap();
@@ -951,6 +1068,7 @@ mod tests {
                         speaker_sim: None,
                         media: None,
                         turn_complete: None,
+                        directed: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -971,6 +1089,7 @@ mod tests {
                         speaker_sim: None,
                         media: None,
                         turn_complete: None,
+                        directed: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -991,6 +1110,7 @@ mod tests {
                         speaker_sim: None,
                         media: None,
                         turn_complete: None,
+                        directed: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -1069,6 +1189,7 @@ mod admission_tests {
                         speaker_sim: None,
                         media: None,
                         turn_complete: None,
+                        directed: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -1119,6 +1240,7 @@ mod admission_tests {
                         speaker_sim: None,
                         media: None,
                         turn_complete: None,
+                        directed: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -1144,8 +1266,14 @@ mod admission_tests {
             refill_per_hour: 2.0,
             thought_cost: 1.0,
         };
-        let result =
-            run_controller(&tape, Controller::Simple, &Profile::t1_ref(), economy).unwrap();
+        let result = run_controller(
+            &tape,
+            Controller::Simple,
+            &Profile::t1_ref(),
+            economy,
+            Sensors::DEFAULT,
+        )
+        .unwrap();
         assert_eq!(result.paid_calls, 2);
         assert_eq!(result.rejected_obligations, 1);
         assert!(result.final_balance < 1.0);
@@ -1214,5 +1342,240 @@ mod admission_tests {
         }
         assert_eq!(result.barge_in_segments, 2);
         assert_eq!(result.overlapping_barge_in_segments, 1);
+    }
+}
+
+#[cfg(test)]
+mod ablation_tests {
+    use super::*;
+    use crate::{Report, Summary, e1a, e1b};
+
+    /// 64-bit FNV-1a, enough to fingerprint a tape or a result against a known answer.
+    struct Fnv(u64);
+    impl Fnv {
+        fn new() -> Self {
+            Self(0xcbf2_9ce4_8422_2325)
+        }
+        fn bytes(&mut self, bytes: &[u8]) {
+            for byte in bytes {
+                self.0 ^= u64::from(*byte);
+                self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+        fn u64(&mut self, value: u64) {
+            self.bytes(&value.to_le_bytes());
+        }
+        fn f32(&mut self, value: f32) {
+            self.u64(u64::from(value.to_bits()));
+        }
+        fn reading(&mut self, value: Option<f32>) {
+            self.u64(value.map_or(u64::MAX, |x| u64::from(x.to_bits())));
+        }
+    }
+
+    /// Every field a tape of benchmark 3.0.0 had: timing, features, the three
+    /// original readings, annotations, turns and conditions. Not the directedness
+    /// reading, which 3.0.0 did not have.
+    fn fingerprint(tape: &Tape) -> u64 {
+        let mut h = Fnv::new();
+        for record in tape.records() {
+            h.u64(record.event.now().0);
+            match (&record.event, &record.annotation) {
+                (
+                    Event::Speech { cue, .. },
+                    Annotation::Speech {
+                        segment,
+                        episode,
+                        source,
+                        pause_style,
+                    },
+                ) => {
+                    h.f32(cue.energy);
+                    h.u64(u64::from(cue.duration_ms));
+                    h.f32(cue.vad_confidence);
+                    h.u64(u64::from(cue.keyword));
+                    h.reading(cue.speaker_sim);
+                    h.reading(cue.media);
+                    h.reading(cue.turn_complete);
+                    h.u64(u64::from(segment.0));
+                    h.u64(episode.map_or(u64::MAX, |e| u64::from(e.0)));
+                    h.bytes(format!("{source:?}").as_bytes());
+                    h.reading(*pause_style);
+                }
+                _ => h.u64(0),
+            }
+        }
+        for turn in tape.turns() {
+            h.u64(u64::from(turn.id.0));
+            for segment in &turn.segments {
+                h.u64(u64::from(segment.0));
+            }
+            h.u64(turn.available_at.0);
+            h.u64(turn.deadline.0);
+        }
+        for c in tape.conditions() {
+            h.bytes(format!("{:?}{:?}{:?}", c.distance, c.tv, c.tv_content).as_bytes());
+            h.f32(c.acoustics);
+            h.f32(c.show);
+        }
+        h.0
+    }
+
+    /// Every controller's full result, as the JSON report writes it.
+    fn results(run: &ExperimentRun) -> u64 {
+        let mut h = Fnv::new();
+        for result in [&run.organism, &run.simple, &run.fixed_window] {
+            h.bytes(serde_json::to_string(result).unwrap().as_bytes());
+        }
+        h.0
+    }
+
+    #[test]
+    fn the_default_sensors_reproduce_benchmark_3_0_0_exactly() {
+        // Known answers computed with the benchmark 3.0.0 generator and reducer v9
+        // (commit e54e8bf) through the same fingerprints: the new stream moved no other
+        // reading, and a run without the detector decides every call as v9 did.
+        for (seed, tapes, outcomes) in [
+            (
+                7,
+                [0x8c07_f602_b73b_bf00, 0x5090_69ff_e027_008b],
+                [0x8c80_8877_938d_d6cd, 0xb04d_2f78_5781_6f6f],
+            ),
+            (
+                42,
+                [0x931b_93da_b8ea_fac2, 0x4d66_ddc9_dc28_49c4],
+                [0xad0d_7822_cec3_7b65, 0x5f7c_40bd_f7d6_26f7],
+            ),
+        ] {
+            let pair = [e1a(seed).unwrap(), e1b(seed).unwrap()];
+            for ((tape, fingerprinted), outcome) in pair.iter().zip(tapes).zip(outcomes) {
+                assert_eq!(fingerprint(tape), fingerprinted, "seed {seed} tape");
+                let run = run_tape(tape).unwrap();
+                assert_eq!(run.sensors, Sensors::DEFAULT);
+                assert_eq!(results(&run), outcome, "seed {seed} results");
+            }
+        }
+    }
+
+    #[test]
+    fn sensors_that_are_off_are_stripped_and_the_rest_pass_untouched() {
+        let cue = SpeechCue {
+            energy: 0.7,
+            duration_ms: 900,
+            vad_confidence: 0.8,
+            keyword: true,
+            speaker_sim: Some(0.6),
+            media: Some(0.2),
+            turn_complete: Some(0.9),
+            directed: Some(0.95),
+        };
+        assert_eq!(
+            Sensors::DEFAULT.sense(cue),
+            SpeechCue {
+                directed: None,
+                ..cue
+            }
+        );
+        assert_eq!(Sensors::WITH_DIRECTED.sense(cue), cue);
+        let none = Sensors {
+            speaker: false,
+            media: false,
+            turn: false,
+            directed: false,
+        };
+        assert_eq!(
+            none.sense(cue),
+            SpeechCue {
+                speaker_sim: None,
+                media: None,
+                turn_complete: None,
+                directed: None,
+                ..cue
+            }
+        );
+        let tick = Event::Tick { now: Millis(5) };
+        assert_eq!(none.perceive(&tick), tick);
+        assert_eq!(
+            Sensors::DEFAULT.perceive(&Event::Speech {
+                now: Millis(1_000),
+                cue
+            }),
+            Event::Speech {
+                now: Millis(1_000),
+                cue: Sensors::DEFAULT.sense(cue)
+            }
+        );
+        // Enton's own echo carries a reading too, stripped by the same boundary.
+        let mut feedback = Feedback::new(Millis(10_000));
+        feedback.reply(Millis(1_000), ThoughtId(1)).unwrap();
+        let echoes: Vec<_> = feedback
+            .pending
+            .values()
+            .filter_map(|record| match record.event {
+                Event::Speech { cue, .. } => Some(cue),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(echoes.len(), 2);
+        for echo in echoes {
+            assert_eq!(echo.directed, Some(SELF_ECHO_DIRECTED));
+            assert_eq!(Sensors::DEFAULT.sense(echo).directed, None);
+        }
+        assert_eq!(none.to_string(), "none");
+        assert_eq!(
+            Sensors::WITH_DIRECTED.to_string(),
+            "speaker verification, media tagger, end of turn, directedness"
+        );
+    }
+
+    #[test]
+    fn only_the_organism_hears_the_detector_and_reports_say_so() {
+        let (a, b) = (e1a(42).unwrap(), e1b(42).unwrap());
+        let profile = Profile::t1_ref();
+        let without = [
+            run_tape_with(&a, &profile, Sensors::DEFAULT).unwrap(),
+            run_tape_with(&b, &profile, Sensors::DEFAULT).unwrap(),
+        ];
+        let with = [
+            run_tape_with(&a, &profile, Sensors::WITH_DIRECTED).unwrap(),
+            run_tape_with(&b, &profile, Sensors::WITH_DIRECTED).unwrap(),
+        ];
+        // The comparators read no sensor: the same calls either way.
+        for (off, on) in without.iter().zip(&with) {
+            assert_eq!(off.simple, on.simple);
+            assert_eq!(off.fixed_window, on.fixed_window);
+            assert_eq!(on.sensors, Sensors::WITH_DIRECTED);
+        }
+        assert_ne!(without[0].organism.thoughts, with[0].organism.thoughts);
+
+        let [a_off, b_off] = without;
+        let [a_on, b_on] = with;
+        // A report pairs runs that perceived the same sensors, and says which.
+        assert!(Report::new(a_off.clone(), b_on.clone()).is_err());
+        let off = Report::new(a_off, b_off).unwrap();
+        let on = Report::new(a_on, b_on).unwrap();
+        assert!(
+            off.to_string()
+                .contains("Sensors: speaker verification, media tagger, end of turn\n")
+        );
+        assert!(
+            on.to_string().contains(
+                "Sensors: speaker verification, media tagger, end of turn, directedness\n"
+            )
+        );
+        let json = serde_json::to_value(&on).unwrap();
+        assert_eq!(json["sensors"]["directed"], serde_json::Value::Bool(true));
+        assert_eq!(
+            json["e1a"]["sensors"]["directed"],
+            serde_json::Value::Bool(true)
+        );
+        // So does a summary, which never pools different sensor sets.
+        let summary = Summary::from_reports(std::slice::from_ref(&on)).unwrap();
+        assert!(
+            summary
+                .to_string()
+                .contains("sensors: speaker verification, media tagger, end of turn, directedness")
+        );
+        assert!(Summary::from_reports(&[off, on]).is_err());
     }
 }

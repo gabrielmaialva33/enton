@@ -295,6 +295,7 @@ mod tests {
                     speaker_sim: None,
                     media: None,
                     turn_complete: None,
+                    directed: None,
                 },
             },
             annotation: Annotation::Speech {

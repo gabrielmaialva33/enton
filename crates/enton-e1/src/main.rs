@@ -1,11 +1,13 @@
 //! Bounded CLI for calibration and the freeze owner's explicit held-out evaluation.
 // A binary owns its terminal output; only libraries must not print.
 #![allow(clippy::print_stdout, clippy::print_stderr)]
-use enton_e1::{BENCHMARK_VERSION, Error, Report, Summary, e1a, e1b, run_tape};
+use enton_core::Profile;
+use enton_e1::{BENCHMARK_VERSION, Error, Report, Sensors, Summary, e1a, e1b, run_tape_with};
 
 #[derive(Debug, PartialEq, Eq)]
 struct Cli {
     seeds: Vec<u64>,
+    sensors: Sensors,
     json: bool,
     summary: bool,
     help: bool,
@@ -36,6 +38,7 @@ fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, Error> {
     let mut args = args.into_iter();
     let mut seeds = vec![42];
     let mut held_out = false;
+    let mut sensors = Sensors::DEFAULT;
     let mut json = false;
     let mut summary = false;
     let mut help = false;
@@ -48,6 +51,7 @@ fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, Error> {
                 seeds = parse_seeds(&value)?;
             }
             "--held-out" => held_out = true,
+            "--with-directed" => sensors = Sensors::WITH_DIRECTED,
             "--json" => json = true,
             "--summary" => summary = true,
             "--help" | "-h" => help = true,
@@ -68,6 +72,7 @@ fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, Error> {
     }
     Ok(Cli {
         seeds,
+        sensors,
         json,
         summary,
         help,
@@ -77,14 +82,21 @@ fn execute() -> Result<(), Error> {
     let cli = parse_cli(std::env::args().skip(1))?;
     if cli.help {
         println!(
-            "E1 benchmark {BENCHMARK_VERSION}\nUsage: e1-sim [--seed N | --seeds A..=B | --seeds A,B] [--json] [--summary] [--held-out]\nRanges are inclusive, at most 32 seeds. Calibration seeds: 0 to 999. Held-out mode is reserved for the frozen-manifest owner."
+            "E1 benchmark {BENCHMARK_VERSION}\nUsage: e1-sim [--seed N | --seeds A..=B | --seeds A,B] [--with-directed] [--json] [--summary] [--held-out]\nRanges are inclusive, at most 32 seeds. Calibration seeds: 0 to 999. Held-out mode is reserved for the frozen-manifest owner.\nSensors: speaker verification, media tagger and end of turn; --with-directed adds the simulated device-directedness detector."
         );
         return Ok(());
     }
+    let profile = Profile::t1_ref();
+    let report = |seed| {
+        Report::new(
+            run_tape_with(&e1a(seed)?, &profile, cli.sensors)?,
+            run_tape_with(&e1b(seed)?, &profile, cli.sensors)?,
+        )
+    };
     if cli.summary {
         let mut reports = Vec::with_capacity(cli.seeds.len());
-        for seed in cli.seeds {
-            reports.push(Report::new(run_tape(&e1a(seed)?)?, run_tape(&e1b(seed)?)?)?);
+        for &seed in &cli.seeds {
+            reports.push(report(seed)?);
         }
         let summary = Summary::from_reports(&reports)?;
         if cli.json {
@@ -93,8 +105,8 @@ fn execute() -> Result<(), Error> {
             println!("{summary}");
         }
     } else {
-        for seed in cli.seeds {
-            let report = Report::new(run_tape(&e1a(seed)?)?, run_tape(&e1b(seed)?)?)?;
+        for &seed in &cli.seeds {
+            let report = report(seed)?;
             if cli.json {
                 println!("{}", serde_json::to_string(&report)?);
             } else {
@@ -137,5 +149,16 @@ mod tests {
         let cli_json_summary = parse_cli(["--summary".into(), "--json".into()]).unwrap();
         assert!(cli_json_summary.summary);
         assert!(cli_json_summary.json);
+    }
+
+    #[test]
+    fn the_directedness_detector_runs_only_when_asked() {
+        assert_eq!(
+            parse_cli(["--seed=1".into()]).unwrap().sensors,
+            Sensors::DEFAULT
+        );
+        let with = parse_cli(["--with-directed".into(), "--seed=1".into()]).unwrap();
+        assert_eq!(with.sensors, Sensors::WITH_DIRECTED);
+        assert!(with.sensors.directed);
     }
 }

@@ -99,6 +99,7 @@ mod tests {
                 speaker_sim: None,
                 media: None,
                 turn_complete: None,
+                directed: None,
             },
         };
         assert!(matches!(
@@ -129,6 +130,7 @@ mod tests {
                 speaker_sim: None,
                 media: None,
                 turn_complete: None,
+                directed: None,
             },
         };
         assert!(matches!(
@@ -153,6 +155,7 @@ mod tests {
                 speaker_sim: None,
                 media: None,
                 turn_complete: None,
+                directed: None,
             },
         }
     }

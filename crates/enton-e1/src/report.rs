@@ -1,6 +1,6 @@
 //! Original RFC criteria first; synthetic proxies cannot establish a full E1 PASS.
 use crate::tape::{ConditionKey, Distance, TvBackground};
-use crate::{BENCHMARK_VERSION, ControllerResult, Error, ExperimentRun, TapeKind};
+use crate::{BENCHMARK_VERSION, ControllerResult, Error, ExperimentRun, Sensors, TapeKind};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt};
 
@@ -389,6 +389,8 @@ impl Criterion {
 pub struct Report {
     /// Distribution/scoring version, always printed.
     pub version: &'static str,
+    /// Sensor readings that reached the controllers, always printed.
+    pub sensors: Sensors,
     /// Original criteria in RFC order.
     pub criteria: Vec<Criterion>,
     /// Never Pass while any required criterion is unmeasured.
@@ -407,9 +409,10 @@ impl Report {
             || e1b.version != BENCHMARK_VERSION
             || e1a.seed != e1b.seed
             || e1a.economy != e1b.economy
+            || e1a.sensors != e1b.sensors
         {
             return Err(Error::Invalid(
-                "report requires matching-version/seed/economy E1a and E1b runs".into(),
+                "report requires matching-version/seed/economy/sensors E1a and E1b runs".into(),
             ));
         }
         for (run, total) in [(&e1a, 100), (&e1b, 10)] {
@@ -480,6 +483,7 @@ impl Report {
         let overall = overall_status(&criteria);
         Ok(Self {
             version: BENCHMARK_VERSION,
+            sensors: e1a.sensors,
             criteria,
             overall,
             e1a,
@@ -615,6 +619,7 @@ impl fmt::Display for Report {
             "E1 benchmark {} | seed {} | synthetic cue experiment",
             self.version, self.e1a.seed
         )?;
+        writeln!(f, "Sensors: {}", self.sensors)?;
         writeln!(f, "Original RFC §7 criteria (unchanged):")?;
         for criterion in &self.criteria {
             writeln!(
@@ -742,6 +747,8 @@ pub struct CriterionSummary {
 pub struct Summary {
     /// Benchmark protocol version.
     pub version: &'static str,
+    /// Sensor readings that reached the controllers, the same for every seed.
+    pub sensors: Sensors,
     /// Evaluated seeds in order.
     pub seeds: Vec<u64>,
     /// Criteria pass/fail/not-evaluated counts across seeds.
@@ -781,11 +788,14 @@ impl Summary {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Invalid`] if `reports` is empty.
+    /// Returns [`Error::Invalid`] if `reports` is empty or mixes sensor sets.
     pub fn from_reports(reports: &[Report]) -> Result<Self, Error> {
         let first = reports
             .first()
             .ok_or_else(|| Error::Invalid("empty reports for summary".into()))?;
+        if reports.iter().any(|report| report.sensors != first.sensors) {
+            return Err(Error::Invalid("summary mixes sensor sets".into()));
+        }
 
         let seeds: Vec<u64> = reports.iter().map(|r| r.e1a.seed).collect();
 
@@ -868,6 +878,7 @@ impl Summary {
 
         Ok(Self {
             version: first.version,
+            sensors: first.sensors,
             seeds,
             criteria,
             e1a_served_requests,
@@ -938,6 +949,7 @@ impl fmt::Display for Summary {
             self.seeds.len(),
             self.seeds
         )?;
+        writeln!(f, "Benchmark {} | sensors: {}", self.version, self.sensors)?;
         writeln!(
             f,
             "Original RFC §7 criteria over {} seeds:",

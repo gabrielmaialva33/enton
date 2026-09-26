@@ -1,4 +1,4 @@
-//! Protocol 3.0.0 populations. Deliberately does not import the cognitive Profile.
+//! Protocol 3.1.0 populations. Deliberately does not import the cognitive Profile.
 
 use crate::Error;
 use crate::tape::{
@@ -82,6 +82,182 @@ pub const TV_VAD_JITTER: f32 = 0.05;
 /// Stream salt for the independent environmental and talker condition RNG stream.
 const CONDITION_STREAM_SALT: u64 = 0x434f_4e44_5f53_3130;
 
+/// Stream salt for the independent device-directedness RNG stream. The per-owner
+/// factor, the per-block habits and every cue's reading are drawn from it alone, so
+/// adding the sensor moved no reading of the other three.
+const DIRECTED_STREAM_SALT: u64 = 0x4449_5245_4354_5331;
+
+/// Scores that split the simulated directedness detector's output into three bands:
+/// clearly addressed to someone else below the first, ambiguous up to the second and
+/// clearly addressed to Enton from it on. A score is uniform inside its band.
+pub const DIRECTED_BAND_EDGES: [f32; 2] = [0.30, 0.75];
+/// Chance that the owner's asides in a three-minute block are entangled with the
+/// conversation with Enton ("anota aí também o sabão em pó"): command-shaped, so a
+/// detector reads them as addressed to it.
+pub const ENTANGLED_BLOCK_RATE: f32 = 0.25;
+/// Share of an entangled block's asides that score as clearly addressed to Enton.
+pub const ENTANGLED_ASIDE_DIRECTED: f32 = 0.35;
+/// Share of any other block's asides that score as clearly addressed to Enton.
+pub const PLAIN_ASIDE_DIRECTED: f32 = 0.04;
+/// Chance that the owner talks to Enton casually in a block, as to a person in the room.
+pub const CASUAL_BLOCK_RATE: f32 = 0.2;
+/// Share of a casual block's 1 to 3 s requests that do not score as clearly addressed.
+pub const CASUAL_REQUEST_MISSED: f32 = 0.35;
+/// Share of any other block's 1 to 3 s requests that do not score as clearly addressed.
+pub const PLAIN_REQUEST_MISSED: f32 = 0.10;
+/// Spread, in natural-log units, of the per-owner factor on the owner's confusable
+/// shares: some people talk to devices and to people alike.
+pub const OWNER_CONFUSION_SD: f32 = 0.35;
+/// Clearly-directed share of a TV line that the media tagger missed (media below
+/// 0.5): dialogue that passes for a live voice passes for a request more often too.
+pub const MISSED_TV_DIRECTED: f32 = 0.15;
+/// Share of 1 to 3 s requests that do not score as clearly addressed, over all blocks:
+/// the casual and plain rates average to it, and other durations scale by the same ratio.
+const REQUEST_MISSED: f32 = 0.15;
+
+/// Who a speech cue is addressed to, as a directedness detector is scored on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Addressee {
+    /// The owner talking to Enton: requests, follow-ups, barge-ins and the name itself.
+    Enton,
+    /// The owner talking to someone else in the room.
+    Aside,
+    /// Another person, including one who says the name to someone else.
+    OtherPerson,
+    /// A TV (or radio) voice.
+    Tv,
+    /// Not speech: household noise, a motor, ventilation.
+    NoSpeech,
+}
+
+impl Addressee {
+    fn of(source: Stimulus) -> Self {
+        match source {
+            Stimulus::Request(_) | Stimulus::BargeIn(_) => Self::Enton,
+            Stimulus::Aside => Self::Aside,
+            Stimulus::OtherSpeech | Stimulus::FalseKeyword => Self::OtherPerson,
+            Stimulus::Tv => Self::Tv,
+            // Enton's own echo never reaches a tape; the runner gives it a fixed reading.
+            Stimulus::Noise | Stimulus::Motor | Stimulus::Ventilation | Stimulus::SelfEcho => {
+                Self::NoSpeech
+            }
+        }
+    }
+
+    /// Which bands, low to high, are the owner's mistakes for this addressee.
+    fn confusable(self) -> Option<[bool; 3]> {
+        match self {
+            Self::Enton => Some([true, true, false]),
+            Self::Aside => Some([false, true, true]),
+            Self::OtherPerson | Self::Tv | Self::NoSpeech => None,
+        }
+    }
+}
+
+/// Hidden habits of one three-minute block that correlate directedness errors in it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct AddressHabits {
+    /// The owner's asides are entangled with the conversation with Enton.
+    entangled: bool,
+    /// The owner talks to Enton casually.
+    casual: bool,
+}
+
+impl AddressHabits {
+    fn draw(rng: &mut SplitMix64) -> Self {
+        let entangled = rng.real(0.0, 1.0) < ENTANGLED_BLOCK_RATE;
+        let casual = rng.real(0.0, 1.0) < CASUAL_BLOCK_RATE;
+        Self { entangled, casual }
+    }
+}
+
+/// Band shares, low to high (clearly addressed to someone else, ambiguous, clearly
+/// addressed to Enton), of the conservative directedness profile for one cue, before
+/// the per-owner factor. Rows depend on duration: under 1 s, 1 to 3 s, over 3 s.
+fn directed_shares(
+    addressee: Addressee,
+    duration_ms: u32,
+    habits: AddressHabits,
+    media: f32,
+) -> [f32; 3] {
+    let short = duration_ms < 1_000;
+    let long = duration_ms > 3_000;
+    match addressee {
+        Addressee::Enton => {
+            let [undirected, ambiguous, _] = if short {
+                [0.07, 0.18, 0.75]
+            } else {
+                [0.05, 0.10, 0.85]
+            };
+            let missed = if habits.casual {
+                CASUAL_REQUEST_MISSED
+            } else {
+                PLAIN_REQUEST_MISSED
+            };
+            let scale = missed / REQUEST_MISSED;
+            [
+                undirected * scale,
+                ambiguous * scale,
+                1.0 - (undirected + ambiguous) * scale,
+            ]
+        }
+        Addressee::Aside => {
+            let row = if short {
+                [0.60, 0.28, 0.12]
+            } else if long {
+                [0.80, 0.08, 0.12]
+            } else {
+                [0.70, 0.18, 0.12]
+            };
+            let directed = if habits.entangled {
+                ENTANGLED_ASIDE_DIRECTED
+            } else {
+                PLAIN_ASIDE_DIRECTED
+            };
+            with_directed_share(row, directed)
+        }
+        Addressee::OtherPerson => {
+            if long {
+                [0.85, 0.07, 0.08]
+            } else {
+                [0.75, 0.17, 0.08]
+            }
+        }
+        Addressee::Tv => {
+            let row = [0.80, 0.12, 0.08];
+            if media < 0.5 {
+                with_directed_share(row, MISSED_TV_DIRECTED)
+            } else {
+                row
+            }
+        }
+        Addressee::NoSpeech => [1.0, 0.0, 0.0],
+    }
+}
+
+/// The shares with the clearly-directed one set to `directed` and the other two
+/// scaled in proportion to fill the rest.
+fn with_directed_share(shares: [f32; 3], directed: f32) -> [f32; 3] {
+    let [undirected, ambiguous, _] = shares;
+    let scale = (1.0 - directed) / (undirected + ambiguous);
+    [undirected * scale, ambiguous * scale, directed]
+}
+
+/// The shares with the owner's confusable ones multiplied by `factor`, renormalized.
+fn with_owner_factor(shares: [f32; 3], addressee: Addressee, factor: f32) -> [f32; 3] {
+    let Some(confusable) = addressee.confusable() else {
+        return shares;
+    };
+    let mut scaled = shares;
+    for (share, confused) in scaled.iter_mut().zip(confusable) {
+        if confused {
+            *share *= factor;
+        }
+    }
+    let total: f32 = scaled.iter().sum();
+    scaled.map(|share| share / total)
+}
+
 /// Linearly interpolate in `log2(duration_ms)` between anchors at 750, 1500 and 3000 ms,
 /// holding end values outside [750, 3000].
 #[must_use]
@@ -147,8 +323,13 @@ struct Builder {
     speaker_rng: SplitMix64,
     media_rng: SplitMix64,
     turn_rng: SplitMix64,
+    directed_rng: SplitMix64,
     owner_offset: f32,
+    /// Per-owner factor on the owner's confusable directedness shares.
+    owner_confusion: f32,
     conditions: Vec<RoomCondition>,
+    /// Per-block directedness habits, drawn on the directedness stream.
+    habits: Vec<AddressHabits>,
     records: Vec<Record>,
     turns: Vec<Turn>,
     next_segment: u32,
@@ -163,14 +344,22 @@ impl Builder {
         for _ in 0..num_blocks {
             conditions.push(draw_block_condition(&mut condition_rng));
         }
+        let mut directed_rng = SplitMix64::with_seed(seed ^ DIRECTED_STREAM_SALT);
+        let owner_confusion = directed_rng.normal(0.0, OWNER_CONFUSION_SD).exp();
+        let habits = (0..num_blocks)
+            .map(|_| AddressHabits::draw(&mut directed_rng))
+            .collect();
         Self {
             rng: SplitMix64::with_seed(seed),
             condition_rng,
             speaker_rng: SplitMix64::with_seed(seed ^ SPEAKER_STREAM_SALT),
             media_rng: SplitMix64::with_seed(seed ^ MEDIA_STREAM_SALT),
             turn_rng: SplitMix64::with_seed(seed ^ TURN_STREAM_SALT),
+            directed_rng,
             owner_offset,
+            owner_confusion,
             conditions,
+            habits,
             records: Vec::new(),
             turns: Vec::new(),
             next_segment: 0,
@@ -325,6 +514,40 @@ impl Builder {
             }
         }
     }
+    /// A directedness score: a band from the cue's shares, then a uniform point in it.
+    /// `media` is the tagger's reading of the same cue, for the TV lines it missed.
+    fn draw_directed(
+        &mut self,
+        source: Stimulus,
+        duration_ms: u32,
+        media: f32,
+        block: usize,
+    ) -> f32 {
+        let addressee = Addressee::of(source);
+        let habits = self.habits.get(block).copied().unwrap_or_default();
+        let shares = with_owner_factor(
+            directed_shares(addressee, duration_ms, habits, media),
+            addressee,
+            self.owner_confusion,
+        );
+        let [undirected, ambiguous, _] = shares;
+        let [low_edge, high_edge] = DIRECTED_BAND_EDGES;
+        let roll = self.directed_rng.real(0.0, 1.0);
+        let (low, high) = if roll < undirected {
+            (0.0, low_edge)
+        } else if roll < undirected + ambiguous {
+            (low_edge, high_edge)
+        } else {
+            (high_edge, 1.0)
+        };
+        let score = self.directed_rng.real(low, high);
+        // A lower band is half-open: rounding must not carry a score onto its upper edge.
+        if high < 1.0 {
+            score.min(high.next_down())
+        } else {
+            score
+        }
+    }
     fn segment(
         &mut self,
         end: u64,
@@ -339,8 +562,10 @@ impl Builder {
             .min(self.conditions.len().saturating_sub(1));
         let cond = self.conditions.get(block_idx).copied().unwrap_or_default();
         cue.speaker_sim = Some(self.draw_speaker_sim(source, cue.duration_ms, cond));
-        cue.media = Some(self.draw_media(source, cue.duration_ms, cond));
+        let media = self.draw_media(source, cue.duration_ms, cond);
+        cue.media = Some(media);
         cue.turn_complete = Some(self.draw_turn_complete(role, cue.duration_ms, cond, pause_style));
+        cue.directed = Some(self.draw_directed(source, cue.duration_ms, media, block_idx));
         let id = SegmentId(self.next_segment);
         // All generator loops are protocol-bounded to fewer than MAX_EVENTS entries.
         self.next_segment += 1;
@@ -367,6 +592,7 @@ impl Builder {
             speaker_sim: None,
             media: None,
             turn_complete: None,
+            directed: None,
         }
     }
     fn request(
@@ -495,6 +721,7 @@ impl Builder {
             speaker_sim: None,
             media: None,
             turn_complete: None,
+            directed: None,
         };
         self.segment(
             end,
@@ -527,6 +754,7 @@ impl Builder {
             speaker_sim: None,
             media: None,
             turn_complete: None,
+            directed: None,
         };
         self.segment(
             start + u64::from(duration_ms),
@@ -564,6 +792,7 @@ impl Builder {
                     speaker_sim: None,
                     media: None,
                     turn_complete: None,
+                    directed: None,
                 },
                 episode,
                 Stimulus::Tv,
@@ -674,6 +903,7 @@ pub fn e1a(seed: u64) -> Result<Tape, Error> {
                     speaker_sim: None,
                     media: None,
                     turn_complete: None,
+                    directed: None,
                 },
                 EpisodeId(distractor + 2),
                 Stimulus::FalseKeyword,
@@ -744,6 +974,7 @@ pub fn e1b(seed: u64) -> Result<Tape, Error> {
                     speaker_sim: None,
                     media: None,
                     turn_complete: None,
+                    directed: None,
                 },
                 EpisodeId(100 + block),
                 source,
@@ -1158,6 +1389,185 @@ mod tests {
                 assert_eq!(b1.speaker_rng.next_u64(), b2.speaker_rng.next_u64());
                 assert_eq!(b1.media_rng.next_u64(), b2.media_rng.next_u64());
                 assert_eq!(b1.turn_rng.next_u64(), b2.turn_rng.next_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn directedness_draws_do_not_alter_other_streams() {
+        for seed in [0, 1, 7, 42] {
+            let mut b1 = Builder::new(seed, 3_600_000);
+            let mut b2 = Builder::new(seed, 3_600_000);
+            for _ in 0..100 {
+                b2.draw_directed(Stimulus::Aside, 1_200, 0.3, 0);
+                b2.directed_rng.next_u64();
+            }
+            for _ in 0..100 {
+                assert_eq!(b1.rng.next_u64(), b2.rng.next_u64());
+                assert_eq!(b1.condition_rng.next_u64(), b2.condition_rng.next_u64());
+                assert_eq!(b1.speaker_rng.next_u64(), b2.speaker_rng.next_u64());
+                assert_eq!(b1.media_rng.next_u64(), b2.media_rng.next_u64());
+                assert_eq!(b1.turn_rng.next_u64(), b2.turn_rng.next_u64());
+            }
+        }
+    }
+
+    /// Band shares, low to high, of `draws` readings for one kind of cue, with the
+    /// owner factor at one and each draw's block habits drawn afresh at their rates.
+    fn band_shares(source: Stimulus, duration_ms: u32, media: f32) -> [f32; 3] {
+        let draws = 20_000u32;
+        let mut b = Builder::new(47, 3_600_000);
+        b.owner_confusion = 1.0;
+        let mut counts = [0u32; 3];
+        for _ in 0..draws {
+            b.habits = vec![AddressHabits::draw(&mut b.condition_rng)];
+            let score = b.draw_directed(source, duration_ms, media, 0);
+            assert!((0.0..=1.0).contains(&score), "{score}");
+            let band = DIRECTED_BAND_EDGES
+                .iter()
+                .filter(|edge| score >= **edge)
+                .count();
+            counts[band] += 1;
+        }
+        counts.map(|count| count as f32 / draws as f32)
+    }
+
+    #[test]
+    fn directedness_band_shares_follow_the_conservative_model() {
+        let request = Stimulus::Request(TurnId(1));
+        for (what, source, duration_ms, media, expected) in [
+            ("request", request, 1_500, 0.3, [0.05, 0.10, 0.85]),
+            ("short request", request, 500, 0.3, [0.07, 0.18, 0.75]),
+            (
+                "barge-in",
+                Stimulus::BargeIn(TurnId(2)),
+                1_500,
+                0.3,
+                [0.05, 0.10, 0.85],
+            ),
+            ("aside", Stimulus::Aside, 1_200, 0.3, [0.70, 0.18, 0.12]),
+            ("short aside", Stimulus::Aside, 800, 0.3, [0.60, 0.28, 0.12]),
+            (
+                "long aside",
+                Stimulus::Aside,
+                3_500,
+                0.3,
+                [0.80, 0.08, 0.12],
+            ),
+            (
+                "other person",
+                Stimulus::OtherSpeech,
+                1_000,
+                0.3,
+                [0.75, 0.17, 0.08],
+            ),
+            (
+                "long other person",
+                Stimulus::OtherSpeech,
+                3_500,
+                0.3,
+                [0.85, 0.07, 0.08],
+            ),
+            (
+                "false keyword",
+                Stimulus::FalseKeyword,
+                250,
+                0.3,
+                [0.75, 0.17, 0.08],
+            ),
+            ("tagged TV", Stimulus::Tv, 1_500, 0.8, [0.80, 0.12, 0.08]),
+            ("missed TV", Stimulus::Tv, 1_500, 0.3, [0.739, 0.111, 0.15]),
+            ("noise", Stimulus::Noise, 500, 0.1, [1.0, 0.0, 0.0]),
+            ("motor", Stimulus::Motor, 500, 0.1, [1.0, 0.0, 0.0]),
+        ] {
+            let shares = band_shares(source, duration_ms, media);
+            for (share, want) in shares.iter().zip(expected) {
+                assert!(
+                    (share - want).abs() < 0.015,
+                    "{what}: {shares:?}, expected {expected:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn block_habits_and_the_owner_correlate_directedness_errors() {
+        let set = AddressHabits {
+            entangled: true,
+            casual: true,
+        };
+        let plain = AddressHabits::default();
+        let directed = |addressee, habits| directed_shares(addressee, 1_500, habits, 0.8)[2];
+        assert!((directed(Addressee::Aside, set) - ENTANGLED_ASIDE_DIRECTED).abs() < 1e-6);
+        assert!((directed(Addressee::Aside, plain) - PLAIN_ASIDE_DIRECTED).abs() < 1e-6);
+        assert!((1.0 - directed(Addressee::Enton, set) - CASUAL_REQUEST_MISSED).abs() < 1e-6);
+        assert!((1.0 - directed(Addressee::Enton, plain) - PLAIN_REQUEST_MISSED).abs() < 1e-6);
+        // Habits are the owner's: other people and the TV do not have them.
+        assert_eq!(
+            directed_shares(Addressee::OtherPerson, 1_500, set, 0.8).map(f32::to_bits),
+            directed_shares(Addressee::OtherPerson, 1_500, plain, 0.8).map(f32::to_bits)
+        );
+
+        // An owner twice as confusable doubles the mistaken shares before renormalizing.
+        let base = [0.05, 0.10, 0.85];
+        let owner = with_owner_factor(base, Addressee::Enton, 2.0);
+        let expected = [0.10 / 1.15, 0.20 / 1.15, 0.85 / 1.15];
+        for (got, want) in owner.iter().zip(expected) {
+            assert!((got - want).abs() < 1e-6, "{owner:?}");
+        }
+        let aside = with_owner_factor([0.70, 0.18, 0.12], Addressee::Aside, 0.5);
+        assert!((aside[0] - 0.70 / 0.85).abs() < 1e-6, "{aside:?}");
+        assert_eq!(
+            with_owner_factor(base, Addressee::Tv, 2.0).map(f32::to_bits),
+            base.map(f32::to_bits)
+        );
+    }
+
+    #[test]
+    fn habit_rates_and_the_owner_factor_follow_their_distributions() {
+        let (mut blocks, mut entangled, mut casual) = (0u32, 0u32, 0u32);
+        let mut logs = Vec::new();
+        for seed in 0..400 {
+            let b = Builder::new(seed, 3_600_000);
+            logs.push(b.owner_confusion.ln());
+            for habits in &b.habits {
+                blocks += 1;
+                entangled += u32::from(habits.entangled);
+                casual += u32::from(habits.casual);
+            }
+        }
+        assert_eq!(blocks, 8_000);
+        let entangled = entangled as f32 / blocks as f32;
+        let casual = casual as f32 / blocks as f32;
+        assert!(
+            (entangled - ENTANGLED_BLOCK_RATE).abs() < 0.02,
+            "{entangled}"
+        );
+        assert!((casual - CASUAL_BLOCK_RATE).abs() < 0.02, "{casual}");
+        let mean = logs.iter().sum::<f32>() / logs.len() as f32;
+        let sd =
+            (logs.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / (logs.len() - 1) as f32).sqrt();
+        assert!(mean.abs() < 0.06, "log owner factor mean {mean}");
+        assert!(
+            (sd - OWNER_CONFUSION_SD).abs() < 0.05,
+            "log owner factor sd {sd}"
+        );
+    }
+
+    #[test]
+    fn every_speech_cue_carries_a_directedness_reading() {
+        for tape in [e1a(3).unwrap(), e1b(3).unwrap()] {
+            for record in tape.records() {
+                if let Event::Speech { cue, .. } = record.event {
+                    let score = cue.directed.expect("every cue is read");
+                    assert!((0.0..=1.0).contains(&score));
+                    if matches!(
+                        record.annotation.source(),
+                        Some(Stimulus::Noise | Stimulus::Motor | Stimulus::Ventilation)
+                    ) {
+                        assert!(score < DIRECTED_BAND_EDGES[0], "{score}");
+                    }
+                }
             }
         }
     }

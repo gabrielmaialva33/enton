@@ -14,7 +14,7 @@ pub use report::{
     Criterion, CriterionSummary, NoiseBreakdown, NoiseReason, NoiseStimulus, Report, Status,
     Summary, WasteBreakdown, WasteKey, WasteReason, WasteStimulus, clopper_pearson_upper_bound,
 };
-pub use run::{Controller, ControllerResult, ExperimentRun, run_tape, run_tape_with};
+pub use run::{Controller, ControllerResult, ExperimentRun, Sensors, run_tape, run_tape_with};
 pub use scoring::Tally;
 pub use synth::{SplitMix64, TurnRole, e1a, e1b};
 pub use tape::{
@@ -25,7 +25,9 @@ pub use tape::{
 /// Version of distributions, feedback, attribution and the report contract.
 /// Version 3.0.0 adds asides, in-window and adjacent distractors; populations differ from 2.x;
 /// sensor readings follow measured models with per-tape, per-block and per-turn correlated errors.
-pub const BENCHMARK_VERSION: &str = "3.0.0";
+/// Version 3.1.0 adds a simulated device-directedness reading to every speech cue, drawn on its
+/// own random stream so no other reading moved; runs withhold it unless asked (see [`Sensors`]).
+pub const BENCHMARK_VERSION: &str = "3.1.0";
 
 /// Invalid experiments fail explicitly rather than dropping stimuli or granting free calls.
 #[derive(Debug, thiserror::Error)]

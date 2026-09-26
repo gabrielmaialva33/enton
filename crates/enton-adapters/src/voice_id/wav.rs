@@ -102,6 +102,12 @@ pub enum WavError {
         /// File the error refers to.
         file: String,
     },
+    /// The audio data contains non-finite sample values (NaN or infinity).
+    #[error("file '{file}' contains non-finite audio samples (NaN or infinity)")]
+    NonFiniteSample {
+        /// File the error refers to.
+        file: String,
+    },
 }
 /// The `N` bytes at `at`, or a truncation error naming `file`.
 fn field<const N: usize>(data: &[u8], at: usize, file: &str) -> Result<[u8; N], WavError> {
@@ -171,17 +177,32 @@ pub fn parse_wav_bytes(bytes: &[u8], file_name: &str) -> Result<WavAudio, WavErr
                 return Err(WavError::DataBeforeFmt { file });
             };
             let mut out = Vec::new();
-            if fmt == 1 && bits == 16 {
-                out.reserve(data.len() / 2);
-                for &c in data.as_chunks::<2>().0 {
-                    let val = i16::from_le_bytes(c);
-                    out.push(f32::from(val) / 32768.0);
+            match (fmt, bits) {
+                (1, 16) => {
+                    out.reserve(data.len() / 2);
+                    for &c in data.as_chunks::<2>().0 {
+                        let val = i16::from_le_bytes(c);
+                        out.push(f32::from(val) / 32768.0);
+                    }
                 }
-            } else if (fmt == 3 || fmt == 1) && bits == 32 {
-                out.reserve(data.len() / 4);
-                for &c in data.as_chunks::<4>().0 {
-                    out.push(f32::from_le_bytes(c));
+                (1, 32) => {
+                    out.reserve(data.len() / 4);
+                    for &c in data.as_chunks::<4>().0 {
+                        let val = i32::from_le_bytes(c);
+                        out.push(val as f32 / 2_147_483_648.0);
+                    }
                 }
+                (3, 32) => {
+                    out.reserve(data.len() / 4);
+                    for &c in data.as_chunks::<4>().0 {
+                        let val = f32::from_le_bytes(c);
+                        if !val.is_finite() {
+                            return Err(WavError::NonFiniteSample { file });
+                        }
+                        out.push(val);
+                    }
+                }
+                _ => {}
             }
             samples = Some(out);
         }
@@ -208,28 +229,14 @@ pub fn parse_wav_bytes(bytes: &[u8], file_name: &str) -> Result<WavAudio, WavErr
 mod tests {
     use super::*;
 
-    // The fixture encodes small synthetic signals whose sizes and levels fit by construction.
     #[allow(clippy::cast_possible_truncation)]
-    fn make_test_wav(
+    fn make_test_wav_from_bytes(
         sample_rate: u32,
         channels: u16,
         bits_per_sample: u16,
         format: u16,
-        samples: &[f32],
+        data_bytes: &[u8],
     ) -> Vec<u8> {
-        let mut data_bytes = Vec::new();
-        if format == 1 && bits_per_sample == 16 {
-            for &s in samples {
-                let clamped = s.clamp(-1.0, 1.0);
-                let val = (clamped * 32767.0) as i16;
-                data_bytes.extend_from_slice(&val.to_le_bytes());
-            }
-        } else if (format == 3 || format == 1) && bits_per_sample == 32 {
-            for &s in samples {
-                data_bytes.extend_from_slice(&s.to_le_bytes());
-            }
-        }
-
         let byte_rate = sample_rate * u32::from(channels) * u32::from(bits_per_sample) / 8;
         let block_align = channels * bits_per_sample / 8;
         let data_len = data_bytes.len() as u32;
@@ -252,9 +259,39 @@ mod tests {
 
         wav.extend_from_slice(b"data");
         wav.extend_from_slice(&data_len.to_le_bytes());
-        wav.extend_from_slice(&data_bytes);
+        wav.extend_from_slice(data_bytes);
 
         wav
+    }
+
+    // The fixture encodes small synthetic signals whose sizes and levels fit by construction.
+    #[allow(clippy::cast_possible_truncation)]
+    fn make_test_wav(
+        sample_rate: u32,
+        channels: u16,
+        bits_per_sample: u16,
+        format: u16,
+        samples: &[f32],
+    ) -> Vec<u8> {
+        let mut data_bytes = Vec::new();
+        if format == 1 && bits_per_sample == 16 {
+            for &s in samples {
+                let clamped = s.clamp(-1.0, 1.0);
+                let val = (clamped * 32767.0) as i16;
+                data_bytes.extend_from_slice(&val.to_le_bytes());
+            }
+        } else if format == 1 && bits_per_sample == 32 {
+            for &s in samples {
+                let clamped = s.clamp(-1.0, 1.0);
+                let val = (clamped * 2_147_483_647.0) as i32;
+                data_bytes.extend_from_slice(&val.to_le_bytes());
+            }
+        } else if format == 3 && bits_per_sample == 32 {
+            for &s in samples {
+                data_bytes.extend_from_slice(&s.to_le_bytes());
+            }
+        }
+        make_test_wav_from_bytes(sample_rate, channels, bits_per_sample, format, &data_bytes)
     }
 
     #[test]
@@ -338,5 +375,73 @@ mod tests {
             parse_wav_bytes(too_short, "short.wav"),
             Err(WavError::TooSmall { .. })
         ));
+    }
+
+    #[test]
+    fn wav_header_validation_valid_16k_mono_pcm32() {
+        let input_samples = vec![0.0_f32, 0.5, -0.5, 0.99];
+        let bytes = make_test_wav(16_000, 1, 32, 1, &input_samples);
+
+        let parsed = parse_wav_bytes(&bytes, "test_pcm32.wav").expect("should parse valid WAV");
+        assert_eq!(parsed.sample_rate, 16_000);
+        assert_eq!(parsed.channels, 1);
+        assert_eq!(parsed.samples.len(), input_samples.len());
+        assert!((parsed.samples[1] - 0.5).abs() < 1e-4);
+        assert!((parsed.samples[2] - (-0.5)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn wav_pcm32_reproducers() {
+        // Reproducer A1: -1 sample must not decode to NaN; it scales by 1/2^31.
+        let bytes_neg_one = make_test_wav_from_bytes(16_000, 1, 32, 1, &(-1_i32).to_le_bytes());
+        let parsed_neg_one = parse_wav_bytes(&bytes_neg_one, "pcm32_neg_one.wav")
+            .expect("should parse valid 32-bit PCM -1");
+        assert_eq!(parsed_neg_one.samples.len(), 1);
+        let s0 = parsed_neg_one.samples[0];
+        assert!(!s0.is_nan(), "sample -1 must not be NaN");
+        let expected_neg_one = -1.0_f32 / 2_147_483_648.0;
+        assert!((s0 - expected_neg_one).abs() < 1e-12);
+
+        // Reproducer A2: 2148 sample must scale by 1/2^31 (approx 1.0e-6), not ~3.0e-42.
+        let bytes_2148 = make_test_wav_from_bytes(16_000, 1, 32, 1, &2148_i32.to_le_bytes());
+        let parsed_2148 = parse_wav_bytes(&bytes_2148, "pcm32_2148.wav")
+            .expect("should parse valid 32-bit PCM 2148");
+        assert_eq!(parsed_2148.samples.len(), 1);
+        let s1 = parsed_2148.samples[0];
+        let expected_2148 = 2148.0_f32 / 2_147_483_648.0;
+        assert!((s1 - expected_2148).abs() < 1e-12);
+        assert!((s1 - 1.0e-6).abs() < 1e-8);
+    }
+
+    #[test]
+    fn wav_float_rejects_non_finite_samples() {
+        // Reproducer B1: float NaN sample must be rejected.
+        let nan_bytes = make_test_wav(16_000, 1, 32, 3, &[f32::NAN]);
+        let err_nan = parse_wav_bytes(&nan_bytes, "nan.wav").unwrap_err();
+        assert_eq!(
+            err_nan,
+            WavError::NonFiniteSample {
+                file: "nan.wav".to_string(),
+            }
+        );
+
+        // Reproducer B2: float infinity sample must be rejected.
+        let inf_bytes = make_test_wav(16_000, 1, 32, 3, &[f32::INFINITY]);
+        let err_inf = parse_wav_bytes(&inf_bytes, "inf.wav").unwrap_err();
+        assert_eq!(
+            err_inf,
+            WavError::NonFiniteSample {
+                file: "inf.wav".to_string(),
+            }
+        );
+
+        let neg_inf_bytes = make_test_wav(16_000, 1, 32, 3, &[f32::NEG_INFINITY]);
+        let err_neg_inf = parse_wav_bytes(&neg_inf_bytes, "neg_inf.wav").unwrap_err();
+        assert_eq!(
+            err_neg_inf,
+            WavError::NonFiniteSample {
+                file: "neg_inf.wav".to_string(),
+            }
+        );
     }
 }

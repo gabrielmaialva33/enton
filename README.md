@@ -13,7 +13,7 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-dea584?style=for-the-badge&logo=rust&logoColor=white)](./Cargo.toml)
 [![unsafe](https://img.shields.io/badge/unsafe-forbidden-991b1b?style=for-the-badge)](./Cargo.toml)
 [![Binary](https://img.shields.io/badge/core_binary-7.0_MiB-15803d?style=for-the-badge)](#build-profiles)
-[![Tests](https://img.shields.io/badge/tests-254_passing-00C853?style=for-the-badge)](./crates)
+[![Tests](https://img.shields.io/badge/tests-309_passing-00C853?style=for-the-badge)](./crates)
 [![License](https://img.shields.io/badge/license-MIT-dc2626?style=for-the-badge)](./LICENSE)
 
 ---
@@ -93,7 +93,7 @@ flowchart LR
 | **Runtime** | tokio `current_thread`: one event loop, bounded channels |
 | **Crates** | 4: core, adapters, binary, E1 harness |
 | **Source** | 17,118 lines of code (tokei, including inline unit tests) + 5,581 lines of tests and examples |
-| **Tests** | 254 passing with default features, 335 with all features, including property tests |
+| **Tests** | 309 passing with default features, 390 with all features, including property tests |
 | **Lean binary** | 7.0 MiB (5.3 MiB on aarch64), no shared libraries |
 | **Cortex** | Any OpenAI-compatible server, local Ollama by default |
 
@@ -128,6 +128,26 @@ continuation into a single thought. The later remark, not addressed to it, lands
 Everything it perceives and decides is written to its **soul** before it acts, so the next run
 resumes exactly where this one stopped, and a thought interrupted by a crash is never repeated.
 
+**Why did Enton not answer?** Because the reducer is deterministic, the soul can recompute every
+decision bit for bit. `enton why` replays it read-only (safe while Enton runs) and explains the
+latest speech cues: the decision, the calibrated evidence of each sensor that ran, and the state
+it was made in. It prints only what the soul stores, so never a transcript:
+
+```bash
+./target/release/enton why --profile desktop --last 3   # or --since 10m, --json for records
+```
+
+```text
+2 min ago (t = 260000 ms, seq 28): Abstain: Media (Speech, salience 0.00)
+  cue       no name, 1.5 s long, energy 0.60, VAD 0.90
+  evidence  live over reproduced -2.40, owner-live -2.40 nats
+  context   no attention window, no "Enton..." pending, TV on (0.68, for 3 min), awake, budget 119.0/120.0 obligation and 12.0/12.0 discretionary (a thought costs 1.0)
+  why       Abstained (Media): the tagger heard a loudspeaker, -2.4 nats; the TV had been on for 3 min.
+```
+
+A thought whose cortex call failed says so too (`Thought #1 (Keyword): Enton was called by name,
+but the thought failed: cortex unavailable.`).
+
 <details>
 <summary><strong>Prerequisites</strong></summary>
 
@@ -152,6 +172,10 @@ resumes exactly where this one stopped, and a thought interrupted by a crash is 
 | `--no-soul` | off | Run without recording anything |
 | `--voice` | off | Speak replies out loud (needs the `voice` feature) |
 | `--speaker <ID>` | `42` (`pf_dora`) | Kokoro speaker ID |
+
+`enton why [--soul <PATH>] [--profile t1-ref|desktop] [--last <N>] [--since <DURATION>] [--json]`
+explains the last `N` speech cues (default 10) in the soul of that profile; `--since` (`90s`, `5m`,
+`2h`) keeps only those that close to the last recorded event.
 
 If the cortex is unreachable, Enton keeps living and answers with an offline placeholder.
 
@@ -315,6 +339,7 @@ Boundaries are crossed only through the core's public API.
 | **Habituation & novelty** | A running expectation of recent cues. Repetition suppresses salience on two timescales: a fast component that a surprise resets, and a slow one that outlasts quiet gaps (a TV that pauses is still a TV) and only ever mutes familiar cues |
 | **Self-echo model** | Adaptive estimate of its own voice at the microphone, barge-in margins, a consecutive barge-in ratchet and a playback watchdog |
 | **Torpor** | Fever or critical battery blocks discretionary thought; being called by name still gets an answer |
+| **Exploration** | Off by default. A cue that evidence turns away close to a threshold may think anyway with a set probability, paid by the discretionary account; the coin comes from a snapshotted generator and every flip logs its propensity, so an offline estimator can learn what abstaining cost |
 
 ### Adapters (`enton-adapters`)
 
@@ -392,9 +417,10 @@ models, audio and budget. The thesis is refuted if Enton fails any criterion.
 cargo run --release -p enton-e1 -- --seed 42               # one seed, full report
 cargo run --release -p enton-e1 -- --seeds 0..=31 --summary # pooled over 32 seeds
 cargo run --release -p enton-e1 -- --seeds 0..=31 --summary --with-directed # plus a directedness detector
+cargo run --release -p enton-e1 -- --seeds 0..=31 --off-policy  # estimate thresholds from one exploring log
 ```
 
-**Current status** (synthetic proxy, benchmark 3.1.0, reducer v10, speaker, media and end-of-turn
+**Current status** (synthetic proxy, benchmark 3.2.0, reducer v11, speaker, media and end-of-turn
 sensors, report seeds 0 to 31, measured 2026-09-26). One seed is an anecdote, so the table pools 32:
 
 | Criterion (RFC 0001 §7) | Target | Pooled result | Seeds passing | Status |
@@ -429,7 +455,8 @@ a third more turns. With the TV off it serves 72% (far) to 86% (near) of turns; 
 to 47%. With these three sensors one segment tells the owner from a relative with d' of about 0.6
 and from a TV voice with d' of about 1.3, so no threshold keeps 99% of the owner's follow-ups and
 turns most TV lines away. Closing the gap takes another kind of evidence: whether speech is addressed
-to Enton (text-based detection, about 14% equal error rate in published work) or where it comes
+to Enton (text-only detectors reach 12.7 to 13.7% equal error rate in Apple's published work,
+[arXiv 2310.15261](https://arxiv.org/abs/2310.15261) and [2403.14438](https://arxiv.org/abs/2403.14438)) or where it comes
 from (a microphone array; the TV does not move). Thresholds were chosen on calibration seeds 100 to
 131 and are reported here on seeds 0 to 31.
 
@@ -456,6 +483,55 @@ decision per speech cue, thought IDs in order, time never running backward, budg
 habituation in bounds, and a snapshot round trip every 1000 steps that must keep stepping in
 lockstep with the live organism. A violation stops the run.
 
+**Logged exploration and off-policy estimates** (benchmark 3.2.0, reducer v11). A gate only sees
+the outcomes of the calls it made: when Enton abstains, nobody learns whether that was a miss.
+Reducer v11 can explore. A cue that an evidence objection turns away (a loudspeaker, another voice,
+speech addressed to someone else, or a voice short of verification for the longer window), with
+every objecting sensor within `explore_margin_nats` of its threshold and that would otherwise buy a
+thought, thinks anyway with probability `explore_probability`. Only the discretionary account pays,
+and never on credit; Enton's own playback (a self-ignition risk), its name and torpor are never
+explored. The coin comes from a generator seeded by the profile and kept in the snapshot, so replay
+decides every flip the same way, and each flipped decision logs the probability of the side that
+came up. The probability defaults to zero, and then v11 decides every call exactly as v10: E1's JSON
+is byte-identical to v10's on seeds 0 to 95 (apart from the version), with and without the detector.
+
+`--off-policy` runs t1-ref as the logging policy (probability 0.1 within 1 nat, chosen on seeds 100
+to 131 by a rule fixed beforehand: the smallest estimate error among settings costing at most 2%
+more calls and no call in E1b noise). From that one log it estimates 16 candidates that move
+`other_voice_llr`, `media_llr` and `verified_voice_llr` (and `undirected_llr` with the detector),
+asking each candidate's choice of the logging organism's exact state and weighing the log's own
+outcomes by inverse propensity (IPS, plus its self-normalized form), then runs every candidate for
+real. On seeds 0 to 31 exploring cost 108 extra paid calls (+1.8%) and no call in E1b noise, and
+bought 108 outcomes the policy never sees otherwise; 44 of them served a turn it would have missed.
+Effects against t1-ref, actual and estimated:
+
+| Candidate | Requests: actual / IPS | Turns: actual / IPS | Paid calls: actual / counted |
+|:----------|:----------------------:|:-------------------:|:----------------------------:|
+| `media_llr` 0.5 | -56 / -72 | -100 / -102 | -235 / -226 |
+| `media_llr` 1.5 | +33 / +42 | +51 / +67 | +85 / +103 |
+| `other_voice_llr` 0.5 | +21 / -17 | -7 / -32 | -214 / -200 |
+| `other_voice_llr` 1.5 | +15 / +20 | +31 / +48 | +94 / +95 |
+| `verified_voice_llr` 0.35 | -254 / -254 | -377 / -316 | -615 / -527 |
+| `verified_voice_llr` 0.01 | +88 / -57 | +139 / +30 | +241 / +204 |
+| all loosened by 0.5 | +135 / +6 | +228 / +142 | +470 / +428 |
+
+Plainly: exploration noise is the small error. On the 15 candidates the log supports, IPS lands 6
+requests and 10 turns on average from what unlimited exploration would give. That limit is itself
+13 requests and 25 turns from the real run on average, up to 50 and 79, because the estimate judges
+one decision at a time while the policies interact (a served follow-up keeps the window open for
+the next, every thought moves cooldowns, budgets and Enton's own echo). That bias flips the sign
+for a stricter `other_voice_llr`, and the log's own 95% intervals, which count only exploration
+noise, cover the actual value for 6 of 17 candidates on requests and 5 of 17 on turns. Support is
+the other limit: the largest gain, a looser `verified_voice_llr`, comes from barge-ins during
+Enton's playback, which is never explored, so the log cannot see it; answering the name at once
+or waiting is not explored either. Request estimates also weigh every thought in an episode, so
+their variance grows toward the margin's edge (`media_llr` 2.0 with the detector: +159 estimated,
++59 actual, ±200). Paid calls counted at the logged states stay within 2.3%. The log is good for
+ranking and sizing single-threshold moves on the media tagger and a stricter verified window
+(every turn effect has the right sign, requests within 14 on average), not for a stricter
+`other_voice_llr`, anything that pays off through barge-ins, or joint moves. The directedness
+threshold changes nothing between 1.0 and 2.5 nats: its calibration has three bands.
+
 **Overall: FAIL.** That is the point of E1: the thesis gets published with its refutation
 attempt attached. Calibration uses seeds 0 to 999; seeds from 1000 up are a held-out set reserved
 for the freeze owner.
@@ -471,7 +547,7 @@ for the freeze owner.
 | **Senses** | YOLO, Whisper, CLAP, InsightFace, FER | Body signals, VAD and keyword before any transcription |
 | **Memory** | Qdrant episodes | Durable, replayable event log |
 | **Voice** | Kokoro in Python | Kokoro via sherpa-onnx, with barge-in |
-| **Proof** | 136 unit tests | 254 tests, property tests and a refutation experiment |
+| **Proof** | 136 unit tests | 309 tests, property tests and a refutation experiment |
 | **Footprint** | CUDA + PyTorch | 7.0 MiB binary, no native runtime in the lean build |
 
 Vision is deliberately out of scope for milestone 1.

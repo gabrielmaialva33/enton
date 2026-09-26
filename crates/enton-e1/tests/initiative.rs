@@ -3,6 +3,8 @@
 //! within a tape. With drives made eager, one tape has a drive ready while the owner
 //! talks, whose intent rides the owner's follow-up; another has the owner ask for quiet.
 //! Each is run against a control tape that lacks what it exercises.
+// Test fixtures may fail loudly; the quality bar permits unwrap in tests.
+#![allow(clippy::unwrap_used)]
 
 use enton_core::{Event, Millis, Profile, Reason, SpeechCue};
 use enton_e1::run::PaidThought;

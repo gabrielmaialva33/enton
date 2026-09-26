@@ -1,6 +1,6 @@
 use enton_core::{Abstention, Action, Event, Millis, Organism, Profile, Reason, SpeechCue};
 
-use super::support::{assert_abstention, assert_thought, tv_cue};
+use super::support::{assert_abstention, assert_thought, speech, tv_cue};
 
 /// Twenty identical TV-like cues, three seconds apart, with no tick in between.
 fn habituate_to_tv(organism: &mut Organism) {
@@ -13,7 +13,7 @@ fn habituate_to_tv(organism: &mut Organism) {
 fn habituation_suppresses_repeated_similar_non_addressed_speech() {
     let mut organism = Organism::new(Profile::t1_ref()).unwrap();
 
-    // First burst of non-addressed loud speech (TV)
+    // First burst of non-addressed loud speech, in the owner's voice: someone is home
     let actions1 = organism.step(&Event::Speech {
         now: Millis(0),
         cue: SpeechCue {
@@ -21,7 +21,7 @@ fn habituation_suppresses_repeated_similar_non_addressed_speech() {
             duration_ms: 1_200,
             vad_confidence: 0.9,
             keyword: false,
-            speaker_sim: None,
+            speaker_sim: Some(0.9),
             media: None,
             turn_complete: None,
             directed: None,
@@ -115,7 +115,8 @@ fn novelty_adds_salience_on_prediction_error() {
         },
     });
 
-    // Sudden different cue (high energy, high VAD) creates prediction error
+    // Sudden different cue (high energy, high VAD) creates prediction error; it is the
+    // owner speaking, so someone is home
     let actions = organism.step(&Event::Speech {
         now: Millis(15_000),
         cue: SpeechCue {
@@ -123,7 +124,7 @@ fn novelty_adds_salience_on_prediction_error() {
             duration_ms: 1_000,
             vad_confidence: 0.9,
             keyword: false,
-            speaker_sim: None,
+            speaker_sim: Some(0.9),
             media: None,
             turn_complete: None,
             directed: None,
@@ -140,12 +141,13 @@ fn a9_marginal_cue_fate_changes_with_novelty() {
     // Threshold is 0.70.
     // Marginal cue: vad=0.8, energy=0.6, dur=333ms (dur_norm=0.333).
     // base_salience = 0.60 * 0.8 + 0.25 * 0.6 + 0.15 * 0.333 = 0.48 + 0.15 + 0.05 = 0.68 (< 0.70).
+    // It is the owner speaking, so someone is home.
     let marginal_cue = SpeechCue {
         energy: 0.6,
         duration_ms: 333,
         vad_confidence: 0.8,
         keyword: false,
-        speaker_sim: None,
+        speaker_sim: Some(0.9),
         media: None,
         turn_complete: None,
         directed: None,
@@ -244,7 +246,7 @@ fn a9_silence_tv_to_novel_speech_resets_habituation() {
         now: Millis(25_000),
     });
 
-    // Sudden novel speech cue with high energy and VAD
+    // Sudden novel speech cue with high energy and VAD, in the owner's voice
     let novel_actions = organism.step(&Event::Speech {
         now: Millis(25_001),
         cue: SpeechCue {
@@ -252,7 +254,7 @@ fn a9_silence_tv_to_novel_speech_resets_habituation() {
             duration_ms: 900,
             vad_confidence: 0.95,
             keyword: false,
-            speaker_sim: None,
+            speaker_sim: Some(0.9),
             media: None,
             turn_complete: None,
             directed: None,
@@ -330,11 +332,13 @@ fn slow_habituation_outlasts_a_quiet_gap_and_keeps_the_tv_muted() {
     assert!(organism.slow_habituation() > 0.9 * slow);
     assert_abstention(&organism.step(&tv_cue(117_000)), Abstention::Habituation);
 
-    // Without the long-term component the same cue would have ignited.
+    // Without the long-term component the same cue would have ignited, with the owner home:
+    // they called Enton during the pause (a call by name leaves habituation alone).
     let mut forgetful = Profile::t1_ref();
     forgetful.habituation.slow_habituation_rate = 0.0;
     let mut organism = Organism::new(forgetful).unwrap();
     habituate_to_tv(&mut organism);
+    assert_thought(&organism.step(&speech(100_000, true)), 1, &Reason::Keyword);
     organism.step(&Event::Tick {
         now: Millis(117_000),
     });

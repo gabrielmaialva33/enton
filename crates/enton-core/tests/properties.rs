@@ -3,7 +3,8 @@
 //! Generated tapes mix ticks whose clock mostly runs forward but sometimes
 //! repeats or runs backward, body signals, speech cues with arbitrary
 //! measurements (including NaN, infinities, negatives and values above one),
-//! cortex replies for thoughts the organism issued, and playback of the
+//! cortex replies and failures for thoughts the organism issued (and failures
+//! for thoughts it never did), checklist readings, and playback of the
 //! utterances it spoke. After every step the reducer invariants must hold on
 //! both shipped profiles (and a variant with budgets a short tape can drain),
 //! and a snapshot taken at a random step must restore an organism that decides
@@ -16,12 +17,14 @@ use std::ops::RangeInclusive;
 
 use enton_core::evidence::MIN_SD;
 use enton_core::{
-    Action, BodySignals, Budget, DirectedModel, DirectionModel, Event, Evidence, Millis, Organism,
-    Profile, Reason, Senses, SourceModel, SpeechCue, ThoughtId, TurnModel, UtteranceId, VoiceModel,
+    Abstention, Action, BodySignals, Budget, DirectedModel, DirectionModel, Event, Evidence,
+    Millis, Organism, Profile, Reason, Senses, SourceModel, SpeechCue, ThoughtId, TurnModel,
+    UtteranceId, VoiceModel,
 };
 use proptest::prelude::*;
 use proptest::sample::Index;
-use proptest::test_runner::{Config, TestCaseError};
+use proptest::strategy::ValueTree;
+use proptest::test_runner::{Config, TestCaseError, TestRunner};
 
 /// Tolerance for budget bounds, which accumulate f32 refills.
 const EPSILON: f32 = 1e-3;
@@ -203,8 +206,12 @@ enum Stimulus {
     Body(BodySignals),
     Speech(SpeechCue),
     Reply { thought: Index, text: String },
+    Failed(Index),
+    FailedUnknown(u64),
+    Checklist(bool),
     PlaybackStarted(Index),
-    PlaybackFinished(Index),
+    /// A playback's end, cut off or not.
+    PlaybackFinished(Index, bool),
 }
 
 fn reply_text() -> impl Strategy<Value = String> {
@@ -229,8 +236,12 @@ fn stimulus(broken_body: bool) -> impl Strategy<Value = Stimulus> {
         8 => cue().prop_map(Stimulus::Speech),
         2 => (any::<Index>(), reply_text())
             .prop_map(|(thought, text)| Stimulus::Reply { thought, text }),
+        1 => any::<Index>().prop_map(Stimulus::Failed),
+        1 => prop_oneof![Just(0_u64), any::<u64>()].prop_map(Stimulus::FailedUnknown),
+        1 => prop::bool::weighted(0.7).prop_map(Stimulus::Checklist),
         2 => any::<Index>().prop_map(Stimulus::PlaybackStarted),
-        2 => any::<Index>().prop_map(Stimulus::PlaybackFinished),
+        2 => (any::<Index>(), any::<bool>())
+            .prop_map(|(index, interrupted)| Stimulus::PlaybackFinished(index, interrupted)),
     ]
 }
 
@@ -284,11 +295,26 @@ impl World {
                     text: text.clone(),
                 })
             }
+            // A failure of any issued thought, or of one never issued, which must be ignored.
+            Stimulus::Failed(index) => pick(&self.thoughts, *index)
+                .map_or(tick, |thought| Event::CortexFailed { now, thought }),
+            Stimulus::FailedUnknown(id) => Event::CortexFailed {
+                now,
+                thought: ThoughtId(*id),
+            },
+            Stimulus::Checklist(actionable) => Event::Checklist {
+                now,
+                actionable: *actionable,
+            },
             Stimulus::PlaybackStarted(index) => pick(&self.utterances, *index)
                 .map_or(tick, |utterance| Event::PlaybackStarted { now, utterance }),
             // Not necessarily the utterance playing: a stale finish must be ignored.
-            Stimulus::PlaybackFinished(index) => pick(&self.utterances, *index)
-                .map_or(tick, |utterance| Event::PlaybackFinished { now, utterance }),
+            Stimulus::PlaybackFinished(index, interrupted) => pick(&self.utterances, *index)
+                .map_or(tick, |utterance| Event::PlaybackFinished {
+                    now,
+                    utterance,
+                    interrupted: *interrupted,
+                }),
         }
     }
 
@@ -338,6 +364,7 @@ impl Watch {
     ) -> Result<(), TestCaseError> {
         check_decisions(event, actions)?;
         check_actions(event, actions)?;
+        check_discretion(organism, event, actions)?;
         self.check_thought_ids(actions)?;
         self.check_time(organism, event)?;
         self.check_budgets(organism)?;
@@ -464,6 +491,10 @@ fn check_decisions(event: &Event, actions: &[Action]) -> Result<(), TestCaseErro
             decisions == 1 && speaks == 0,
             "a speech cue yields exactly one decision and no Speak: {actions:?}"
         ),
+        Event::CortexReply { text, .. } if text.trim().is_empty() => prop_assert!(
+            actions.is_empty(),
+            "a silent cortex reply yields nothing: {actions:?}"
+        ),
         Event::CortexReply { text, .. } => prop_assert!(
             matches!(actions, [Action::Speak { text: spoken }] if spoken == text),
             "a cortex reply yields exactly its Speak and nothing else: {actions:?}"
@@ -488,11 +519,63 @@ fn check_decisions(event: &Event, actions: &[Action]) -> Result<(), TestCaseErro
                 "a tick only thinks or abstains, for one timeout and one drive: {actions:?}"
             );
         }
-        Event::Body { .. } | Event::PlaybackStarted { .. } | Event::PlaybackFinished { .. } => {
+        Event::Body { .. }
+        | Event::PlaybackStarted { .. }
+        | Event::PlaybackFinished { .. }
+        | Event::Checklist { .. }
+        | Event::CortexFailed { .. } => {
             prop_assert!(
                 actions.is_empty(),
-                "body and playback events decide nothing: {actions:?}"
+                "body, playback, checklist and failure events decide nothing: {actions:?}"
             );
+        }
+    }
+    Ok(())
+}
+
+/// A discretionary thought (a drive, overheard speech, or an explored cue) is bought only
+/// with the owner around and no cortex backoff, and a drive's only with something to
+/// check; each abstention for those reasons holds exactly when its reason does, and never
+/// for an obligation.
+fn check_discretion(
+    organism: &Organism,
+    event: &Event,
+    actions: &[Action],
+) -> Result<(), TestCaseError> {
+    let now = event.now();
+    let home = organism.owner_present_as_of(now);
+    let backing_off = organism.backoff_until().is_some_and(|until| now < until);
+    for action in actions {
+        match action {
+            Action::Think {
+                reason, propensity, ..
+            } if matches!(reason, Reason::Drive(_) | Reason::Speech) || propensity.is_some() => {
+                prop_assert!(
+                    home && !backing_off,
+                    "a discretionary thought with nobody home or while backing off: {action:?}"
+                );
+                if matches!(reason, Reason::Drive(_)) {
+                    prop_assert!(
+                        organism.checklist_actionable(),
+                        "a drive thought with nothing to check: {action:?}"
+                    );
+                }
+            }
+            Action::Abstain { reason, why, .. } => {
+                let discretionary = matches!(reason, Reason::Drive(_) | Reason::Speech);
+                match why {
+                    Abstention::NothingToCheck => prop_assert!(
+                        matches!(reason, Reason::Drive(_)) && !organism.checklist_actionable(),
+                        "{action:?}"
+                    ),
+                    Abstention::NobodyHome => prop_assert!(discretionary && !home, "{action:?}"),
+                    Abstention::Backoff => {
+                        prop_assert!(discretionary && home && backing_off, "{action:?}");
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
         }
     }
     Ok(())
@@ -573,6 +656,21 @@ fn pointed(base: Profile) -> Profile {
     profile.source.tv_direction_min_lines = 1.0;
     profile.source.tv_direction_half_life_ms = 60_000;
     profile.source.tv_caution_confinement = enton_core::TvCautionConfinement::Always;
+    profile
+}
+
+/// `t1_ref` with drives that ignite within minutes, and a short presence window and
+/// backoff, so random tapes reach every discretionary gate often: drive thoughts, their
+/// replies and failures, nothing to check, nobody home and backing off.
+fn eager() -> Profile {
+    let mut profile = Profile::t1_ref();
+    "eager".clone_into(&mut profile.name);
+    profile.ignition.threshold = 0.000_1;
+    profile.ignition.hysteresis = 0.000_05;
+    profile.ignition.ema_alpha = 1.0;
+    profile.discretion.presence_window_ms = 120_000;
+    profile.discretion.cortex_backoff_base_ms = 2_000;
+    profile.discretion.cortex_backoff_cap_ms = 30_000;
     profile
 }
 
@@ -679,6 +777,74 @@ fn replay_from_json(profile: Profile, tape: &Tape) -> Result<(), TestCaseError> 
     Ok(())
 }
 
+/// The generated tapes reach every discretionary gate, so the invariants above are
+/// checked where they matter: drive thoughts and their outcomes, and each abstention that
+/// holds a discretionary thought back.
+#[test]
+fn generated_tapes_reach_every_discretionary_gate() {
+    let mut runner = TestRunner::deterministic();
+    let strategy = tape(true);
+    let mut seen = std::collections::BTreeMap::<&str, usize>::new();
+    for _ in 0..64 {
+        let tape = strategy.new_tree(&mut runner).unwrap().current();
+        for profile in [eager(), exploring(eager())] {
+            let mut organism = Organism::new(profile).unwrap();
+            let mut world = World::default();
+            for (clock, stimulus) in &tape {
+                let event = world.event(*clock, stimulus);
+                let for_drive = |thought: &ThoughtId| {
+                    organism
+                        .drive_thought()
+                        .is_some_and(|(pending, _)| pending == *thought)
+                };
+                let outcome = match &event {
+                    Event::CortexReply { thought, .. } if for_drive(thought) => {
+                        Some("drive answered")
+                    }
+                    Event::CortexFailed { thought, .. } if for_drive(thought) => {
+                        Some("drive failed")
+                    }
+                    _ => None,
+                };
+                let actions = organism.step(&event);
+                world.observe(&actions);
+                if let Some(outcome) = outcome {
+                    *seen.entry(outcome).or_default() += 1;
+                }
+                for action in &actions {
+                    let key = match action {
+                        Action::Think {
+                            reason: Reason::Drive(_),
+                            ..
+                        } => "drive thought",
+                        Action::Abstain { why, .. } => match why {
+                            Abstention::NothingToCheck => "nothing to check",
+                            Abstention::NobodyHome => "nobody home",
+                            Abstention::Backoff => "backoff",
+                            _ => continue,
+                        },
+                        _ => continue,
+                    };
+                    *seen.entry(key).or_default() += 1;
+                }
+            }
+        }
+    }
+    for key in [
+        "drive thought",
+        "drive answered",
+        "drive failed",
+        "nothing to check",
+        "nobody home",
+        "backoff",
+    ] {
+        assert!(
+            seen.get(key).is_some_and(|count| *count > 0),
+            "{key}: {seen:?}"
+        );
+    }
+}
+
 proptest! {
     #![proptest_config(config(192))]
 
@@ -694,6 +860,8 @@ proptest! {
         run_with_snapshot(exploring(starved()), &tape, cut)?;
         run_with_snapshot(pointed(Profile::t1_ref()), &tape, cut)?;
         run_with_snapshot(exploring(pointed(Profile::t1_ref())), &tape, cut)?;
+        run_with_snapshot(eager(), &tape, cut)?;
+        run_with_snapshot(exploring(eager()), &tape, cut)?;
     }
 
     /// Canonical events read back from JSON decide exactly like the live ones, coin
@@ -705,6 +873,7 @@ proptest! {
         replay_from_json(Profile::desktop(), &tape)?;
         replay_from_json(exploring(Profile::t1_ref()), &tape)?;
         replay_from_json(exploring(pointed(Profile::t1_ref())), &tape)?;
+        replay_from_json(eager(), &tape)?;
     }
 
     /// A cue without a direction reading is decided the same whatever the profile says

@@ -2,7 +2,7 @@ use enton_core::{
     Abstention, Action, Event, Millis, Organism, Profile, Reason, SpeechCue, ThoughtId, UtteranceId,
 };
 
-use super::support::{assert_abstention, assert_thought, speech};
+use super::support::{assert_abstention, assert_thought, owner_speech, speech};
 
 #[test]
 fn keyword_only_turn_attends_and_merges_continuation() {
@@ -366,6 +366,7 @@ fn dual_mode_attention_anchoring() {
     voice_org.step(&Event::PlaybackFinished {
         now: Millis(3700),
         utterance: UtteranceId(1),
+        interrupted: false,
     });
     assert_eq!(voice_org.attention_until(), Some(Millis(8900)));
 }
@@ -374,8 +375,8 @@ fn dual_mode_attention_anchoring() {
 fn playback_finished_discretionary_opens_no_attention_window_so_cue_is_unaddressed() {
     let mut organism = Organism::new(Profile::t1_ref()).unwrap();
 
-    // 1. Unaddressed speech cue triggers discretionary Speech think
-    let actions_initial = organism.step(&speech(1_000, false));
+    // 1. Unaddressed speech cue, in the owner's voice, triggers discretionary Speech think
+    let actions_initial = organism.step(&owner_speech(1_000, false));
     assert_thought(&actions_initial, 1, &Reason::Speech);
     assert!(!organism.speaking_for_obligation());
 
@@ -389,6 +390,7 @@ fn playback_finished_discretionary_opens_no_attention_window_so_cue_is_unaddress
     organism.step(&Event::PlaybackFinished {
         now: Millis(3_000),
         utterance: UtteranceId(1),
+        interrupted: false,
     });
     // Discretionary thought must not open a post-playback attention window
     assert_eq!(organism.attention_until(), None);
@@ -425,6 +427,7 @@ fn playback_finished_obligation_opens_attention_window_for_follow_up() {
     organism.step(&Event::PlaybackFinished {
         now: Millis(3_000),
         utterance: UtteranceId(1),
+        interrupted: false,
     });
     // Obligation thought opens post-playback attention window: 3000 + 200 (hangover) + 5000 = 8200ms
     assert_eq!(organism.attention_until(), Some(Millis(8_200)));

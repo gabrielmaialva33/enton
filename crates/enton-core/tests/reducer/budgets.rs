@@ -1,6 +1,9 @@
 use enton_core::{Abstention, Action, Event, Millis, Organism, Profile, Reason, SpeechCue};
 
-use super::support::{assert_abstention, assert_thought, sensitive_profile, speech};
+use super::support::{
+    assert_abstention, assert_thought, checklist, owner_nearby, owner_speech, sensitive_profile,
+    speech,
+};
 
 #[test]
 fn directed_requests_served_when_discretionary_zeroed() {
@@ -36,9 +39,9 @@ fn optional_thoughts_never_spend_obligation() {
         profile
     })
     .unwrap();
-    // Discretionary speech spends discretionary budget
-    assert_thought(&organism.step(&speech(0, false)), 1, &Reason::Speech);
-    assert_thought(&organism.step(&speech(1, false)), 2, &Reason::Speech);
+    // Discretionary speech (the owner's, so someone is home) spends discretionary budget
+    assert_thought(&organism.step(&owner_speech(0, false)), 1, &Reason::Speech);
+    assert_thought(&organism.step(&owner_speech(1, false)), 2, &Reason::Speech);
 
     // Obligation budget is completely untouched (still has 2.0)
     assert_thought(&organism.step(&speech(2, true)), 3, &Reason::Keyword);
@@ -103,6 +106,9 @@ fn a_ready_drive_cannot_spend_a_keyword_only_budget() {
     let mut profile = sensitive_profile();
     profile.budgets.discretionary_budget_per_hour = 0.0;
     let mut organism = Organism::new(profile).unwrap();
+    // Something to check and the owner home: only the budget holds the drive back.
+    organism.step(&checklist(0, true));
+    organism.step(&owner_nearby(3_599_000));
     assert_abstention(
         &organism.step(&Event::Tick {
             now: Millis(3_600_000),

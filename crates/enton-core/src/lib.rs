@@ -30,6 +30,7 @@ pub use evidence::{
 pub use ignition::Ignition;
 pub use organism::{Organism, PlaybackStatus, REDUCER_VERSION, contains_keyword_word};
 pub use profile::{
-    AttentionPolicy, BodyLimits, BudgetPolicy, EchoPolicy, ExplorationPolicy, HabituationPolicy,
-    IgnitionPolicy, InvalidProfile, Profile, SaliencePolicy, SourcePolicy, TvCautionConfinement,
+    AttentionPolicy, BodyLimits, BudgetPolicy, DiscretionPolicy, EchoPolicy, ExplorationPolicy,
+    HabituationPolicy, IgnitionPolicy, InvalidProfile, Profile, SaliencePolicy, SourcePolicy,
+    TvCautionConfinement,
 };

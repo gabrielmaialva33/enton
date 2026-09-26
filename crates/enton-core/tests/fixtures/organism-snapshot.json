@@ -49,10 +49,13 @@
     "tv_caution_llr": 2.0,
     "tv_direction_half_life_ms": 600000,
     "tv_direction_min_lines": 20.0,
-    "direction_confines_tv_caution": false,
+    "tv_caution_confinement": "with_directedness",
     "explore_probability": 0.0,
     "explore_margin_nats": 1.0,
     "explore_seed": 0,
+    "presence_window_ms": 1800000,
+    "cortex_backoff_base_ms": 60000,
+    "cortex_backoff_cap_ms": 3600000,
     "senses": {
       "voice": {
         "owner": [
@@ -197,5 +200,11 @@
     "lines": 9.795067,
     "at": 106000
   },
-  "explore_state": 0
+  "explore_state": 0,
+  "checklist": "actionable",
+  "owner_heard_at": 3600500,
+  "drive_thought": null,
+  "drive_waiting": null,
+  "cortex_failures": 1,
+  "backoff_until": 65000
 }

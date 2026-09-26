@@ -20,6 +20,48 @@ pub(crate) fn speech(now: u64, keyword: bool) -> Event {
     }
 }
 
+/// Like [`speech`], in the owner's verified voice: whether or not they speak to
+/// Enton, it now knows they are home.
+pub(crate) fn owner_speech(now: u64, keyword: bool) -> Event {
+    let Event::Speech { now, cue } = speech(now, keyword) else {
+        unreachable!("speech builds a speech cue")
+    };
+    Event::Speech {
+        now,
+        cue: SpeechCue {
+            speaker_sim: Some(0.9),
+            ..cue
+        },
+    }
+}
+
+/// The owner murmuring nearby: too quiet to think about, but in their verified voice,
+/// so Enton knows they are home.
+pub(crate) fn owner_nearby(now: u64) -> Event {
+    Event::Speech {
+        now: Millis(now),
+        cue: SpeechCue {
+            energy: 0.2,
+            duration_ms: 1_500,
+            vad_confidence: 0.3,
+            keyword: false,
+            speaker_sim: Some(0.9),
+            media: None,
+            turn_complete: None,
+            directed: None,
+            direction: None,
+        },
+    }
+}
+
+/// The owner's checklist, read with something on it or not.
+pub(crate) fn checklist(now: u64, actionable: bool) -> Event {
+    Event::Checklist {
+        now: Millis(now),
+        actionable,
+    }
+}
+
 pub(crate) fn body(now: u64, temperature_c: Option<f32>, battery: Option<f32>) -> Event {
     Event::Body {
         now: Millis(now),

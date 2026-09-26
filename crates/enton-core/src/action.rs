@@ -45,6 +45,25 @@ pub enum Abstention {
     Media,
     /// Inside an attention window, the speech was addressed to someone else.
     Undirected,
+    /// A drive crossed its threshold, but the owner's checklist holds nothing actionable,
+    /// so a thought would have nothing to bring up.
+    NothingToCheck,
+    /// A discretionary thought (a drive or overheard speech) found nobody home: the owner
+    /// has not addressed Enton, nor been heard in their verified voice, recently.
+    NobodyHome,
+    /// The cortex failed on the last thoughts, and discretionary thoughts wait out an
+    /// exponential backoff before trying it again. Obligations never wait.
+    Backoff,
+    /// The owner asked for quiet ("Enton, silêncio") and has not released it, nor has it
+    /// run out: thoughts of Enton's own wait. Being called by name is still answered.
+    Quiet,
+    /// It is the owner's quiet hours (23:00 to 07:00 by default): thoughts of Enton's own
+    /// wait. Being called by name is still answered.
+    QuietHours,
+    /// A drive that got ready during a conversation held its intent to ride the owner's next
+    /// request, and neither that nor a turn of its own came before the deferral ran out: the
+    /// drive lets the intent go, as if answered by silence.
+    Expired,
 }
 
 /// A brainstem decision.
@@ -64,6 +83,12 @@ pub enum Action {
         /// weighs the outcome by its inverse.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         propensity: Option<f32>,
+        /// The drive whose deferred intent rides this thought, if one does: an answer the
+        /// owner asked for that also brings up what the drive wanted to, at no extra paid
+        /// call. Its reply answers the drive as the drive's own thought would. Omitted from
+        /// JSON when absent, so a thought nothing rides is stored as it was before rides.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rider: Option<String>,
     },
     /// Speak a response.
     Speak {

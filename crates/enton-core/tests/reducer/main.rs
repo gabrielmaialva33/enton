@@ -1,10 +1,12 @@
 //! Deterministic integration test suite for the cognitive reducer.
 
+mod acknowledgement;
 mod attention;
 mod budgets;
 mod calibrated;
 mod directed;
 mod direction;
+mod discretion;
 mod exploration;
 mod habituation;
 mod ignition;

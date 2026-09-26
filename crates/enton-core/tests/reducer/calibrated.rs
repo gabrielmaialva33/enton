@@ -1,7 +1,10 @@
 //! Behavior under the calibration measured for the sensors Enton ships, where a
 //! single segment says little about who is speaking.
 
-use enton_core::{Abstention, Event, Millis, Organism, Profile, Reason, SpeechCue, ThoughtId};
+use enton_core::{
+    Abstention, Event, Millis, Organism, Profile, Reason, SpeechCue, ThoughtId,
+    TvCautionConfinement,
+};
 
 use super::support::{assert_abstention, assert_thought};
 
@@ -307,8 +310,9 @@ fn owner_follow_up(organism: Organism, direction: Option<[f32; 2]>) -> Vec<enton
 }
 
 #[test]
-fn the_shipped_profile_lets_the_direction_add_evidence_but_never_loosen_a_bar() {
-    // With the TV on, the tagger's reading alone turns the owner away, wherever they sit.
+fn without_directedness_the_direction_adds_evidence_but_never_loosens_a_bar() {
+    // With the TV on and no directedness reading, nothing answers for other people: the
+    // tagger's reading alone turns the owner away, wherever they sit.
     for direction in [None, Some(ACROSS), Some(TV)] {
         assert_abstention(
             &owner_follow_up(Organism::new(Profile::t1_ref()).unwrap(), direction),
@@ -320,7 +324,7 @@ fn the_shipped_profile_lets_the_direction_add_evidence_but_never_loosen_a_bar() 
 #[test]
 fn confined_the_owner_away_from_the_tv_is_heard_with_the_tv_on() {
     let mut confined = Profile::t1_ref();
-    confined.source.direction_confines_tv_caution = true;
+    confined.source.tv_caution_confinement = TvCautionConfinement::Always;
     assert_thought(
         &owner_follow_up(Organism::new(confined.clone()).unwrap(), Some(ACROSS)),
         2,
@@ -336,4 +340,32 @@ fn confined_the_owner_away_from_the_tv_is_heard_with_the_tv_on() {
         &owner_follow_up(Organism::new(confined).unwrap(), None),
         Abstention::Media,
     );
+}
+
+#[test]
+fn with_directedness_the_shipped_profile_confines_the_tv_caution() {
+    // The same follow-up, now also judged clearly addressed to Enton: the directedness
+    // detector answers for other people, so the caution weighs on the loudspeaker alone.
+    let addressed = |direction| {
+        let mut organism = after_a_show(Organism::new(Profile::t1_ref()).unwrap());
+        assert_thought(
+            &organism.step(&heard(95_000, true, 1_500, 0.55, 0.3)),
+            1,
+            &Reason::Keyword,
+        );
+        organism.step(&Event::CortexReply {
+            now: Millis(96_000),
+            thought: ThoughtId(1),
+            text: "Oi!".into(),
+        });
+        let Event::Speech { now, mut cue } =
+            pointed(heard(97_000, false, 1_500, 0.47, 0.38), direction)
+        else {
+            unreachable!("heard builds speech")
+        };
+        cue.directed = Some(0.9);
+        organism.step(&Event::Speech { now, cue })
+    };
+    assert_thought(&addressed(Some(ACROSS)), 2, &Reason::FollowUp);
+    assert_abstention(&addressed(Some(TV)), Abstention::OtherSpeaker);
 }

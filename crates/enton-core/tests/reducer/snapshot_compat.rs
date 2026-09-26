@@ -10,7 +10,7 @@ use enton_core::{
 /// Reducer version that wrote the fixture. After bumping `REDUCER_VERSION`, regenerate it
 /// with `cargo test -p enton-core --test reducer -- --ignored regenerate_the_snapshot_fixture`
 /// and review the diff: it shows exactly how the organism's state changed.
-const FIXTURE_REDUCER_VERSION: u32 = 12;
+const FIXTURE_REDUCER_VERSION: u32 = 14;
 
 /// State after `run_tape`, as the soul would store it.
 const FIXTURE: &str = include_str!("../fixtures/organism-snapshot.json");
@@ -51,9 +51,9 @@ fn addressed(cue: SpeechCue, directed: f32) -> SpeechCue {
 }
 
 /// A tape that leaves almost every piece of organism state non-trivial: a
-/// conversation, echo adaptation, a habituated TV whose direction the array
-/// read, an hour of drives and a pending "Enton?" still waiting for its
-/// continuation.
+/// checklist, a conversation, echo adaptation, a follow-up whose thought failed
+/// (so the cortex backs off), a habituated TV whose direction the array read, an
+/// hour of drives and a pending "Enton?" still waiting for its continuation.
 fn run_tape(mut organism: Organism) -> Organism {
     let speech = |now: u64, cue: SpeechCue| Event::Speech {
         now: Millis(now),
@@ -61,6 +61,10 @@ fn run_tape(mut organism: Organism) -> Organism {
     };
     let mut events = vec![
         Event::Tick { now: Millis(0) },
+        Event::Checklist {
+            now: Millis(400),
+            actionable: true,
+        },
         Event::Body {
             now: Millis(500),
             signals: BodySignals {
@@ -83,6 +87,7 @@ fn run_tape(mut organism: Organism) -> Organism {
         Event::PlaybackFinished {
             now: Millis(3_000),
             utterance: UtteranceId(1),
+            interrupted: false,
         },
         // An aside inside the window, then the follow-up, both read by a directedness detector.
         speech(
@@ -93,6 +98,10 @@ fn run_tape(mut organism: Organism) -> Organism {
             3_600,
             addressed(cue(0.9, 0.9, 1_200, false, (0.85, 0.1, 0.9)), 0.9),
         ),
+        Event::CortexFailed {
+            now: Millis(5_000),
+            thought: ThoughtId(2),
+        },
         Event::Tick {
             now: Millis(60_000),
         },

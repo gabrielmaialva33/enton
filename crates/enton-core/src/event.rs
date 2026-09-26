@@ -75,6 +75,52 @@ pub enum Event {
         now: Millis,
         /// The utterance that finished playing.
         utterance: UtteranceId,
+        /// Whether the utterance was cut off: cancelled while it played, or before it
+        /// started, so it was not heard to its end. The reducer treats a cut playback
+        /// exactly like a finished one; the flag tells the audit what was cut. Omitted
+        /// from JSON when false, so an utterance that played to its end is stored exactly
+        /// as it was before the flag existed.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        interrupted: bool,
+    },
+    /// The owner's checklist (`CHECKLIST.md`) was read: at startup and whenever the file
+    /// changes. Only whether it holds something to check crosses into the core; its text
+    /// never does, so it never reaches the reducer or the soul.
+    Checklist {
+        /// The current time.
+        now: Millis,
+        /// Whether the checklist holds anything beyond blank lines, headings and empty
+        /// list items: something a drive thought could bring up.
+        actionable: bool,
+    },
+    /// A thought the core requested failed in the cortex (unreachable, timed out, or an
+    /// empty answer where one was owed). A thought abandoned for a newer one, or cut off
+    /// by a shutdown, did not fail and is never reported.
+    CortexFailed {
+        /// The current time.
+        now: Millis,
+        /// The thought that failed.
+        thought: ThoughtId,
+    },
+    /// The owner told Enton to keep quiet, or released it: a typed or transcribed command
+    /// ("Enton, silêncio", "Enton, pode falar") that the adapter recognized and sent in
+    /// place of its speech cue, so the command itself buys no thought. Until `until`, every
+    /// thought of Enton's own abstains (`Quiet`); being called by name is still answered.
+    /// An `until` at or before `now` releases it.
+    Quiet {
+        /// The current time.
+        now: Millis,
+        /// When quiet mode ends on its own.
+        until: Millis,
+    },
+    /// The owner's quiet hours (a band of local time, 23:00 to 07:00 by default) began or
+    /// ended. The core has no wall clock: the adapter reads it and sends only the flag, at
+    /// startup and at each edge of the band, so replay stays exact.
+    QuietHours {
+        /// The current time.
+        now: Millis,
+        /// Whether the band is on.
+        active: bool,
     },
 }
 
@@ -106,7 +152,11 @@ impl Event {
             | Event::Speech { now, .. }
             | Event::CortexReply { now, .. }
             | Event::PlaybackStarted { now, .. }
-            | Event::PlaybackFinished { now, .. } => *now,
+            | Event::PlaybackFinished { now, .. }
+            | Event::Checklist { now, .. }
+            | Event::CortexFailed { now, .. }
+            | Event::Quiet { now, .. }
+            | Event::QuietHours { now, .. } => *now,
         }
     }
 }

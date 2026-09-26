@@ -65,6 +65,23 @@ impl ConversationTurn {
     }
 }
 
+/// What the cortex answers to a drive thought when nothing needs saying. A drive thought
+/// asks whether anything on the owner's checklist is worth bringing up now; this reply
+/// (or an empty one) is silence, a valid outcome that satisfies the drive and is never
+/// spoken. For any other thought, an empty reply is a failure.
+pub const NOTHING_TO_SAY: &str = "NOTHING_TO_SAY";
+
+/// Whether `reply` is the cortex choosing silence: empty, or [`NOTHING_TO_SAY`] alone,
+/// ignoring surrounding whitespace and trailing punctuation.
+#[must_use]
+pub fn says_nothing(reply: &str) -> bool {
+    let bare = reply
+        .trim()
+        .trim_end_matches(|c: char| c.is_ascii_punctuation() && c != '_')
+        .trim();
+    bare.is_empty() || bare == NOTHING_TO_SAY
+}
+
 /// A request sent to the cortex adapter for deliberation.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ThoughtRequest {
@@ -72,7 +89,9 @@ pub struct ThoughtRequest {
     pub thought: ThoughtId,
     /// The trigger reason that caused ignition.
     pub reason: Reason,
-    /// The optional audio transcription or text cue heard from the environment.
+    /// The optional audio transcription or text cue heard from the environment. For a
+    /// drive thought it is the owner's checklist (`CHECKLIST.md`), framed as what Enton
+    /// may bring up on its own, and `None` when the checklist holds nothing to check.
     pub transcript: Option<String>,
     /// Bounded recent conversation history.
     pub history: Vec<ConversationTurn>,
@@ -105,4 +124,31 @@ pub trait TextToSpeech {
         text: &str,
         sample_rate: u32,
     ) -> impl Future<Output = Result<Vec<f32>, PortError>> + Send;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn silence_is_an_empty_reply_or_the_marker_alone() {
+        for silent in [
+            "",
+            "   \n",
+            "NOTHING_TO_SAY",
+            " NOTHING_TO_SAY.\n",
+            "NOTHING_TO_SAY!",
+        ] {
+            assert!(says_nothing(silent), "{silent:?}");
+        }
+        for spoken in [
+            "Nada a dizer.",
+            "nothing_to_say",
+            "NOTHING_TO_SAY, mas lembre de regar as plantas.",
+            "Lembrete: NOTHING_TO_SAY",
+            "NOTHING_TO_SAY_",
+        ] {
+            assert!(!says_nothing(spoken), "{spoken:?}");
+        }
+    }
 }

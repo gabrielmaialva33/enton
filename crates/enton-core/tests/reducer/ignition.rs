@@ -1,6 +1,9 @@
 use enton_core::{Abstention, Action, Event, Millis, Organism, Profile, Reason, SpeechCue};
 
-use super::support::{assert_abstention, assert_thought, sensitive_profile, speech};
+use super::support::{
+    assert_abstention, assert_thought, checklist, owner_nearby, owner_speech, sensitive_profile,
+    speech,
+};
 
 #[test]
 fn an_hour_of_ticks_never_ignites_or_emits_idle_abstentions() {
@@ -59,7 +62,7 @@ fn weak_speech_records_below_threshold() {
 #[test]
 fn speech_observes_cooldown_but_keywords_bypass_it() {
     let mut organism = Organism::new(Profile::t1_ref()).unwrap();
-    assert_thought(&organism.step(&speech(0, false)), 1, &Reason::Speech);
+    assert_thought(&organism.step(&owner_speech(0, false)), 1, &Reason::Speech);
     assert_abstention(&organism.step(&speech(1_000, false)), Abstention::Cooldown);
     // Keyword bypasses cooldown and opens attention window
     assert_thought(&organism.step(&speech(1_001, true)), 2, &Reason::Keyword);
@@ -79,6 +82,8 @@ fn speech_observes_cooldown_but_keywords_bypass_it() {
 #[test]
 fn drive_ignition_reports_the_strongest_contributor_and_does_not_repeat() {
     let mut organism = Organism::new(sensitive_profile()).unwrap();
+    organism.step(&checklist(0, true));
+    organism.step(&owner_nearby(3_599_000));
     assert_thought(
         &organism.step(&Event::Tick {
             now: Millis(3_600_000),
@@ -139,7 +144,8 @@ fn salience_short_clear_direct_speech_passes_and_low_vad_never_passes() {
     let profile = Profile::t1_ref();
     let threshold = profile.ignition.threshold;
 
-    // 1. Short clear direct speech: energy >= 0.8, VAD >= 0.8, 250 ms passes t1-ref threshold (0.7)
+    // 1. Short clear direct speech: energy >= 0.8, VAD >= 0.8, 250 ms passes t1-ref threshold
+    // (0.7). It is the owner's voice, so someone is home to hear the thought.
     let mut organism = Organism::new(profile).unwrap();
     let actions = organism.step(&Event::Speech {
         now: Millis(0),
@@ -148,7 +154,7 @@ fn salience_short_clear_direct_speech_passes_and_low_vad_never_passes() {
             duration_ms: 250,
             vad_confidence: 0.8,
             keyword: false,
-            speaker_sim: None,
+            speaker_sim: Some(0.9),
             media: None,
             turn_complete: None,
             directed: None,

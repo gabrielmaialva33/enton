@@ -40,6 +40,9 @@ pub struct Profile {
     /// Off unless `explore_probability` is above zero.
     #[serde(flatten)]
     pub exploration: ExplorationPolicy,
+    /// When Enton may think on its own: with the owner around and a cortex that answers.
+    #[serde(flatten)]
+    pub discretion: DiscretionPolicy,
     /// What each sensor's reading is worth: the calibration of this body's
     /// microphone and models.
     #[serde(default)]
@@ -154,6 +157,86 @@ impl Default for ExplorationPolicy {
             explore_seed: 0,
         }
     }
+}
+
+/// When a discretionary thought (a drive, or overheard speech) may be bought at all. An
+/// obligation (Enton called by name, or a follow-up in its window) is never held back
+/// by any of this: the owner asked.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DiscretionPolicy {
+    /// How long, in milliseconds, the owner counts as around after Enton last heard them:
+    /// an addressed cue it accepted (its name, a continuation or a follow-up), or a cue
+    /// whose voice verifies the owner speaking live. Past it, discretionary thoughts
+    /// abstain as `NobodyHome`: nobody is there to hear what Enton would say. Thirty
+    /// minutes, one heartbeat of the agents that poll on a timer, was chosen before
+    /// looking at E1.
+    #[serde(default = "default_presence_window_ms")]
+    pub presence_window_ms: u64,
+    /// How long, in milliseconds, discretionary thoughts wait after one cortex failure.
+    /// Each further consecutive failure doubles the wait, up to `cortex_backoff_cap_ms`;
+    /// a reply ends it.
+    #[serde(default = "default_cortex_backoff_base_ms")]
+    pub cortex_backoff_base_ms: u64,
+    /// The longest wait, in milliseconds, however many failures came in a row.
+    #[serde(default = "default_cortex_backoff_cap_ms")]
+    pub cortex_backoff_cap_ms: u64,
+    /// How long, in milliseconds, a drive that got ready during a conversation holds its
+    /// intent to ride the owner's next request. The intent rides that request's thought, or
+    /// the drive thinks alone once the conversation is over and nothing else holds it back;
+    /// past this, with neither, the intent expires and the drive lets it go (`Expired`).
+    /// Ten minutes, about a long conversation, was chosen before looking at E1.
+    #[serde(default = "default_deferral_ms")]
+    pub deferral_ms: u64,
+}
+
+impl Default for DiscretionPolicy {
+    fn default() -> Self {
+        Self {
+            presence_window_ms: default_presence_window_ms(),
+            cortex_backoff_base_ms: default_cortex_backoff_base_ms(),
+            cortex_backoff_cap_ms: default_cortex_backoff_cap_ms(),
+            deferral_ms: default_deferral_ms(),
+        }
+    }
+}
+
+impl DiscretionPolicy {
+    /// The wait after `failures` consecutive cortex failures: the base doubled for each
+    /// failure after the first, capped. Integer arithmetic, so replay computes the same
+    /// deadline everywhere. Zero failures wait for nothing.
+    #[must_use]
+    pub fn backoff_ms(&self, failures: u32) -> u64 {
+        let Some(doublings) = failures.checked_sub(1) else {
+            return 0;
+        };
+        let factor = 1_u64 << doublings.min(63);
+        self.cortex_backoff_base_ms
+            .saturating_mul(factor)
+            .min(self.cortex_backoff_cap_ms)
+    }
+
+    fn is_valid(&self) -> bool {
+        self.presence_window_ms > 0
+            && self.cortex_backoff_base_ms > 0
+            && self.cortex_backoff_cap_ms >= self.cortex_backoff_base_ms
+            && self.deferral_ms > 0
+    }
+}
+
+fn default_presence_window_ms() -> u64 {
+    1_800_000
+}
+
+fn default_cortex_backoff_base_ms() -> u64 {
+    60_000
+}
+
+fn default_cortex_backoff_cap_ms() -> u64 {
+    3_600_000
+}
+
+fn default_deferral_ms() -> u64 {
+    600_000
 }
 
 /// Body signals that force torpor.
@@ -501,6 +584,7 @@ impl Profile {
                 tv_caution_confinement: TvCautionConfinement::default(),
             },
             exploration: ExplorationPolicy::default(),
+            discretion: DiscretionPolicy::default(),
             senses: Senses::calibrated(),
         }
     }
@@ -576,6 +660,7 @@ impl Profile {
                 tv_caution_confinement: TvCautionConfinement::default(),
             },
             exploration: ExplorationPolicy::default(),
+            discretion: DiscretionPolicy::default(),
             senses: Senses::calibrated(),
         }
     }
@@ -595,6 +680,7 @@ impl Profile {
             && self.echo.is_valid()
             && self.source.is_valid()
             && self.exploration.is_valid()
+            && self.discretion.is_valid()
             && self.senses.is_valid();
         if valid {
             Ok(())

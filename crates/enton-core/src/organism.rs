@@ -104,8 +104,27 @@ const TV_DIRECTION_AGREEMENT: f32 = 0.5;
 /// A continuation may start this much before the name's recorded end: endpoint jitter.
 const CONTINUATION_JITTER_MS: u64 = 50;
 
+/// What the owner's checklist holds, as far as the core knows: whether there is
+/// something a drive could bring up. Its text never reaches the core.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Checklist {
+    /// Nothing to check: no checklist, an effectively empty one, or none read yet.
+    #[default]
+    Empty,
+    /// Something to check.
+    Actionable,
+}
+
+/// A drive's thought awaiting its outcome, and the drive it answers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct DriveThought {
+    thought: ThoughtId,
+    drive: String,
+}
+
 /// The version of the brainstem reducer and snapshot schema.
-pub const REDUCER_VERSION: u32 = 12;
+pub const REDUCER_VERSION: u32 = 14;
 
 /// Which account pays for a thought.
 #[derive(Debug, Clone, Copy)]
@@ -198,6 +217,27 @@ pub struct Organism {
     /// advanced once per coin flip, so a snapshot resumes the same sequence of draws.
     #[serde(default)]
     explore_state: u64,
+    /// What the owner's checklist holds, as of the last `Checklist` event. Before one,
+    /// nothing is known: nothing to check.
+    #[serde(default)]
+    checklist: Checklist,
+    /// When Enton last heard the owner: an addressed cue it accepted, or a cue in the
+    /// owner's verified voice. `None` until then: nobody has been home.
+    #[serde(default)]
+    owner_heard_at: Option<Millis>,
+    /// The drive thought awaiting its outcome, if one is out.
+    #[serde(default)]
+    drive_thought: Option<DriveThought>,
+    /// What a ready drive last abstained for, so a wait is logged when it starts and when
+    /// its cause changes, not on every tick.
+    #[serde(default)]
+    drive_waiting: Option<Abstention>,
+    /// Cortex failures in a row since the last reply.
+    #[serde(default)]
+    cortex_failures: u32,
+    /// Until when discretionary thoughts back off after those failures.
+    #[serde(default)]
+    backoff_until: Option<Millis>,
 }
 
 impl Organism {
@@ -244,6 +284,12 @@ impl Organism {
             tv_heard_at: Millis(0),
             tv_direction: TvDirection::default(),
             explore_state,
+            checklist: Checklist::Empty,
+            owner_heard_at: None,
+            drive_thought: None,
+            drive_waiting: None,
+            cortex_failures: 0,
+            backoff_until: None,
         })
     }
 
@@ -390,6 +436,53 @@ impl Organism {
         self.torpor
     }
 
+    /// The drives and their current levels. Read-only, for audits and tests.
+    #[must_use]
+    pub fn drives(&self) -> &DriveTable {
+        &self.drives
+    }
+
+    /// Whether the owner's checklist holds something a drive could bring up, as of the
+    /// last `Checklist` event (false before one).
+    #[must_use]
+    pub fn checklist_actionable(&self) -> bool {
+        self.checklist == Checklist::Actionable
+    }
+
+    /// When Enton last heard the owner: an addressed cue it accepted, or a cue in the
+    /// owner's verified voice. `None` if it never has.
+    #[must_use]
+    pub fn owner_heard_at(&self) -> Option<Millis> {
+        self.owner_heard_at
+    }
+
+    /// Whether the owner counts as around at `now`: heard within the profile's
+    /// presence window. Discretionary thoughts need it.
+    #[must_use]
+    pub fn owner_present_as_of(&self, now: Millis) -> bool {
+        self.owner_present(now)
+    }
+
+    /// The drive thought awaiting its outcome, and the drive it answers, if one is out.
+    #[must_use]
+    pub fn drive_thought(&self) -> Option<(ThoughtId, &str)> {
+        self.drive_thought
+            .as_ref()
+            .map(|pending| (pending.thought, pending.drive.as_str()))
+    }
+
+    /// Cortex failures in a row since the last reply.
+    #[must_use]
+    pub fn cortex_failures(&self) -> u32 {
+        self.cortex_failures
+    }
+
+    /// Until when discretionary thoughts back off after cortex failures, if they do.
+    #[must_use]
+    pub fn backoff_until(&self) -> Option<Millis> {
+        self.backoff_until
+    }
+
     /// Belief, from zero to one, that a TV is playing at `now`: the value a cue
     /// at that instant is weighed against, decayed since the last overheard line.
     /// Read-only, for audits such as `enton why`.
@@ -430,8 +523,35 @@ impl Organism {
                 Vec::new()
             }
             Event::Speech { now, cue } => vec![self.speech(*now, &cue.canonical())],
+            Event::Checklist { actionable, .. } => {
+                self.checklist = if *actionable {
+                    Checklist::Actionable
+                } else {
+                    Checklist::Empty
+                };
+                Vec::new()
+            }
+            Event::CortexFailed { now, thought } => {
+                self.cortex_failed(*now, *thought);
+                Vec::new()
+            }
             Event::CortexReply { now, text, thought } => {
                 self.drives.satisfy("social", 0.3);
+                if self.issued(*thought) {
+                    // The cortex answers again: discretionary thoughts stop backing off.
+                    self.cortex_failures = 0;
+                    self.backoff_until = None;
+                }
+                // Any reply to a drive's thought answers it, silence included: the drive
+                // checked what there was to check, and asks again only once its pressure
+                // builds back up.
+                if let Some(answered) = self
+                    .drive_thought
+                    .take_if(|pending| pending.thought == *thought)
+                {
+                    self.drives.satisfy(&answered.drive, 1.0);
+                    self.ignition.settle(self.drives.pressure());
+                }
                 self.self_speech_has_keyword = contains_keyword_word(text, "enton");
                 if Some(*thought) == self.conversation_thought {
                     self.conversation_thought = None;
@@ -452,19 +572,29 @@ impl Organism {
                         );
                     }
                 }
-                vec![Action::Speak { text: text.clone() }]
+                // Silence is an outcome, not a failure: a blank reply says nothing.
+                if text.trim().is_empty() {
+                    Vec::new()
+                } else {
+                    vec![Action::Speak { text: text.clone() }]
+                }
             }
             Event::PlaybackStarted { now, utterance } => {
                 self.playback_status = PlaybackStatus::Speaking {
                     utterance: *utterance,
                     started_at: *now,
                 };
-                // Voice mode precedence: playback supersedes text anchor and suspends the windows
-                self.attention_until = None;
-                self.verified_attention_until = None;
+                // Voice mode precedence: playback supersedes text anchor and suspends the
+                // windows. Not while an "Enton..." waits for the rest of its request: what
+                // plays then (the runtime's acknowledgement chime) leaves the caller's turn open.
+                if self.pending_attend.is_none() {
+                    self.attention_until = None;
+                    self.verified_attention_until = None;
+                }
                 Vec::new()
             }
-            Event::PlaybackFinished { now, utterance } => {
+            // A cut playback ends like a finished one: the flag is for the audit.
+            Event::PlaybackFinished { now, utterance, .. } => {
                 if let PlaybackStatus::Speaking {
                     utterance: active, ..
                 } = self.playback_status
@@ -570,26 +700,128 @@ impl Organism {
             self.verified_attention_until = None;
         }
 
-        if !self.ignition.drive_ready(now) {
+        // A drive waits for a conversation to end: a thought of its own would cut the
+        // owner off, and would supersede the answer Enton owes them.
+        if !self.ignition.drive_ready(now) || self.in_conversation(now) {
+            self.drive_waiting = None;
             return actions;
         }
-        let Some(drive) = self.drives.strongest() else {
+        let Some(drive) = self.drives.strongest().map(|drive| drive.name.clone()) else {
             return actions;
         };
-        let reason = Reason::Drive(drive.name.clone());
+        let reason = Reason::Drive(drive.clone());
         let salience = self.ignition.salience();
-        actions.push(if self.torpor {
-            Action::Abstain {
-                reason,
-                salience,
-                why: Abstention::Torpor,
-                propensity: None,
+        let held_back = if self.torpor {
+            Some(Abstention::Torpor)
+        } else {
+            self.discretion_gate(now, true).or_else(|| {
+                (self.thoughts_exhausted()
+                    || !self.discretionary_budget.can_spend(self.prices.think))
+                .then_some(Abstention::OutOfEnergy)
+            })
+        };
+        if let Some(why) = held_back {
+            // A ready drive that cannot think logs its wait when it starts and whenever
+            // the cause changes; the ticks in between stay silent, spend nothing, and
+            // leave the ignition armed.
+            if self.drive_waiting != Some(why) {
+                self.drive_waiting = Some(why);
+                actions.push(Action::Abstain {
+                    reason,
+                    salience,
+                    why,
+                    propensity: None,
+                });
             }
         } else {
+            self.drive_waiting = None;
             // Discretionary drive thought spends discretionary budget
-            self.pay_and_think(now, reason, salience, Payment::Discretionary)
-        });
+            let action = self.pay_and_think(now, reason, salience, Payment::Discretionary);
+            if let Action::Think { thought, .. } = action {
+                self.drive_thought = Some(DriveThought { thought, drive });
+            }
+            actions.push(action);
+        }
         actions
+    }
+
+    /// Whether Enton is in a conversation at `now`: waiting for the rest of a request,
+    /// inside an attention window, or speaking (its echo included).
+    fn in_conversation(&self, now: Millis) -> bool {
+        self.pending_attend.is_some()
+            || self.attention_until.is_some_and(|until| now < until)
+            || self
+                .verified_attention_until
+                .is_some_and(|until| now < until)
+            || self.is_in_echo_period(now)
+    }
+
+    /// What holds a discretionary thought back at `now`, in order: for a drive, a
+    /// checklist with nothing to check; for any, nobody home or a cortex backoff.
+    fn discretion_gate(&self, now: Millis, drive: bool) -> Option<Abstention> {
+        if drive && self.checklist == Checklist::Empty {
+            Some(Abstention::NothingToCheck)
+        } else if !self.owner_present(now) {
+            Some(Abstention::NobodyHome)
+        } else if self.backing_off(now) {
+            Some(Abstention::Backoff)
+        } else {
+            None
+        }
+    }
+
+    /// Whether the owner was heard within the presence window before `now`.
+    fn owner_present(&self, now: Millis) -> bool {
+        self.owner_heard_at
+            .is_some_and(|at| now.since(at) < self.profile.discretion.presence_window_ms)
+    }
+
+    /// Record that the owner was heard at `now`.
+    fn heard_owner(&mut self, now: Millis) {
+        self.owner_heard_at = Some(self.owner_heard_at.map_or(now, |at| at.max(now)));
+    }
+
+    /// Whether discretionary thoughts are still backing off after cortex failures.
+    fn backing_off(&self, now: Millis) -> bool {
+        self.backoff_until.is_some_and(|until| now < until)
+    }
+
+    /// Whether `thought` is one this organism issued.
+    fn issued(&self, thought: ThoughtId) -> bool {
+        thought.0 >= 1 && thought.0 < self.next_thought
+    }
+
+    /// A thought failed in the cortex: count the failure and back off discretionary
+    /// thoughts, exponentially in the failures in a row. A failed drive thought did not
+    /// answer its drive, which may ask again once the backoff allows; a failed answer
+    /// to the owner ends the conversation's wait for it.
+    fn cortex_failed(&mut self, now: Millis, thought: ThoughtId) {
+        if !self.issued(thought) {
+            return;
+        }
+        self.cortex_failures = self.cortex_failures.saturating_add(1);
+        let wait = self.profile.discretion.backoff_ms(self.cortex_failures);
+        let until = Millis(now.0.saturating_add(wait));
+        self.backoff_until = Some(self.backoff_until.map_or(until, |at| at.max(until)));
+        if self
+            .drive_thought
+            .take_if(|pending| pending.thought == thought)
+            .is_some()
+        {
+            self.ignition.rearm();
+        }
+        if self.conversation_thought == Some(thought) {
+            self.conversation_thought = None;
+        }
+    }
+
+    /// A newer thought, or speech the runtime accepts, supersedes the drive thought in
+    /// flight: the runtime abandons it, so it will neither answer nor fail. Its drive
+    /// was not answered and may ask again later.
+    fn supersede_drive_thought(&mut self) {
+        if self.drive_thought.take().is_some() {
+            self.ignition.rearm();
+        }
     }
 
     fn speech_during_echo(
@@ -701,7 +933,21 @@ impl Organism {
             // a whole request is answered, an unfinished "Enton..." waits for the rest.
             return self.speech_addressed(now, cue, norm_energy, norm_vad, norm_dur);
         }
+        if self.pending_attend.is_some() {
+            // The rest of a request Enton was waiting for, over its own acknowledgement:
+            // it finishes that request, as it would in silence, and only once.
+            return self.accept_in_window(
+                now,
+                cue,
+                norm_energy,
+                norm_vad,
+                norm_dur,
+                Payment::Obligation,
+            );
+        }
 
+        // An accepted barge-in in the caller's voice: the owner is home.
+        self.heard_owner(now);
         let salience = self.calculate_base_salience(norm_energy, norm_vad, norm_dur);
         if self.torpor {
             return Action::Abstain {
@@ -721,6 +967,10 @@ impl Organism {
 
     fn speech(&mut self, now: Millis, cue: &SpeechCue) -> Action {
         self.advance_playback_status(now);
+        // The owner's verified voice says they are home, whatever the cue turns out to be.
+        if cue.speaker_sim.is_some() && self.is_verified_speaker(now, cue) {
+            self.heard_owner(now);
+        }
 
         let norm_energy = normalized(cue.energy);
         let norm_vad = normalized(cue.vad_confidence);
@@ -817,7 +1067,7 @@ impl Organism {
         if !matches!(heard, Action::Abstain { .. }) {
             return None;
         }
-        Some(match self.flip(depth, thinks_without)? {
+        Some(match self.flip(now, depth, thinks_without)? {
             Draw::Explore(probability) => self.accept_in_window(
                 now,
                 cue,
@@ -855,9 +1105,12 @@ impl Organism {
                 propensity: None,
             };
         }
+        // Someone called Enton by name: the owner is home.
+        self.heard_owner(now);
         // Addressed speech is never habituated
         if !self.is_whole_request(now, cue) {
             let until = Millis(now.0.saturating_add(self.profile.attention.attention_ms));
+            self.supersede_drive_thought();
             self.open_attention(now);
             self.pending_attend = Some(PendingAttend {
                 until,
@@ -932,7 +1185,7 @@ impl Organism {
             };
             let depth = self.objection_depth(now, cue, norm_vad);
             let thinks_without = self.thinks_in_window(cue, norm_vad);
-            return match self.flip(depth, thinks_without) {
+            return match self.flip(now, depth, thinks_without) {
                 Some(Draw::Explore(probability)) => self.accept_in_window(
                     now,
                     cue,
@@ -993,6 +1246,11 @@ impl Organism {
                 };
             }
 
+            // A continuation the evidence let through is the owner at home; one that only
+            // a coin flip let through is not evidence of anyone.
+            if !matches!(payment, Payment::Explored(_)) {
+                self.heard_owner(now);
+            }
             // Valid continuation: produces a single Think with Reason::Keyword covering both segments
             let continuation_salience =
                 self.calculate_base_salience(norm_energy, norm_vad, norm_dur);
@@ -1002,6 +1260,7 @@ impl Organism {
                 // The request is still going ("Enton, você pode... hã..."): keep waiting,
                 // now anchored at this segment's end.
                 let until = Millis(now.0.saturating_add(self.profile.attention.attention_ms));
+                self.supersede_drive_thought();
                 self.open_attention(now);
                 self.pending_attend = Some(PendingAttend {
                     until,
@@ -1038,6 +1297,9 @@ impl Organism {
             };
         }
 
+        if !matches!(payment, Payment::Explored(_)) {
+            self.heard_owner(now);
+        }
         // Follow-up needs only minimal VAD, bypasses non-keyword cooldown, pays obligation_budget
         let action = self.pay_and_think(now, Reason::FollowUp, salience, payment);
         if let Action::Think { thought, .. } = action {
@@ -1108,7 +1370,7 @@ impl Organism {
                 && !self.ignition.in_cooldown(now)
                 && effective_salience >= threshold;
             let draw = if explore {
-                self.flip(depth, thinks_without)
+                self.flip(now, depth, thinks_without)
             } else {
                 None
             };
@@ -1156,6 +1418,17 @@ impl Organism {
                 reason: Reason::Speech,
                 salience: effective_salience,
                 why: Abstention::Habituation,
+                propensity: None,
+            };
+        }
+
+        // Worth a thought, but a discretionary one: nobody home, or a cortex backing off,
+        // holds it back.
+        if let Some(why) = self.discretion_gate(now, false) {
+            return Action::Abstain {
+                reason: Reason::Speech,
+                salience: effective_salience,
+                why,
                 propensity: None,
             };
         }
@@ -1563,7 +1836,12 @@ impl Organism {
         }
         let thought = ThoughtId(self.next_thought);
         self.next_thought = self.next_thought.saturating_add(1);
-        self.ignition.fired(now);
+        self.supersede_drive_thought();
+        if matches!(reason, Reason::Drive(_)) {
+            self.ignition.fired(now);
+        } else {
+            self.ignition.paid(now);
+        }
         let (answers_turn, propensity) = match payment {
             Payment::Obligation => (true, None),
             Payment::Discretionary => (false, None),
@@ -1586,16 +1864,18 @@ impl Organism {
     /// away, whose deepest objecting sensor is `depth` nats past its threshold, and that
     /// would have bought a thought without the objection (`thinks_without`). `None` when
     /// the cue may not explore: exploration is off, the cue is not borderline, the body is
-    /// in torpor, or the discretionary account cannot pay for the thought. The generator
+    /// in torpor, the discretionary account cannot pay for the thought, or a discretionary
+    /// thought is held back at `now` (nobody home, or a cortex backoff). The generator
     /// advances only when the coin is flipped.
-    fn flip(&mut self, depth: f32, thinks_without: bool) -> Option<Draw> {
+    fn flip(&mut self, now: Millis, depth: f32, thinks_without: bool) -> Option<Draw> {
         let policy = self.profile.exploration;
         let eligible = policy.explore_probability > 0.0
             && thinks_without
             && depth <= policy.explore_margin_nats
             && !self.torpor
             && !self.thoughts_exhausted()
-            && self.discretionary_budget.can_spend(self.prices.think);
+            && self.discretionary_budget.can_spend(self.prices.think)
+            && self.discretion_gate(now, false).is_none();
         if !eligible {
             return None;
         }
@@ -1788,6 +2068,44 @@ mod tests {
         assert!(applied(0.1) >= 0.1 && applied(0.1) - 0.1 < step);
         assert_eq!((applied(0.1) * DRAW_SCALE).fract().to_bits(), 0);
         assert_eq!(applied(1e-12).to_bits(), step.to_bits());
+    }
+
+    #[test]
+    fn a_profile_stored_before_discretion_reads_back_with_its_defaults() {
+        for shipped in [Profile::t1_ref(), Profile::desktop()] {
+            assert_eq!(shipped.discretion, crate::DiscretionPolicy::default());
+            let mut stored = serde_json::to_value(&shipped).unwrap();
+            let fields = stored.as_object_mut().unwrap();
+            for key in [
+                "presence_window_ms",
+                "cortex_backoff_base_ms",
+                "cortex_backoff_cap_ms",
+            ] {
+                assert!(fields.remove(key).is_some(), "{key}");
+            }
+            let profile: Profile = serde_json::from_value(stored).unwrap();
+            assert_eq!(profile, shipped);
+        }
+    }
+
+    #[test]
+    fn discretion_needs_a_presence_window_and_a_backoff_capped_above_its_base() {
+        let broken: [fn(&mut Profile); 3] = [
+            |profile| profile.discretion.presence_window_ms = 0,
+            |profile| profile.discretion.cortex_backoff_base_ms = 0,
+            |profile| {
+                profile.discretion.cortex_backoff_cap_ms =
+                    profile.discretion.cortex_backoff_base_ms - 1;
+            },
+        ];
+        for (index, breaks) in broken.into_iter().enumerate() {
+            let mut profile = Profile::t1_ref();
+            breaks(&mut profile);
+            assert!(profile.validate().is_err(), "case {index}");
+        }
+        let mut equal = Profile::t1_ref();
+        equal.discretion.cortex_backoff_cap_ms = equal.discretion.cortex_backoff_base_ms;
+        assert!(equal.validate().is_ok());
     }
 
     #[test]

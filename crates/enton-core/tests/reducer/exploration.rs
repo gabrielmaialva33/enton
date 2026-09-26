@@ -320,9 +320,10 @@ fn a_voice_just_short_of_verification_explores_the_longer_window() {
 #[test]
 fn overheard_media_near_the_threshold_explores_on_the_discretionary_account() {
     // The tagger's 0.65 on a 1.5 s cue is 0.27 nats past the loudspeaker threshold;
-    // 1.0 is 2 nats past it, beyond the margin.
-    let near = said(1_000, false, (None, Some(0.65), None));
-    let far = said(1_000, false, (None, Some(1.0), None));
+    // 1.0 is 2 nats past it, beyond the margin. The voice is the owner's, so someone is
+    // home to hear what an explored thought would say.
+    let near = said(1_000, false, (Some(0.9), Some(0.65), None));
+    let far = said(1_000, false, (Some(0.9), Some(1.0), None));
     let mut organism = Organism::new(exploring(1.0)).unwrap();
     let discretionary = organism.discretionary_budget().available;
     assert!(matches!(

@@ -63,6 +63,7 @@ fn self_echo_during_hangover_is_suppressed() {
     organism.step(&Event::PlaybackFinished {
         now: Millis(2000),
         utterance: UtteranceId(1),
+        interrupted: false,
     });
     assert!(organism.is_hangover());
 
@@ -427,6 +428,7 @@ fn closed_loop_feedback_immunity_pure_core() {
     organism.step(&Event::PlaybackFinished {
         now: Millis(8_400),
         utterance: UtteranceId(1),
+        interrupted: false,
     });
 
     let e3 = organism.step(&Event::Speech {
@@ -491,6 +493,7 @@ fn closed_loop_feedback_immunity_pure_core() {
     organism.step(&Event::PlaybackFinished {
         now: Millis(13_400),
         utterance: UtteranceId(2),
+        interrupted: false,
     });
 
     for t in 14..=60 {

@@ -57,16 +57,24 @@ fn media_inside_the_window_neither_continues_nor_extends_it() {
 
 #[test]
 fn overheard_media_never_buys_a_discretionary_thought() {
-    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+    // The owner called Enton a while ago, so someone is home; the window has closed.
+    let home = || {
+        let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+        assert_thought(
+            &organism.step(&heard(1_000, true, 0.9, 0.1)),
+            1,
+            &Reason::Keyword,
+        );
+        organism
+    };
     assert_abstention(
-        &organism.step(&heard(1_000, false, 0.2, 0.9)),
+        &home().step(&heard(20_000, false, 0.2, 0.9)),
         Abstention::Media,
     );
     // The same live voice would have ignited.
-    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
     assert_thought(
-        &organism.step(&heard(1_000, false, 0.2, 0.1)),
-        1,
+        &home().step(&heard(20_000, false, 0.2, 0.1)),
+        2,
         &Reason::Speech,
     );
 }

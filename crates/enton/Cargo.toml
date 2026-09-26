@@ -18,7 +18,7 @@ shared-runtime = ["enton-adapters/shared-runtime"]
 enton-adapters = { workspace = true, features = ["cortex", "soul"] }
 enton-core.workspace = true
 thiserror.workspace = true
-tokio = { version = "1", features = ["rt", "macros", "sync", "time", "io-util", "io-std"] }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "io-util", "io-std"] }
 
 [lints]
 workspace = true

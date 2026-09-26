@@ -25,8 +25,8 @@ enton-core.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 rusqlite = { version = "0.40", features = ["bundled"], optional = true }
-serde_json = { version = "1", optional = true }
-tokio = { version = "1", features = ["rt", "macros", "sync", "time"], optional = true }
+serde_json = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"], optional = true }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"], optional = true }
 cpal = { version = "0.18", optional = true }
 sherpa-onnx = { version = "1.13", optional = true, default-features = false }

@@ -96,6 +96,7 @@ mod tests {
                 vad_confidence: 0.55,
                 duration_ms: 250,
                 keyword: false,
+                speaker_sim: None,
             },
         };
         assert!(matches!(
@@ -123,6 +124,7 @@ mod tests {
                 vad_confidence: 0.55,
                 duration_ms: 250,
                 keyword: false,
+                speaker_sim: None,
             },
         };
         assert!(matches!(
@@ -144,6 +146,7 @@ mod tests {
                 vad_confidence: 0.9,
                 duration_ms: 1000,
                 keyword,
+                speaker_sim: None,
             },
         }
     }

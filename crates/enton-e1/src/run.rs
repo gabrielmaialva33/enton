@@ -208,6 +208,9 @@ impl Machine {
     }
 }
 
+/// Enton's own synthesized voice does not match the user.
+const SELF_ECHO_SPEAKER_SIM: f32 = 0.15;
+
 struct Feedback {
     pending: BTreeMap<(Millis, u64), Record>,
     next_order: u64,
@@ -269,6 +272,7 @@ impl Feedback {
                         vad_confidence: 0.55,
                         duration_ms: 250,
                         keyword: thought.0.is_multiple_of(4) && index == 0,
+                        speaker_sim: Some(SELF_ECHO_SPEAKER_SIM),
                     },
                 },
                 annotation: Annotation::Speech {
@@ -536,6 +540,7 @@ mod tests {
                     vad_confidence: 0.9,
                     duration_ms: 1000,
                     keyword: true,
+                    speaker_sim: None,
                 },
             },
             annotation: Annotation::Speech {
@@ -761,6 +766,7 @@ mod tests {
                         vad_confidence: 0.1,
                         duration_ms: 500,
                         keyword: false,
+                        speaker_sim: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -777,6 +783,7 @@ mod tests {
                         vad_confidence: 0.05,
                         duration_ms: 500,
                         keyword: false,
+                        speaker_sim: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -793,6 +800,7 @@ mod tests {
                         vad_confidence: 0.9,
                         duration_ms: 1500,
                         keyword: false,
+                        speaker_sim: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -866,6 +874,7 @@ mod admission_tests {
                         vad_confidence: 0.9,
                         duration_ms: duration,
                         keyword,
+                        speaker_sim: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -910,6 +919,7 @@ mod admission_tests {
                         vad_confidence: 0.9,
                         duration_ms: 1000,
                         keyword: true,
+                        speaker_sim: None,
                     },
                 },
                 annotation: Annotation::Speech {

@@ -21,7 +21,8 @@ pub use tape::{
 };
 
 /// Version of distributions, feedback, attribution and the report contract.
-pub const BENCHMARK_VERSION: &str = "2.2.1";
+/// Version 2.3.0 adds a simulated speaker-similarity dimension; all other draws unchanged.
+pub const BENCHMARK_VERSION: &str = "2.3.0";
 
 /// Invalid experiments fail explicitly rather than dropping stimuli or granting free calls.
 #[derive(Debug, thiserror::Error)]

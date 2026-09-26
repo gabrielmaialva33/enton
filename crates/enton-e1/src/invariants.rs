@@ -187,6 +187,7 @@ mod tests {
                 duration_ms: 200,
                 vad_confidence: 0.2,
                 keyword: false,
+                speaker_sim: None,
             },
         }
     }

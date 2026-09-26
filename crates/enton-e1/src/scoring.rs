@@ -244,6 +244,7 @@ mod tests {
                     vad_confidence: 0.9,
                     duration_ms: 250,
                     keyword: true,
+                    speaker_sim: None,
                 },
             },
             annotation: Annotation::Speech {

@@ -41,8 +41,30 @@ impl SplitMix64 {
     }
 }
 
+/// Lower bound of the nominal speaker similarity range for legitimate user speech.
+pub const USER_SPEAKER_SIM_MIN: f32 = 0.62;
+/// Upper bound of the nominal speaker similarity range for legitimate user speech.
+pub const USER_SPEAKER_SIM_MAX: f32 = 0.95;
+
+/// Lower bound of the nominal speaker similarity range for impostor speech.
+pub const IMPOSTOR_SPEAKER_SIM_MIN: f32 = 0.05;
+/// Upper bound of the nominal speaker similarity range for impostor speech.
+pub const IMPOSTOR_SPEAKER_SIM_MAX: f32 = 0.55;
+
+/// Lower bound of the speaker similarity range for non-speech acoustic segments.
+pub const NON_SPEECH_SPEAKER_SIM_MIN: f32 = 0.0;
+/// Upper bound of the speaker similarity range for non-speech acoustic segments.
+pub const NON_SPEECH_SPEAKER_SIM_MAX: f32 = 0.3;
+
+/// Probability of crossover error in speaker verification (bad audio for user, confusable voices for impostor).
+pub const SPEAKER_SIM_CROSSOVER_RATE: f32 = 0.03;
+
+/// Stream salt for the independent speaker-similarity RNG stream.
+const SPEAKER_STREAM_SALT: u64 = 0x5350_4541_4b45_5231;
+
 struct Builder {
     rng: SplitMix64,
+    speaker_rng: SplitMix64,
     records: Vec<Record>,
     turns: Vec<Turn>,
     next_segment: u32,
@@ -52,19 +74,46 @@ impl Builder {
     fn new(seed: u64) -> Self {
         Self {
             rng: SplitMix64::with_seed(seed),
+            speaker_rng: SplitMix64::with_seed(seed ^ SPEAKER_STREAM_SALT),
             records: Vec::new(),
             turns: Vec::new(),
             next_segment: 0,
             next_turn: 0,
         }
     }
+    fn draw_speaker_sim(&mut self, source: Stimulus) -> f32 {
+        match source {
+            Stimulus::Request(_) | Stimulus::BargeIn(_) => {
+                if self.speaker_rng.real(0.0, 1.0) < SPEAKER_SIM_CROSSOVER_RATE {
+                    self.speaker_rng
+                        .real(IMPOSTOR_SPEAKER_SIM_MIN, IMPOSTOR_SPEAKER_SIM_MAX)
+                } else {
+                    self.speaker_rng
+                        .real(USER_SPEAKER_SIM_MIN, USER_SPEAKER_SIM_MAX)
+                }
+            }
+            Stimulus::Tv | Stimulus::OtherSpeech | Stimulus::FalseKeyword => {
+                if self.speaker_rng.real(0.0, 1.0) < SPEAKER_SIM_CROSSOVER_RATE {
+                    self.speaker_rng
+                        .real(USER_SPEAKER_SIM_MIN, USER_SPEAKER_SIM_MAX)
+                } else {
+                    self.speaker_rng
+                        .real(IMPOSTOR_SPEAKER_SIM_MIN, IMPOSTOR_SPEAKER_SIM_MAX)
+                }
+            }
+            Stimulus::Noise | Stimulus::Motor | Stimulus::Ventilation | Stimulus::SelfEcho => self
+                .speaker_rng
+                .real(NON_SPEECH_SPEAKER_SIM_MIN, NON_SPEECH_SPEAKER_SIM_MAX),
+        }
+    }
     fn segment(
         &mut self,
         end: u64,
-        cue: SpeechCue,
+        mut cue: SpeechCue,
         episode: EpisodeId,
         source: Stimulus,
     ) -> SegmentId {
+        cue.speaker_sim = Some(self.draw_speaker_sim(source));
         let id = SegmentId(self.next_segment);
         // All generator loops are protocol-bounded to fewer than MAX_EVENTS entries.
         self.next_segment += 1;
@@ -87,6 +136,7 @@ impl Builder {
             keyword,
             energy: self.rng.real(0.65, 1.0),
             vad_confidence: self.rng.real(0.65, 1.0),
+            speaker_sim: None,
         }
     }
     fn request(
@@ -178,6 +228,7 @@ impl Builder {
             keyword: false,
             energy: self.rng.real(0.55, 0.95),
             vad_confidence: self.rng.real(0.65, 1.0),
+            speaker_sim: None,
         };
         self.segment(end, cue, episode, Stimulus::OtherSpeech);
     }
@@ -188,6 +239,7 @@ impl Builder {
             keyword: false,
             energy: self.rng.real(0.1, 0.8),
             vad_confidence: self.rng.real(0.02, 0.35),
+            speaker_sim: None,
         };
         self.segment(
             start + u64::from(duration_ms),
@@ -210,6 +262,7 @@ impl Builder {
                     keyword: false,
                     energy,
                     vad_confidence: vad,
+                    speaker_sim: None,
                 },
                 episode,
                 Stimulus::Tv,
@@ -297,6 +350,7 @@ pub fn e1a(seed: u64) -> Result<Tape, Error> {
                 vad_confidence: 0.8,
                 duration_ms: 250,
                 keyword: true,
+                speaker_sim: None,
             },
             EpisodeId(distractor + 2),
             Stimulus::FalseKeyword,
@@ -355,6 +409,7 @@ pub fn e1b(seed: u64) -> Result<Tape, Error> {
                     vad_confidence: vad,
                     duration_ms,
                     keyword: false,
+                    speaker_sim: None,
                 },
                 EpisodeId(100 + block),
                 source,
@@ -481,6 +536,77 @@ mod tests {
                     })
             }));
         }
+    }
+    #[test]
+    fn speaker_sim_distribution_properties() {
+        let mut pooled_user = Vec::new();
+        let mut pooled_impostor = Vec::new();
+
+        for seed in [0, 1, 7, 42] {
+            let a = e1a(seed).unwrap();
+            let b = e1b(seed).unwrap();
+            let mut user_sims = Vec::new();
+            let mut impostor_sims = Vec::new();
+
+            for tape in [&a, &b] {
+                for record in tape.records() {
+                    if let Event::Speech { cue, .. } = &record.event {
+                        let sim = cue.speaker_sim.expect(
+                            "every speech cue in a generated tape must have Some speaker_sim",
+                        );
+                        match record.annotation.source() {
+                            Some(Stimulus::Request(_) | Stimulus::BargeIn(_)) => {
+                                user_sims.push(sim);
+                                pooled_user.push(sim);
+                            }
+                            Some(Stimulus::Tv | Stimulus::OtherSpeech | Stimulus::FalseKeyword) => {
+                                impostor_sims.push(sim);
+                                pooled_impostor.push(sim);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            let user_mean = user_sims.iter().copied().sum::<f32>() / user_sims.len() as f32;
+            let impostor_mean =
+                impostor_sims.iter().copied().sum::<f32>() / impostor_sims.len() as f32;
+            let impostor_ge_06 = impostor_sims.iter().filter(|&&s| s >= 0.6).count() as f32
+                / impostor_sims.len() as f32;
+
+            assert!(
+                user_mean > 0.7,
+                "seed {seed}: user mean was {user_mean}, expected > 0.7"
+            );
+            assert!(
+                impostor_mean < 0.4,
+                "seed {seed}: impostor mean was {impostor_mean}, expected < 0.4"
+            );
+            assert!(
+                (0.01..=0.06).contains(&impostor_ge_06),
+                "seed {seed}: impostor share >= 0.6 was {impostor_ge_06}, expected in 0.01..=0.06"
+            );
+        }
+
+        let pooled_user_mean = pooled_user.iter().copied().sum::<f32>() / pooled_user.len() as f32;
+        let pooled_impostor_mean =
+            pooled_impostor.iter().copied().sum::<f32>() / pooled_impostor.len() as f32;
+        let pooled_impostor_ge_06 = pooled_impostor.iter().filter(|&&s| s >= 0.6).count() as f32
+            / pooled_impostor.len() as f32;
+
+        assert!(
+            pooled_user_mean > 0.7,
+            "pooled user mean was {pooled_user_mean}, expected > 0.7"
+        );
+        assert!(
+            pooled_impostor_mean < 0.4,
+            "pooled impostor mean was {pooled_impostor_mean}, expected < 0.4"
+        );
+        assert!(
+            (0.01..=0.06).contains(&pooled_impostor_ge_06),
+            "pooled impostor share >= 0.6 was {pooled_impostor_ge_06}, expected in 0.01..=0.06"
+        );
     }
 }
 

@@ -17,6 +17,8 @@ shared-runtime = ["enton-adapters/shared-runtime"]
 [dependencies]
 enton-adapters = { workspace = true, features = ["cortex", "soul"] }
 enton-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "io-util", "io-std"] }
 

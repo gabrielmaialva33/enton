@@ -7,6 +7,7 @@ mod cli;
 mod journal;
 mod runtime;
 mod tasks;
+mod why;
 
 use std::path::PathBuf;
 
@@ -15,24 +16,43 @@ use enton_adapters::cortex::{CortexConfig, OpenAiCortex};
 use enton_core::{Organism, Profile};
 use tokio::sync::mpsc;
 
-use cli::{USAGE, parse_cli_args};
+use cli::{CliConfig, Command, USAGE, parse_cli_args};
 use journal::Journal;
 use runtime::{LoopMessage, RuntimeState, run_event_loop};
 use tasks::{spawn_stdin_task, spawn_timer_task};
 #[cfg(feature = "voice")]
 use tasks::{spawn_voice_event_listener, try_init_voice};
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> std::process::ExitCode {
-    let cli = match parse_cli_args() {
-        Ok(c) => c,
+fn main() -> std::process::ExitCode {
+    match parse_cli_args() {
+        Ok(Command::Run(cli)) => run(cli),
+        Ok(Command::Why(config)) => explain(&config),
         Err(err) => {
             eprintln!("Error: {err}");
             eprintln!("{USAGE}");
-            return std::process::ExitCode::FAILURE;
+            std::process::ExitCode::FAILURE
         }
-    };
+    }
+}
 
+/// `enton why`: a read-only audit, so it needs no async runtime.
+fn explain(config: &cli::WhyConfig) -> std::process::ExitCode {
+    match why::run(config) {
+        Ok(output) => {
+            print!("{output}");
+            std::process::ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("Error: {err}");
+            eprintln!("hint: pass --soul <PATH> (and the --profile that wrote it) for another log");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// Live: perceive, think and speak until stdin closes or says `quit`.
+#[tokio::main(flavor = "current_thread")]
+async fn run(cli: CliConfig) -> std::process::ExitCode {
     let (organism, journal) = match restore(cli.profile, cli.soul).await {
         Ok(restored) => restored,
         Err(err) => {

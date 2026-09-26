@@ -33,8 +33,9 @@ Out of scope for M1: vision, distillation, multiple bodies, WASM skills.
 | Crate                   | Responsibility                                                                                                                                                                                                                                                                                               |
 |-------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `crates/enton-core`     | The pure cognitive core: `(state, event) → (state, actions)`. **No I/O, no clock, no randomness, fully deterministic**: time and coin flips enter as data. Drive tables, budgets, ignition, and the port traits for inference (`Cortex`, `SpeechToText`, `TextToSpeech`) live here with no implementations. |
-| `crates/enton-adapters` | All I/O: body-signal readers (sysfs/procfs), monotonic clock, audio, log, cortex clients.                                                                                                                                                                                                                    |
+| `crates/enton-adapters` | All I/O: body signals (sysfs/procfs), clock, audio, voice, voice identity, soul (log), cortex client.                                                                                                                                                                                                                    |
 | `crates/enton`          | The binary: composes core + adapters according to the hardware profile (`--profile t1-ref\|desktop`).                                                                                                                                                                                                        |
+| `crates/enton-e1`       | Experiment E1: synthetic cue tapes, the simple-controller baselines, the per-step reducer invariants and the pass/fail report (`e1-sim`). Depends only on `enton-core`.|
 
 Cross a boundary only through the core's public API.
 
@@ -85,7 +86,8 @@ cargo deny check
 cargo machete
 ```
 
-Every crate must pass all of them. Lints are workspace-level: clippy pedantic and
+The toolchain is pinned in `rust-toolchain.toml`; bump it on purpose, together with
+the `dtolnay/rust-toolchain` refs in CI. Every crate must pass all of them. Lints are workspace-level: clippy pedantic and
 `unsafe_code = forbid`. CI (`.github/workflows/ci.yml`) runs them with default
 features and with `--all-features`; `cpal` needs the ALSA headers
 (`libasound2-dev`) for the audio features.

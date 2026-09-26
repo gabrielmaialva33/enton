@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: dtolnay/rust-toolchain@ce678459e9fc7500d337468f904b95f1b5c10b5e # 1.98.1
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+
+      # zig is the C cross compiler for aws-lc-sys (rustls) on musl.
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: 0.16.0
+
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-zigbuild,cargo-cyclonedx
+
+      - name: Install qemu-user
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Build lean binaries (x86_64-musl)
+        run: cargo zigbuild --release --locked -p enton -p enton-e1 --target x86_64-unknown-linux-musl
+
+      - name: Build lean binaries (aarch64-musl)
+        run: cargo zigbuild --release --locked -p enton -p enton-e1 --target aarch64-unknown-linux-musl
+
+      # RFC 0001 §4: the core binary stays under 20 MB.
+      - name: Core binary budget
+        run: |
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            size=$(stat -c %s "target/$target/release/enton")
+            echo "enton ($target, lean): $size bytes"
+            test "$size" -lt 20000000
+          done
+
+      - name: Smoke test (x86_64-musl)
+        run: |
+          target/x86_64-unknown-linux-musl/release/enton --help
+          target/x86_64-unknown-linux-musl/release/e1-sim --seed 0
+
+      - name: Smoke test under qemu-user (aarch64-musl)
+        run: |
+          qemu-aarch64 target/aarch64-unknown-linux-musl/release/enton --help
+          qemu-aarch64 target/aarch64-unknown-linux-musl/release/e1-sim --seed 0
+
+      - name: Generate SBOM
+        run: |
+          mkdir -p dist
+          cargo cyclonedx --manifest-path crates/enton/Cargo.toml --format json --spec-version 1.5
+          cp crates/enton/enton.cdx.json "dist/enton-${GITHUB_REF_NAME}-sbom.cdx.json"
+
+      - name: Package artifacts
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            stage_dir="enton-${tag}-${target}"
+            mkdir -p "$stage_dir"
+            cp "target/${target}/release/enton" "$stage_dir/"
+            cp "target/${target}/release/e1-sim" "$stage_dir/"
+            cp LICENSE README.md "$stage_dir/"
+            tar -czf "dist/enton-${tag}-${target}.tar.gz" "$stage_dir"
+            rm -rf "$stage_dir"
+          done
+          (
+            cd dist
+            sha256sum enton-"${tag}"-*.tar.gz enton-"${tag}"-sbom.cdx.json > SHA256SUMS
+          )
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: 'dist/*'
+
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat << 'EOF' > release-notes.md
+          ## Releases
+
+          ### Verification
+
+          Verify checksums:
+          ```sh
+          sha256sum -c SHA256SUMS
+          ```
+
+          Verify build provenance:
+          ```sh
+          gh attestation verify <file> --repo gabrielmaialva33/enton
+          ```
+          EOF
+
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            --draft

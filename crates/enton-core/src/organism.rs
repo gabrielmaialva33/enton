@@ -42,6 +42,10 @@ pub struct Profile {
     pub keyword_only_ms: u32,
     /// Minimal VAD confidence required to trigger a follow-up inside attention window.
     pub follow_up_min_vad: f32,
+    /// Minimum voice similarity for a follow-up, continuation or non-keyword barge-in
+    /// to count as the addressed speaker. Cues without speaker verification pass.
+    #[serde(default = "default_follow_up_min_speaker_sim")]
+    pub follow_up_min_speaker_sim: f32,
     /// Weight of VAD confidence in base speech salience.
     pub salience_vad_weight: f32,
     /// Weight of signal energy in base speech salience.
@@ -89,6 +93,10 @@ pub struct Profile {
     /// Watchdog timeout bounds maximum unbroken vocalization before forcing playback termination.
     #[serde(default = "default_max_playback_ms")]
     pub max_playback_ms: u64,
+}
+
+fn default_follow_up_min_speaker_sim() -> f32 {
+    0.6
 }
 
 fn default_similarity_cutoff() -> f32 {
@@ -157,6 +165,7 @@ impl Profile {
             attention_ms: 5_000,
             keyword_only_ms: 900,
             follow_up_min_vad: 0.5,
+            follow_up_min_speaker_sim: 0.6,
             salience_vad_weight: 0.60,
             salience_energy_weight: 0.25,
             salience_duration_weight: 0.15,
@@ -198,6 +207,7 @@ impl Profile {
             attention_ms: 5_000,
             keyword_only_ms: 900,
             follow_up_min_vad: 0.45,
+            follow_up_min_speaker_sim: 0.6,
             salience_vad_weight: 0.60,
             salience_energy_weight: 0.25,
             salience_duration_weight: 0.15,
@@ -246,6 +256,7 @@ impl Profile {
             && self.attention_ms > 0
             && self.keyword_only_ms > 0
             && (0.0..=1.0).contains(&self.follow_up_min_vad)
+            && (0.0..=1.0).contains(&self.follow_up_min_speaker_sim)
             && self.salience_vad_weight.is_finite()
             && self.salience_vad_weight > 0.0
             && self.salience_energy_weight.is_finite()
@@ -320,7 +331,7 @@ struct PendingAttend {
 }
 
 /// The version of the brainstem reducer and snapshot schema.
-pub const REDUCER_VERSION: u32 = 4;
+pub const REDUCER_VERSION: u32 = 5;
 
 /// The physical playback / vocalization state of the organism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -694,9 +705,11 @@ impl Organism {
                 norm_energy >= self.echo_energy_expectation + self.profile.keyword_barge_in_margin
             }
         } else {
-            // Non-keyword speech cue: requires full double-talk margin and minimal follow-up VAD
+            // Non-keyword speech cue: requires full double-talk margin, minimal follow-up VAD
+            // and the addressed speaker's voice (anyone may still interrupt by name)
             norm_energy > self.echo_energy_expectation + self.profile.echo_barge_in_margin
                 && norm_vad >= self.profile.follow_up_min_vad
+                && self.is_addressed_speaker(cue)
         };
 
         if !is_barge_in {
@@ -814,6 +827,15 @@ impl Organism {
         // Case 2: Inside active attention window
         let in_attention_window = self.attention_until.is_some_and(|until| now < until);
         if in_attention_window {
+            if !self.is_addressed_speaker(cue) {
+                // Someone else talking inside the window neither continues the turn nor
+                // extends the window; a pending "Enton?" keeps waiting for its speaker.
+                return Action::Abstain {
+                    reason: Reason::FollowUp,
+                    salience: self.calculate_base_salience(norm_energy, norm_vad, norm_dur),
+                    why: Abstention::OtherSpeaker,
+                };
+            }
             // Addressed speech is never habituated
             if let Some(pending) = self.pending_attend.take() {
                 if norm_vad < self.profile.follow_up_min_vad {
@@ -944,6 +966,12 @@ impl Organism {
         }
 
         self.pay_and_think_discretionary(now, Reason::Speech, effective_salience)
+    }
+
+    /// Whether a cue may speak for the current turn: a matching voice, or no verification.
+    fn is_addressed_speaker(&self, cue: &SpeechCue) -> bool {
+        cue.speaker_sim
+            .is_none_or(|sim| sim >= self.profile.follow_up_min_speaker_sim)
     }
 
     fn calculate_base_salience(&self, norm_energy: f32, norm_vad: f32, norm_dur: f32) -> f32 {

@@ -13,6 +13,7 @@ fn speech(now: u64, keyword: bool) -> Event {
             duration_ms: 1_500,
             vad_confidence: 1.0,
             keyword,
+            speaker_sim: None,
         },
     }
 }
@@ -86,6 +87,7 @@ fn weak_speech_records_below_threshold() {
                 duration_ms: 100,
                 vad_confidence: 0.2,
                 keyword: false,
+                speaker_sim: None,
             },
         }),
         Abstention::BelowThreshold,
@@ -367,6 +369,7 @@ fn speech_salience_uses_the_specified_weights_and_caps_duration() {
             duration_ms: 3_000,
             vad_confidence: 1.0,
             keyword: true,
+            speaker_sim: None,
         },
     });
     let [Action::Think { salience, .. }] = actions.as_slice() else {
@@ -405,6 +408,7 @@ fn salience_short_clear_direct_speech_passes_and_low_vad_never_passes() {
             duration_ms: 250,
             vad_confidence: 0.8,
             keyword: false,
+            speaker_sim: None,
         },
     });
     let [
@@ -433,6 +437,7 @@ fn salience_short_clear_direct_speech_passes_and_low_vad_never_passes() {
                         duration_ms: dur,
                         vad_confidence: vad,
                         keyword: false,
+                        speaker_sim: None,
                     },
                 });
                 assert!(
@@ -456,6 +461,7 @@ fn keyword_only_turn_attends_and_merges_continuation() {
             duration_ms: 400,
             vad_confidence: 0.95,
             keyword: true,
+            speaker_sim: None,
         },
     });
     assert_eq!(
@@ -480,6 +486,7 @@ fn keyword_only_turn_attends_and_merges_continuation() {
             duration_ms: 800,
             vad_confidence: 0.9,
             keyword: false,
+            speaker_sim: None,
         },
     });
 
@@ -511,6 +518,7 @@ fn keyword_only_turn_thinks_on_timeout_when_no_continuation_arrives() {
             duration_ms: 350,
             vad_confidence: 0.9,
             keyword: true,
+            speaker_sim: None,
         },
     });
     assert_eq!(
@@ -559,6 +567,7 @@ fn attention_window_follow_up_bypasses_cooldown_and_pays_normal_energy() {
             duration_ms: 1_200,
             vad_confidence: 0.95,
             keyword: true,
+            speaker_sim: None,
         },
     });
     assert_thought(&actions1, 1, &Reason::Keyword);
@@ -572,6 +581,7 @@ fn attention_window_follow_up_bypasses_cooldown_and_pays_normal_energy() {
             duration_ms: 500,
             vad_confidence: 0.6, // meets minimal VAD (0.5)
             keyword: false,
+            speaker_sim: None,
         },
     });
     // Bypasses cooldown! Becomes Reason::FollowUp
@@ -588,6 +598,7 @@ fn attention_window_follow_up_bypasses_cooldown_and_pays_normal_energy() {
             duration_ms: 500,
             vad_confidence: 0.6,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert_abstention(&actions3, Abstention::OutOfEnergy);
@@ -605,6 +616,7 @@ fn habituation_suppresses_repeated_similar_non_addressed_speech() {
             duration_ms: 1_200,
             vad_confidence: 0.9,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert_thought(&actions1, 1, &Reason::Speech);
@@ -620,6 +632,7 @@ fn habituation_suppresses_repeated_similar_non_addressed_speech() {
                 duration_ms: 1_200,
                 vad_confidence: 0.9,
                 keyword: false,
+                speaker_sim: None,
             },
         });
         if actions.iter().any(|a| {
@@ -649,6 +662,7 @@ fn habituation_suppresses_repeated_similar_non_addressed_speech() {
             duration_ms: 1_200,
             vad_confidence: 0.9,
             keyword: true,
+            speaker_sim: None,
         },
     });
     assert_thought(&keyword_actions, 2, &Reason::Keyword);
@@ -676,6 +690,7 @@ fn novelty_adds_salience_on_prediction_error() {
             duration_ms: 500,
             vad_confidence: 0.5,
             keyword: false,
+            speaker_sim: None,
         },
     });
 
@@ -687,6 +702,7 @@ fn novelty_adds_salience_on_prediction_error() {
             duration_ms: 1_000,
             vad_confidence: 0.9,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert_thought(&actions, 1, &Reason::Speech);
@@ -825,6 +841,7 @@ fn a8_slow_reply_anchors_attention_independent_of_tick_interleaving() {
         duration_ms: 600,
         vad_confidence: 0.9,
         keyword: false,
+        speaker_sim: None,
     };
     let follow_up = org_with_tick.step(&Event::Speech {
         now: Millis(7_000),
@@ -926,6 +943,7 @@ fn a9_marginal_cue_fate_changes_with_novelty() {
         duration_ms: 333,
         vad_confidence: 0.8,
         keyword: false,
+        speaker_sim: None,
     };
 
     // 1. Initial quiet background sound sets running expectation (energy=0.05, vad=0.05, dur=100ms)
@@ -936,6 +954,7 @@ fn a9_marginal_cue_fate_changes_with_novelty() {
             duration_ms: 100,
             vad_confidence: 0.05,
             keyword: false,
+            speaker_sim: None,
         },
     });
 
@@ -997,6 +1016,7 @@ fn a9_silence_tv_to_novel_speech_resets_habituation() {
                 duration_ms: 250,
                 vad_confidence: 0.25,
                 keyword: false,
+                speaker_sim: None,
             },
         });
     }
@@ -1018,6 +1038,7 @@ fn a9_silence_tv_to_novel_speech_resets_habituation() {
             duration_ms: 900,
             vad_confidence: 0.95,
             keyword: false,
+            speaker_sim: None,
         },
     });
 
@@ -1045,6 +1066,7 @@ fn a9_tunables_in_profile_govern_similarity_and_expectation() {
             duration_ms: 500,
             vad_confidence: 0.5,
             keyword: false,
+            speaker_sim: None,
         },
     });
 
@@ -1058,6 +1080,7 @@ fn a9_tunables_in_profile_govern_similarity_and_expectation() {
             duration_ms: 500,
             vad_confidence: 0.8,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert!(organism.habituation().abs() < f32::EPSILON);
@@ -1081,6 +1104,7 @@ fn self_echo_during_playback_is_suppressed() {
             duration_ms: 500,
             vad_confidence: 0.85,
             keyword: false,
+            speaker_sim: None,
         },
     });
 
@@ -1100,6 +1124,7 @@ fn self_echo_during_hangover_is_suppressed() {
             duration_ms: 1000,
             vad_confidence: 0.95,
             keyword: true,
+            speaker_sim: None,
         },
     });
     assert_thought(&init_actions, 1, &Reason::Keyword);
@@ -1121,6 +1146,7 @@ fn self_echo_during_hangover_is_suppressed() {
             duration_ms: 300,
             vad_confidence: 0.80,
             keyword: false,
+            speaker_sim: None,
         },
     });
 
@@ -1134,6 +1160,7 @@ fn self_echo_during_hangover_is_suppressed() {
             duration_ms: 600,
             vad_confidence: 0.85,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert_thought(&actions_after, 2, &Reason::FollowUp);
@@ -1167,6 +1194,7 @@ fn predicted_keyword_requires_full_barge_in_margin() {
             duration_ms: 400,
             vad_confidence: 0.90,
             keyword: true,
+            speaker_sim: None,
         },
     });
 
@@ -1197,6 +1225,7 @@ fn unpredicted_keyword_rejects_sub_echo_false_positives() {
             duration_ms: 300,
             vad_confidence: 0.85,
             keyword: true,
+            speaker_sim: None,
         },
     });
 
@@ -1227,6 +1256,7 @@ fn unpredicted_keyword_above_echo_triggers_barge_in() {
             duration_ms: 400,
             vad_confidence: 0.90,
             keyword: true,
+            speaker_sim: None,
         },
     });
 
@@ -1259,6 +1289,7 @@ fn loud_speech_barge_in_triggers_follow_up() {
             duration_ms: 700,
             vad_confidence: 0.95,
             keyword: false,
+            speaker_sim: None,
         },
     });
 
@@ -1289,6 +1320,7 @@ fn consecutive_barge_in_ratchet_breaks_underestimated_echo_loop() {
             duration_ms: 1000,
             vad_confidence: 0.95,
             keyword: true,
+            speaker_sim: None,
         },
     });
 
@@ -1309,6 +1341,7 @@ fn consecutive_barge_in_ratchet_breaks_underestimated_echo_loop() {
             duration_ms: 500,
             vad_confidence: 0.90,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert_thought(&actions1, 2, &Reason::FollowUp);
@@ -1330,6 +1363,7 @@ fn consecutive_barge_in_ratchet_breaks_underestimated_echo_loop() {
             duration_ms: 500,
             vad_confidence: 0.90,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert_thought(&actions2, 3, &Reason::FollowUp);
@@ -1352,6 +1386,7 @@ fn consecutive_barge_in_ratchet_breaks_underestimated_echo_loop() {
             duration_ms: 500,
             vad_confidence: 0.90,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert_abstention(&actions3, Abstention::SelfEcho);
@@ -1370,6 +1405,7 @@ fn dual_mode_attention_anchoring() {
             duration_ms: 1000,
             vad_confidence: 0.95,
             keyword: true,
+            speaker_sim: None,
         },
     });
     text_org.step(&Event::CortexReply {
@@ -1387,6 +1423,7 @@ fn dual_mode_attention_anchoring() {
             duration_ms: 1000,
             vad_confidence: 0.95,
             keyword: true,
+            speaker_sim: None,
         },
     });
     voice_org.step(&Event::CortexReply {
@@ -1419,6 +1456,7 @@ fn closed_loop_feedback_immunity_pure_core() {
             duration_ms: 1000,
             vad_confidence: 0.95,
             keyword: true,
+            speaker_sim: None,
         },
     });
     assert_thought(&actions1, 1, &Reason::Keyword);
@@ -1441,6 +1479,7 @@ fn closed_loop_feedback_immunity_pure_core() {
             duration_ms: 400,
             vad_confidence: 0.90,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert_abstention(&e1, Abstention::SelfEcho);
@@ -1452,6 +1491,7 @@ fn closed_loop_feedback_immunity_pure_core() {
             duration_ms: 400,
             vad_confidence: 0.92,
             keyword: true,
+            speaker_sim: None,
         },
     });
     assert_abstention(&e2, Abstention::SelfEcho);
@@ -1468,6 +1508,7 @@ fn closed_loop_feedback_immunity_pure_core() {
             duration_ms: 200,
             vad_confidence: 0.85,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert_abstention(&e3, Abstention::SelfEcho);
@@ -1479,6 +1520,7 @@ fn closed_loop_feedback_immunity_pure_core() {
             duration_ms: 600,
             vad_confidence: 0.90,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert_thought(&actions2, 2, &Reason::FollowUp);
@@ -1501,6 +1543,7 @@ fn closed_loop_feedback_immunity_pure_core() {
             duration_ms: 300,
             vad_confidence: 0.88,
             keyword: true,
+            speaker_sim: None,
         },
     });
     assert_abstention(&e4, Abstention::SelfEcho);
@@ -1526,6 +1569,7 @@ fn closed_loop_feedback_immunity_pure_core() {
             duration_ms: 1000,
             vad_confidence: 0.95,
             keyword: true,
+            speaker_sim: None,
         },
     });
     assert_thought(&next_thought_actions, 3, &Reason::Keyword);
@@ -1561,6 +1605,7 @@ fn playback_watchdog_terminates_stuck_playback_to_prevent_deafness() {
             duration_ms: 1000,
             vad_confidence: 0.95,
             keyword: true,
+            speaker_sim: None,
         },
     });
     assert_thought(&actions, 1, &Reason::Keyword);
@@ -1586,6 +1631,7 @@ fn non_finite_cues_during_playback_do_not_corrupt_echo_expectation_and_subsequen
             duration_ms: 300,
             vad_confidence: 0.90,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert_abstention(&actions_nan, Abstention::SelfEcho);
@@ -1599,6 +1645,7 @@ fn non_finite_cues_during_playback_do_not_corrupt_echo_expectation_and_subsequen
             duration_ms: 300,
             vad_confidence: 0.90,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert_abstention(&actions_inf, Abstention::SelfEcho);
@@ -1612,6 +1659,7 @@ fn non_finite_cues_during_playback_do_not_corrupt_echo_expectation_and_subsequen
             duration_ms: 300,
             vad_confidence: 0.90,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert_abstention(&actions_neg_inf, Abstention::SelfEcho);
@@ -1625,6 +1673,7 @@ fn non_finite_cues_during_playback_do_not_corrupt_echo_expectation_and_subsequen
             duration_ms: 500,
             vad_confidence: 0.95,
             keyword: true,
+            speaker_sim: None,
         },
     });
     assert_thought(&actions_barge_in, 1, &Reason::Keyword);
@@ -1650,6 +1699,7 @@ fn residual_echo_after_barge_in_is_self_echo_and_does_not_open_follow_up() {
             duration_ms: 400,
             vad_confidence: 0.95,
             keyword: true,
+            speaker_sim: None,
         },
     });
     assert_thought(&actions_barge_in, 1, &Reason::Keyword);
@@ -1671,6 +1721,7 @@ fn residual_echo_after_barge_in_is_self_echo_and_does_not_open_follow_up() {
             duration_ms: 100,
             vad_confidence: 0.80,
             keyword: false,
+            speaker_sim: None,
         },
     });
     // Must be classified as SelfEcho abstention, NOT trigger a FollowUp thought!
@@ -1687,6 +1738,7 @@ fn residual_echo_after_barge_in_is_self_echo_and_does_not_open_follow_up() {
             duration_ms: 600,
             vad_confidence: 0.85,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert_thought(&actions_follow_up, 2, &Reason::FollowUp);
@@ -1818,6 +1870,7 @@ fn tv_cue(now: u64) -> Event {
             duration_ms: 1_000,
             vad_confidence: 0.9,
             keyword: false,
+            speaker_sim: None,
         },
     }
 }
@@ -1875,6 +1928,7 @@ fn slow_habituation_never_mutes_a_novel_cue_and_survives_it() {
             duration_ms: 100,
             vad_confidence: 0.45,
             keyword: false,
+            speaker_sim: None,
         },
     });
     assert!(
@@ -1889,4 +1943,99 @@ fn slow_habituation_never_mutes_a_novel_cue_and_survives_it() {
     );
     assert!(organism.habituation().abs() < f32::EPSILON);
     assert!(organism.slow_habituation() > 0.9 * slow);
+}
+
+fn voice(now: u64, keyword: bool, duration_ms: u32, speaker_sim: f32) -> Event {
+    Event::Speech {
+        now: Millis(now),
+        cue: SpeechCue {
+            energy: 1.0,
+            duration_ms,
+            vad_confidence: 1.0,
+            keyword,
+            speaker_sim: Some(speaker_sim),
+        },
+    }
+}
+
+#[test]
+fn another_voice_inside_the_window_is_not_a_follow_up() {
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+    assert_thought(
+        &organism.step(&voice(1_000, true, 1_500, 0.9)),
+        1,
+        &Reason::Keyword,
+    );
+    organism.step(&Event::CortexReply {
+        now: Millis(2_000),
+        thought: ThoughtId(1),
+        text: "Oi!".into(),
+    });
+    let window = organism.attention_until();
+
+    // The TV talks inside the window: no follow-up, and the window does not grow.
+    assert_abstention(
+        &organism.step(&voice(3_000, false, 1_500, 0.2)),
+        Abstention::OtherSpeaker,
+    );
+    assert_eq!(organism.attention_until(), window);
+
+    // The person who asked keeps the conversation going.
+    assert_thought(
+        &organism.step(&voice(3_500, false, 1_500, 0.9)),
+        2,
+        &Reason::FollowUp,
+    );
+}
+
+#[test]
+fn a_pending_name_call_waits_for_its_own_speaker() {
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+    assert!(matches!(
+        organism.step(&voice(1_000, true, 400, 0.9)).as_slice(),
+        [Action::Attend { .. }]
+    ));
+
+    assert_abstention(
+        &organism.step(&voice(2_000, false, 1_200, 0.2)),
+        Abstention::OtherSpeaker,
+    );
+    assert!(
+        organism.is_attending(),
+        "the TV did not consume the pending turn"
+    );
+
+    assert_thought(
+        &organism.step(&voice(3_000, false, 1_200, 0.9)),
+        1,
+        &Reason::Keyword,
+    );
+}
+
+#[test]
+fn only_the_addressed_voice_barges_in_without_saying_the_name() {
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+    assert_thought(
+        &organism.step(&voice(1_000, true, 1_500, 0.9)),
+        1,
+        &Reason::Keyword,
+    );
+    organism.step(&Event::PlaybackStarted {
+        now: Millis(1_500),
+        utterance: UtteranceId(1),
+    });
+
+    // A loud other voice over Enton's playback is not an interruption.
+    assert_abstention(
+        &organism.step(&voice(2_000, false, 1_000, 0.2)),
+        Abstention::SelfEcho,
+    );
+    assert!(organism.is_speaking());
+
+    // The same loudness in the addressed voice is a barge-in.
+    assert_thought(
+        &organism.step(&voice(2_500, false, 1_000, 0.9)),
+        2,
+        &Reason::FollowUp,
+    );
 }

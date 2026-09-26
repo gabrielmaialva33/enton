@@ -39,6 +39,8 @@ pub enum Abstention {
     Habituation,
     /// Stimulus coincided with active playback or room reverberation and lacked barge-in evidence.
     SelfEcho,
+    /// Inside an attention window, the voice did not match whoever addressed Enton.
+    OtherSpeaker,
 }
 
 /// A brainstem decision.

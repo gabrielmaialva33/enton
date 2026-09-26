@@ -64,6 +64,13 @@ pub struct Profile {
     /// Learning rate for updating the running cue expectation on new cues.
     #[serde(default = "default_expectation_coefficient")]
     pub expectation_coefficient: f32,
+    /// Half-life in milliseconds of long-term habituation, which survives quiet gaps
+    /// that erase the fast component (a TV that pauses for a minute is still a TV).
+    #[serde(default = "default_slow_habituation_half_life_ms")]
+    pub slow_habituation_half_life_ms: u64,
+    /// Fraction of each fast habituation increment that also accrues long-term.
+    #[serde(default = "default_slow_habituation_rate")]
+    pub slow_habituation_rate: f32,
     /// Duration in milliseconds for echo reverberation hangover after playback finishes.
     #[serde(default = "default_echo_hangover_ms")]
     pub echo_hangover_ms: u64,
@@ -90,6 +97,14 @@ fn default_similarity_cutoff() -> f32 {
 
 fn default_expectation_coefficient() -> f32 {
     0.25
+}
+
+fn default_slow_habituation_half_life_ms() -> u64 {
+    1_200_000
+}
+
+fn default_slow_habituation_rate() -> f32 {
+    0.1
 }
 
 fn default_echo_hangover_ms() -> u64 {
@@ -152,6 +167,8 @@ impl Profile {
             novelty_max: 0.05,
             similarity_cutoff: 0.4,
             expectation_coefficient: 0.25,
+            slow_habituation_half_life_ms: 1_200_000,
+            slow_habituation_rate: 0.1,
             echo_hangover_ms: 200,
             echo_initial_energy: 0.75,
             echo_barge_in_margin: 0.15,
@@ -191,6 +208,8 @@ impl Profile {
             novelty_max: 0.05,
             similarity_cutoff: 0.4,
             expectation_coefficient: 0.25,
+            slow_habituation_half_life_ms: 600_000,
+            slow_habituation_rate: 0.1,
             echo_hangover_ms: 150,
             echo_initial_energy: 0.70,
             echo_barge_in_margin: 0.15,
@@ -200,8 +219,13 @@ impl Profile {
         }
     }
 
-    fn is_valid(&self) -> bool {
-        self.fever_c.is_finite()
+    /// Validates that all profile parameters are within allowable ranges.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidProfile`] if any parameter is out of range.
+    pub fn validate(&self) -> Result<(), InvalidProfile> {
+        let valid = self.fever_c.is_finite()
             && (0.0..=1.0).contains(&self.lethargy_battery)
             && self.think_cost.is_finite()
             && self.think_cost >= 0.0
@@ -232,6 +256,8 @@ impl Profile {
             && self.habituation_decay_half_life_ms > 0
             && self.habituation_step.is_finite()
             && self.habituation_step >= 0.0
+            && self.slow_habituation_half_life_ms > 0
+            && (0.0..=1.0).contains(&self.slow_habituation_rate)
             && self.novelty_weight.is_finite()
             && self.novelty_weight >= 0.0
             && self.novelty_max.is_finite()
@@ -247,9 +273,36 @@ impl Profile {
             && self.keyword_barge_in_margin >= 0.0
             && (0.0..=1.0).contains(&self.echo_learning_rate)
             && self.echo_learning_rate > 0.0
-            && self.max_playback_ms > 0
+            && self.max_playback_ms > 0;
+
+        if valid {
+            Ok(())
+        } else {
+            Err(InvalidProfile {
+                name: self.name.clone(),
+            })
+        }
     }
 }
+
+/// Error returned when an organism profile fails validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidProfile {
+    /// Name of the invalid profile.
+    pub name: String,
+}
+
+impl std::fmt::Display for InvalidProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "invalid organism profile '{}': a parameter is out of range",
+            self.name
+        )
+    }
+}
+
+impl std::error::Error for InvalidProfile {}
 
 /// Running expectation of recent cues for novelty detection (RFC P5).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -267,7 +320,7 @@ struct PendingAttend {
 }
 
 /// The version of the brainstem reducer and snapshot schema.
-pub const REDUCER_VERSION: u32 = 2;
+pub const REDUCER_VERSION: u32 = 4;
 
 /// The physical playback / vocalization state of the organism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -311,6 +364,8 @@ pub struct Organism {
     cue_expectation: Option<CueFeatures>,
     habituation: f32,
     #[serde(default)]
+    slow_habituation: f32,
+    #[serde(default)]
     conversation_thought: Option<ThoughtId>,
     #[serde(default)]
     playback_status: PlaybackStatus,
@@ -320,21 +375,20 @@ pub struct Organism {
     echo_energy_expectation: f32,
     #[serde(default)]
     consecutive_barge_ins: u32,
+    #[serde(default)]
+    speaking_for_obligation: bool,
 }
 
 impl Organism {
     /// Create a fresh organism with full obligation and discretionary budgets and thought IDs starting at one.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the profile contains nonfinite values, negative costs or budgets,
-    /// fractions outside zero to one, a nonpositive threshold, hysteresis outside
-    /// `[0, threshold)`, or an EMA coefficient outside `(0, 1]`.
-    #[must_use]
-    pub fn new(profile: Profile) -> Self {
-        assert!(profile.is_valid(), "invalid organism profile");
+    /// Returns [`InvalidProfile`] if the profile fails validation.
+    pub fn new(profile: Profile) -> Result<Self, InvalidProfile> {
+        profile.validate()?;
         let echo_initial_energy = profile.echo_initial_energy;
-        Self {
+        Ok(Self {
             drives: DriveTable::default_m1(),
             prices: PriceTable {
                 think: profile.think_cost,
@@ -356,12 +410,14 @@ impl Organism {
             pending_attend: None,
             cue_expectation: None,
             habituation: 0.0,
+            slow_habituation: 0.0,
             conversation_thought: None,
             playback_status: PlaybackStatus::Idle,
             self_speech_has_keyword: false,
             echo_energy_expectation: echo_initial_energy,
             consecutive_barge_ins: 0,
-        }
+            speaking_for_obligation: false,
+        })
     }
 
     /// The immutable policy used by this organism.
@@ -392,6 +448,13 @@ impl Organism {
     #[must_use]
     pub fn habituation(&self) -> f32 {
         self.habituation
+    }
+
+    /// Long-term habituation, from 0 to 1: it decays slowly and a novel cue does
+    /// not erase it, but it only suppresses cues similar to the habituated one.
+    #[must_use]
+    pub fn slow_habituation(&self) -> f32 {
+        self.slow_habituation
     }
 
     /// Whether Enton is actively waiting for a continuation of a keyword-only turn.
@@ -434,6 +497,13 @@ impl Organism {
     #[must_use]
     pub fn self_speech_has_keyword(&self) -> bool {
         self.self_speech_has_keyword
+    }
+
+    /// Whether the most recent paid thought answered an obligation turn (keyword or follow-up)
+    /// rather than a discretionary thought.
+    #[must_use]
+    pub fn speaking_for_obligation(&self) -> bool {
+        self.speaking_for_obligation
     }
 
     /// The latest instant this organism has observed, from any event.
@@ -497,9 +567,11 @@ impl Organism {
                         utterance: *utterance,
                         until: hangover_until,
                     };
-                    self.attention_until = Some(Millis(
-                        hangover_until.0.saturating_add(self.profile.attention_ms),
-                    ));
+                    if self.speaking_for_obligation {
+                        self.attention_until = Some(Millis(
+                            hangover_until.0.saturating_add(self.profile.attention_ms),
+                        ));
+                    }
                 }
                 Vec::new()
             }
@@ -548,12 +620,17 @@ impl Organism {
                 .refill(dt_ms, self.profile.discretionary_budget_per_hour);
             self.ignition.advance(self.drives.pressure());
 
-            // Decay habituation with half-life on tick
-            if self.habituation > 0.0 {
-                let half_life = self.profile.habituation_decay_half_life_ms as f32;
-                let factor = (-std::f32::consts::LN_2 * (dt_ms as f32) / half_life).exp();
-                self.habituation = (self.habituation * factor).clamp(0.0, 1.0);
-            }
+            // Decay both habituation components with their half-lives on tick
+            self.habituation = decay(
+                self.habituation,
+                dt_ms,
+                self.profile.habituation_decay_half_life_ms,
+            );
+            self.slow_habituation = decay(
+                self.slow_habituation,
+                dt_ms,
+                self.profile.slow_habituation_half_life_ms,
+            );
         }
 
         // Advance playback status (watchdog and hangover expiration)
@@ -817,15 +894,21 @@ impl Organism {
             base_salience + novelty
         };
 
-        // Habituation suppresses in proportion to similarity with habituated expectation (A9)
-        let suppression = self.habituation * similarity;
+        // Habituation suppresses in proportion to similarity with habituated expectation (A9).
+        // The long-term component is stimulus-specific: it never touches a novel cue.
+        let familiar = similarity > self.profile.similarity_cutoff;
+        let long_term = if familiar { self.slow_habituation } else { 0.0 };
+        let suppression = (self.habituation + long_term).min(1.0) * similarity;
         let effective_salience = (salience_with_novelty - suppression).max(0.0);
 
         // Update habituation for subsequent cues if stimulus is similar to running expectation
-        if similarity > self.profile.similarity_cutoff {
+        if familiar {
             let hab_inc =
                 (similarity - self.profile.similarity_cutoff) * self.profile.habituation_step;
             self.habituation = (self.habituation + hab_inc).clamp(0.0, 1.0);
+            self.slow_habituation = (self.slow_habituation
+                + hab_inc * self.profile.slow_habituation_rate)
+                .clamp(0.0, 1.0);
         }
 
         if self.torpor {
@@ -910,6 +993,7 @@ impl Organism {
         let thought = ThoughtId(self.next_thought);
         self.next_thought += 1;
         self.ignition.fired(now);
+        self.speaking_for_obligation = true;
         Action::Think {
             thought,
             reason,
@@ -933,12 +1017,22 @@ impl Organism {
         let thought = ThoughtId(self.next_thought);
         self.next_thought += 1;
         self.ignition.fired(now);
+        self.speaking_for_obligation = false;
         Action::Think {
             thought,
             reason,
             salience,
         }
     }
+}
+
+/// Exponential decay of `level` over `dt_ms` with the given half-life.
+fn decay(level: f32, dt_ms: u64, half_life_ms: u64) -> f32 {
+    if level <= 0.0 {
+        return 0.0;
+    }
+    let factor = (-std::f32::consts::LN_2 * (dt_ms as f32) / half_life_ms as f32).exp();
+    (level * factor).clamp(0.0, 1.0)
 }
 
 fn normalized(value: f32) -> f32 {
@@ -954,4 +1048,28 @@ fn normalized(value: f32) -> f32 {
 pub fn contains_keyword_word(text: &str, keyword: &str) -> bool {
     text.split(|c: char| !c.is_alphanumeric())
         .any(|word| word.eq_ignore_ascii_case(keyword))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profile_validation() {
+        assert!(Profile::t1_ref().validate().is_ok());
+        assert!(Profile::desktop().validate().is_ok());
+
+        let mut invalid = Profile::t1_ref();
+        invalid.hysteresis = invalid.threshold;
+        assert_eq!(
+            invalid.validate(),
+            Err(InvalidProfile {
+                name: invalid.name.clone(),
+            })
+        );
+        assert_eq!(
+            Organism::new(invalid.clone()),
+            Err(InvalidProfile { name: invalid.name })
+        );
+    }
 }

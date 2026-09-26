@@ -22,4 +22,6 @@ pub use drive::{Drive, DriveTable};
 pub use energy::{Budget, PriceTable};
 pub use event::{BodySignals, Event, Millis, SpeechCue, UtteranceId};
 pub use ignition::Ignition;
-pub use organism::{Organism, PlaybackStatus, Profile, REDUCER_VERSION, contains_keyword_word};
+pub use organism::{
+    InvalidProfile, Organism, PlaybackStatus, Profile, REDUCER_VERSION, contains_keyword_word,
+};

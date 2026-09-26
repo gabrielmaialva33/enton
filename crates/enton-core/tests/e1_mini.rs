@@ -46,7 +46,7 @@ fn assert_abstention(actions: &[Action], expected: Abstention) {
 #[test]
 fn an_hour_of_ticks_never_ignites_or_emits_idle_abstentions() {
     for profile in [Profile::t1_ref(), Profile::desktop()] {
-        let mut organism = Organism::new(profile);
+        let mut organism = Organism::new(profile).unwrap();
         for second in 0..=3_600 {
             assert!(
                 organism
@@ -62,7 +62,7 @@ fn an_hour_of_ticks_never_ignites_or_emits_idle_abstentions() {
 
 #[test]
 fn keyword_ignites_even_without_other_speech_evidence() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
     // Full keyword cue (>= keyword_only_ms) ignites directly
     let actions = organism.step(&Event::Speech {
         now: Millis(0),
@@ -77,7 +77,7 @@ fn keyword_ignites_even_without_other_speech_evidence() {
 
 #[test]
 fn weak_speech_records_below_threshold() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
     assert_abstention(
         &organism.step(&Event::Speech {
             now: Millis(0),
@@ -94,7 +94,7 @@ fn weak_speech_records_below_threshold() {
 
 #[test]
 fn speech_observes_cooldown_but_keywords_bypass_it() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
     assert_thought(&organism.step(&speech(0, false)), 1, &Reason::Speech);
     assert_abstention(&organism.step(&speech(1_000, false)), Abstention::Cooldown);
     // Keyword bypasses cooldown and opens attention window
@@ -119,7 +119,8 @@ fn directed_requests_served_when_discretionary_zeroed() {
         discretionary_budget_per_hour: 0.0,
         cooldown_ms: 0,
         ..Profile::t1_ref()
-    });
+    })
+    .unwrap();
     // Directed turns: Keyword and FollowUp succeed despite discretionary being 0
     assert_thought(&organism.step(&speech(0, true)), 1, &Reason::Keyword);
     assert_thought(&organism.step(&speech(1, false)), 2, &Reason::FollowUp);
@@ -141,7 +142,8 @@ fn optional_thoughts_never_spend_obligation() {
         discretionary_budget_per_hour: 10.0,
         cooldown_ms: 0,
         ..Profile::t1_ref()
-    });
+    })
+    .unwrap();
     // Discretionary speech spends discretionary budget
     assert_thought(&organism.step(&speech(0, false)), 1, &Reason::Speech);
     assert_thought(&organism.step(&speech(1, false)), 2, &Reason::Speech);
@@ -158,7 +160,7 @@ fn fever_blocks_speech_but_not_keywords_and_a_new_body_reading_clears_torpor() {
     let profile = Profile::t1_ref();
     let fever = profile.fever_c;
     let cooldown = profile.cooldown_ms;
-    let mut organism = Organism::new(profile);
+    let mut organism = Organism::new(profile).unwrap();
     assert!(organism.step(&body(0, Some(fever), None)).is_empty());
     assert_abstention(&organism.step(&speech(0, false)), Abstention::Torpor);
     assert_thought(&organism.step(&speech(0, true)), 1, &Reason::Keyword);
@@ -170,7 +172,7 @@ fn fever_blocks_speech_but_not_keywords_and_a_new_body_reading_clears_torpor() {
 fn critical_battery_enters_torpor_at_the_exact_boundary() {
     let profile = Profile::t1_ref();
     let battery = profile.lethargy_battery;
-    let mut organism = Organism::new(profile);
+    let mut organism = Organism::new(profile).unwrap();
     organism.step(&body(0, None, Some(battery)));
     assert_abstention(&organism.step(&speech(0, false)), Abstention::Torpor);
     organism.step(&body(1, None, Some(battery + 0.01)));
@@ -199,8 +201,8 @@ fn identical_tapes_reproduce_actions_and_final_state() {
         body(120_001, None, Some(0.9)),
         speech(120_002, false),
     ];
-    let mut first = Organism::new(Profile::t1_ref());
-    let mut second = Organism::new(Profile::t1_ref());
+    let mut first = Organism::new(Profile::t1_ref()).unwrap();
+    let mut second = Organism::new(Profile::t1_ref()).unwrap();
     let first_actions: Vec<_> = tape.iter().map(|event| first.step(event)).collect();
     let second_actions: Vec<_> = tape.iter().map(|event| second.step(event)).collect();
     assert_eq!(first_actions, second_actions);
@@ -218,7 +220,8 @@ fn rejection_priority_is_torpor_then_threshold_then_cooldown_then_energy() {
     let mut organism = Organism::new(Profile {
         discretionary_budget_per_hour: 1.0,
         ..Profile::t1_ref()
-    });
+    })
+    .unwrap();
     assert_thought(&organism.step(&speech(0, false)), 1, &Reason::Speech);
     let weak = Event::Speech {
         now: Millis(1),
@@ -242,7 +245,8 @@ fn only_new_tick_time_refills_the_budget() {
         discretionary_budget_per_hour: 0.0,
         cooldown_ms: 0,
         ..Profile::t1_ref()
-    });
+    })
+    .unwrap();
     organism.step(&speech(0, true));
     organism.step(&speech(1, true));
     assert_abstention(&organism.step(&speech(2, true)), Abstention::OutOfEnergy);
@@ -296,7 +300,7 @@ fn sensitive_profile() -> Profile {
 
 #[test]
 fn drive_ignition_reports_the_strongest_contributor_and_does_not_repeat() {
-    let mut organism = Organism::new(sensitive_profile());
+    let mut organism = Organism::new(sensitive_profile()).unwrap();
     assert_thought(
         &organism.step(&Event::Tick {
             now: Millis(3_600_000),
@@ -315,7 +319,7 @@ fn drive_ignition_reports_the_strongest_contributor_and_does_not_repeat() {
 
 #[test]
 fn a_ready_drive_records_torpor_without_consuming_ignition() {
-    let mut organism = Organism::new(sensitive_profile());
+    let mut organism = Organism::new(sensitive_profile()).unwrap();
     organism.step(&body(0, Some(100.0), None));
     assert_abstention(
         &organism.step(&Event::Tick {
@@ -338,7 +342,8 @@ fn a_ready_drive_cannot_spend_a_keyword_only_budget() {
     let mut organism = Organism::new(Profile {
         discretionary_budget_per_hour: 0.0,
         ..sensitive_profile()
-    });
+    })
+    .unwrap();
     assert_abstention(
         &organism.step(&Event::Tick {
             now: Millis(3_600_000),
@@ -354,7 +359,7 @@ fn a_ready_drive_cannot_spend_a_keyword_only_budget() {
 
 #[test]
 fn speech_salience_uses_the_specified_weights_and_caps_duration() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
     let actions = organism.step(&Event::Speech {
         now: Millis(0),
         cue: SpeechCue {
@@ -373,7 +378,7 @@ fn speech_salience_uses_the_specified_weights_and_caps_duration() {
 
 #[test]
 fn malformed_speech_cannot_introduce_nonfinite_salience() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
     let actions = organism.step(&Event::Speech {
         now: Millis(0),
         cue: SpeechCue {
@@ -392,7 +397,7 @@ fn salience_short_clear_direct_speech_passes_and_low_vad_never_passes() {
     let threshold = profile.threshold;
 
     // 1. Short clear direct speech: energy >= 0.8, VAD >= 0.8, 250 ms passes t1-ref threshold (0.7)
-    let mut organism = Organism::new(profile);
+    let mut organism = Organism::new(profile).unwrap();
     let actions = organism.step(&Event::Speech {
         now: Millis(0),
         cue: SpeechCue {
@@ -420,7 +425,7 @@ fn salience_short_clear_direct_speech_passes_and_low_vad_never_passes() {
     for &energy in &[0.0f32, 0.2, 0.5, 0.8, 1.0] {
         for &vad in &[0.0f32, 0.1, 0.2, 0.3, 0.4] {
             for &dur in &[50u32, 100, 250, 500, 1000, 5000, 10_000] {
-                let mut fresh_organism = Organism::new(Profile::t1_ref());
+                let mut fresh_organism = Organism::new(Profile::t1_ref()).unwrap();
                 let actions = fresh_organism.step(&Event::Speech {
                     now: Millis(0),
                     cue: SpeechCue {
@@ -441,7 +446,7 @@ fn salience_short_clear_direct_speech_passes_and_low_vad_never_passes() {
 
 #[test]
 fn keyword_only_turn_attends_and_merges_continuation() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
 
     // 1. Keyword cue shorter than keyword_only_ms (900 ms) emits Action::Attend { until }
     let actions1 = organism.step(&Event::Speech {
@@ -496,7 +501,7 @@ fn keyword_only_turn_attends_and_merges_continuation() {
 
 #[test]
 fn keyword_only_turn_thinks_on_timeout_when_no_continuation_arrives() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
 
     // Keyword cue shorter than 900 ms emits Attend { until: 5000 }
     let actions1 = organism.step(&Event::Speech {
@@ -543,7 +548,8 @@ fn attention_window_follow_up_bypasses_cooldown_and_pays_normal_energy() {
     let mut organism = Organism::new(Profile {
         obligation_budget_per_hour: 2.0,
         ..Profile::t1_ref()
-    });
+    })
+    .unwrap();
 
     // 1. Initial direct request with keyword opens attention window (5000 ms)
     let actions1 = organism.step(&Event::Speech {
@@ -589,7 +595,7 @@ fn attention_window_follow_up_bypasses_cooldown_and_pays_normal_energy() {
 
 #[test]
 fn habituation_suppresses_repeated_similar_non_addressed_speech() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
 
     // First burst of non-addressed loud speech (TV)
     let actions1 = organism.step(&Event::Speech {
@@ -660,7 +666,7 @@ fn habituation_suppresses_repeated_similar_non_addressed_speech() {
 
 #[test]
 fn novelty_adds_salience_on_prediction_error() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
 
     // Initial cue sets baseline expectation
     let _ = organism.step(&Event::Speech {
@@ -693,7 +699,7 @@ fn a7_timeout_spends_after_elapsed_refill_without_intermediate_ticks() {
         think_cost: 1.0,
         ..Profile::t1_ref()
     };
-    let mut organism = Organism::new(profile);
+    let mut organism = Organism::new(profile).unwrap();
 
     // Spend initial 1.0 obligation energy at time 0
     let actions = organism.step(&Event::Speech {
@@ -746,7 +752,7 @@ fn a7_timeout_spends_after_elapsed_refill_with_intermediate_ticks() {
         think_cost: 1.0,
         ..Profile::t1_ref()
     };
-    let mut organism = Organism::new(profile);
+    let mut organism = Organism::new(profile).unwrap();
 
     // Spend initial 1.0 obligation energy at time 0
     let actions = organism.step(&Event::Speech {
@@ -789,7 +795,7 @@ fn a7_timeout_spends_after_elapsed_refill_with_intermediate_ticks() {
 #[test]
 fn a8_slow_reply_anchors_attention_independent_of_tick_interleaving() {
     // 1. With closing tick at 6,000 ms:
-    let mut org_with_tick = Organism::new(Profile::t1_ref());
+    let mut org_with_tick = Organism::new(Profile::t1_ref()).unwrap();
     let act1 = org_with_tick.step(&speech(0, true));
     assert_thought(&act1, 1, &Reason::Keyword);
     assert_eq!(org_with_tick.attention_until(), Some(Millis(5_000)));
@@ -828,7 +834,7 @@ fn a8_slow_reply_anchors_attention_independent_of_tick_interleaving() {
     assert_eq!(org_with_tick.attention_until(), Some(Millis(12_000)));
 
     // 2. Run WITHOUT closing tick between 5,000 and 6,001 ms:
-    let mut org_without_tick = Organism::new(Profile::t1_ref());
+    let mut org_without_tick = Organism::new(Profile::t1_ref()).unwrap();
     let _ = org_without_tick.step(&speech(0, true));
     let _ = org_without_tick.step(&Event::CortexReply {
         now: Millis(6_001),
@@ -854,7 +860,7 @@ fn a8_slow_reply_anchors_attention_independent_of_tick_interleaving() {
 
 #[test]
 fn a8_stale_and_other_replies_never_reopen_attention() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
 
     // User speaks keyword -> ThoughtId(1)
     let _ = organism.step(&speech(0, true));
@@ -892,7 +898,7 @@ fn a8_stale_and_other_replies_never_reopen_attention() {
 
 #[test]
 fn a8_reordered_backward_reply_timestamp_does_not_shorten_window() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
 
     // Keyword at 10,000 ms opens window until 15,000 ms
     let _ = organism.step(&speech(10_000, true));
@@ -910,7 +916,7 @@ fn a8_reordered_backward_reply_timestamp_does_not_shorten_window() {
 
 #[test]
 fn a9_marginal_cue_fate_changes_with_novelty() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
 
     // Threshold is 0.70.
     // Marginal cue: vad=0.8, energy=0.6, dur=333ms (dur_norm=0.333).
@@ -980,7 +986,7 @@ fn a9_marginal_cue_fate_changes_with_novelty() {
 
 #[test]
 fn a9_silence_tv_to_novel_speech_resets_habituation() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
 
     // 10 low-level TV bursts build up habituation
     for i in 0..10 {
@@ -1029,7 +1035,7 @@ fn a9_tunables_in_profile_govern_similarity_and_expectation() {
     // Configure a stricter similarity cutoff
     profile.similarity_cutoff = 0.8;
     profile.expectation_coefficient = 0.50;
-    let mut organism = Organism::new(profile);
+    let mut organism = Organism::new(profile).unwrap();
 
     // First cue sets expectation
     organism.step(&Event::Speech {
@@ -1059,7 +1065,7 @@ fn a9_tunables_in_profile_govern_similarity_and_expectation() {
 
 #[test]
 fn self_echo_during_playback_is_suppressed() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
     organism.step(&Event::PlaybackStarted {
         now: Millis(1000),
         utterance: UtteranceId(1),
@@ -1086,7 +1092,18 @@ fn self_echo_during_playback_is_suppressed() {
 
 #[test]
 fn self_echo_during_hangover_is_suppressed() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+    let init_actions = organism.step(&Event::Speech {
+        now: Millis(500),
+        cue: SpeechCue {
+            energy: 0.85,
+            duration_ms: 1000,
+            vad_confidence: 0.95,
+            keyword: true,
+        },
+    });
+    assert_thought(&init_actions, 1, &Reason::Keyword);
+
     organism.step(&Event::PlaybackStarted {
         now: Millis(1000),
         utterance: UtteranceId(1),
@@ -1119,12 +1136,12 @@ fn self_echo_during_hangover_is_suppressed() {
             keyword: false,
         },
     });
-    assert_thought(&actions_after, 1, &Reason::FollowUp);
+    assert_thought(&actions_after, 2, &Reason::FollowUp);
 }
 
 #[test]
 fn predicted_keyword_requires_full_barge_in_margin() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
     let reply_actions = organism.step(&Event::CortexReply {
         now: Millis(1000),
         thought: ThoughtId(1),
@@ -1160,7 +1177,7 @@ fn predicted_keyword_requires_full_barge_in_margin() {
 
 #[test]
 fn unpredicted_keyword_rejects_sub_echo_false_positives() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
     organism.step(&Event::CortexReply {
         now: Millis(1000),
         thought: ThoughtId(1),
@@ -1190,7 +1207,7 @@ fn unpredicted_keyword_rejects_sub_echo_false_positives() {
 
 #[test]
 fn unpredicted_keyword_above_echo_triggers_barge_in() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
     organism.step(&Event::CortexReply {
         now: Millis(1000),
         thought: ThoughtId(1),
@@ -1227,7 +1244,7 @@ fn unpredicted_keyword_above_echo_triggers_barge_in() {
 
 #[test]
 fn loud_speech_barge_in_triggers_follow_up() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
     organism.step(&Event::PlaybackStarted {
         now: Millis(1000),
         utterance: UtteranceId(1),
@@ -1263,7 +1280,7 @@ fn consecutive_barge_in_ratchet_breaks_underestimated_echo_loop() {
     let mut profile = Profile::t1_ref();
     profile.echo_initial_energy = 0.20;
     profile.echo_barge_in_margin = 0.15;
-    let mut organism = Organism::new(profile);
+    let mut organism = Organism::new(profile).unwrap();
 
     organism.step(&Event::Speech {
         now: Millis(1000),
@@ -1345,7 +1362,7 @@ fn consecutive_barge_in_ratchet_breaks_underestimated_echo_loop() {
 fn dual_mode_attention_anchoring() {
     let profile = Profile::t1_ref();
 
-    let mut text_org = Organism::new(profile.clone());
+    let mut text_org = Organism::new(profile.clone()).unwrap();
     text_org.step(&Event::Speech {
         now: Millis(1000),
         cue: SpeechCue {
@@ -1362,7 +1379,7 @@ fn dual_mode_attention_anchoring() {
     });
     assert_eq!(text_org.attention_until(), Some(Millis(6500)));
 
-    let mut voice_org = Organism::new(profile);
+    let mut voice_org = Organism::new(profile).unwrap();
     voice_org.step(&Event::Speech {
         now: Millis(1000),
         cue: SpeechCue {
@@ -1393,7 +1410,7 @@ fn dual_mode_attention_anchoring() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn closed_loop_feedback_immunity_pure_core() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
 
     let actions1 = organism.step(&Event::Speech {
         now: Millis(5_000),
@@ -1518,7 +1535,7 @@ fn closed_loop_feedback_immunity_pure_core() {
 fn playback_watchdog_terminates_stuck_playback_to_prevent_deafness() {
     let mut profile = Profile::t1_ref();
     profile.max_playback_ms = 10_000;
-    let mut organism = Organism::new(profile);
+    let mut organism = Organism::new(profile).unwrap();
 
     organism.step(&Event::PlaybackStarted {
         now: Millis(1000),
@@ -1551,7 +1568,7 @@ fn playback_watchdog_terminates_stuck_playback_to_prevent_deafness() {
 
 #[test]
 fn non_finite_cues_during_playback_do_not_corrupt_echo_expectation_and_subsequent_barge_in_works() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
 
     organism.step(&Event::PlaybackStarted {
         now: Millis(1000),
@@ -1616,7 +1633,7 @@ fn non_finite_cues_during_playback_do_not_corrupt_echo_expectation_and_subsequen
 
 #[test]
 fn residual_echo_after_barge_in_is_self_echo_and_does_not_open_follow_up() {
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
 
     // 1. Playback starts
     organism.step(&Event::PlaybackStarted {
@@ -1692,7 +1709,7 @@ fn self_speech_keyword_detection_respects_unicode_word_boundaries() {
     assert!(!contains_keyword_word("qualquer palavra", "enton"));
 
     // Verify organism integration via CortexReply
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
 
     // 'entonação' must NOT flag self_speech_has_keyword
     organism.step(&Event::CortexReply {
@@ -1725,4 +1742,151 @@ fn self_speech_keyword_detection_respects_unicode_word_boundaries() {
         text: "Chame o Enton.".to_string(),
     });
     assert!(organism.self_speech_has_keyword());
+}
+
+#[test]
+fn playback_finished_discretionary_opens_no_attention_window_so_cue_is_unaddressed() {
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+
+    // 1. Unaddressed speech cue triggers discretionary Speech think
+    let actions_initial = organism.step(&speech(1_000, false));
+    assert_thought(&actions_initial, 1, &Reason::Speech);
+    assert!(!organism.speaking_for_obligation());
+
+    // 2. Playback starts and finishes
+    organism.step(&Event::PlaybackStarted {
+        now: Millis(1_500),
+        utterance: UtteranceId(1),
+    });
+    assert_eq!(organism.attention_until(), None);
+
+    organism.step(&Event::PlaybackFinished {
+        now: Millis(3_000),
+        utterance: UtteranceId(1),
+    });
+    // Discretionary thought must not open a post-playback attention window
+    assert_eq!(organism.attention_until(), None);
+
+    // 3. Right after hangover expires (t = 3000 + 200 = 3200ms), a non-keyword cue arrives
+    let actions_subsequent = organism.step(&speech(3_250, false));
+
+    // Because there is no attention window, it is NOT a FollowUp think: it goes through
+    // the unaddressed path (blocked here by cooldown from the earlier discretionary think).
+    assert_abstention(&actions_subsequent, Abstention::Cooldown);
+    let [Action::Abstain { reason, .. }] = actions_subsequent.as_slice() else {
+        panic!("expected Abstain action, got {actions_subsequent:?}");
+    };
+    assert_eq!(*reason, Reason::Speech);
+    assert_ne!(*reason, Reason::FollowUp);
+}
+
+#[test]
+fn playback_finished_obligation_opens_attention_window_for_follow_up() {
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+
+    // 1. Keyword speech cue triggers obligation Keyword think
+    let actions_initial = organism.step(&speech(1_000, true));
+    assert_thought(&actions_initial, 1, &Reason::Keyword);
+    assert!(organism.speaking_for_obligation());
+
+    // 2. Playback starts and finishes
+    organism.step(&Event::PlaybackStarted {
+        now: Millis(1_500),
+        utterance: UtteranceId(1),
+    });
+    assert_eq!(organism.attention_until(), None);
+
+    organism.step(&Event::PlaybackFinished {
+        now: Millis(3_000),
+        utterance: UtteranceId(1),
+    });
+    // Obligation thought opens post-playback attention window: 3000 + 200 (hangover) + 5000 = 8200ms
+    assert_eq!(organism.attention_until(), Some(Millis(8_200)));
+
+    // 3. Right after hangover expires (t = 3000 + 200 = 3200ms), a non-keyword cue arrives inside window
+    let actions_subsequent = organism.step(&speech(3_250, false));
+
+    // Inside attention window, non-keyword continuation IS a FollowUp think
+    assert_thought(&actions_subsequent, 2, &Reason::FollowUp);
+}
+
+fn tv_cue(now: u64) -> Event {
+    Event::Speech {
+        now: Millis(now),
+        cue: SpeechCue {
+            energy: 0.8,
+            duration_ms: 1_000,
+            vad_confidence: 0.9,
+            keyword: false,
+        },
+    }
+}
+
+/// Twenty identical TV-like cues, three seconds apart, with no tick in between.
+fn habituate_to_tv(organism: &mut Organism) {
+    for i in 0..20 {
+        organism.step(&tv_cue(i * 3_000));
+    }
+}
+
+#[test]
+fn slow_habituation_outlasts_a_quiet_gap_and_keeps_the_tv_muted() {
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+    habituate_to_tv(&mut organism);
+    let slow = organism.slow_habituation();
+    assert!(
+        slow > 0.3,
+        "twenty similar cues accrue long-term habituation"
+    );
+
+    // A two-minute pause erases most of the fast component, not the slow one.
+    organism.step(&Event::Tick {
+        now: Millis(117_000),
+    });
+    assert!(organism.habituation() < 0.1);
+    assert!(organism.slow_habituation() > 0.9 * slow);
+    assert_abstention(&organism.step(&tv_cue(117_000)), Abstention::Habituation);
+
+    // Without the long-term component the same cue would have ignited.
+    let mut forgetful = Profile::t1_ref();
+    forgetful.slow_habituation_rate = 0.0;
+    let mut organism = Organism::new(forgetful).unwrap();
+    habituate_to_tv(&mut organism);
+    organism.step(&Event::Tick {
+        now: Millis(117_000),
+    });
+    assert_thought(&organism.step(&tv_cue(117_000)), 2, &Reason::Speech);
+}
+
+#[test]
+fn slow_habituation_never_mutes_a_novel_cue_and_survives_it() {
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+    habituate_to_tv(&mut organism);
+    let slow = organism.slow_habituation();
+    organism.step(&Event::Tick {
+        now: Millis(117_000),
+    });
+
+    // Maximal prediction error: the fast component resets (A9) and the cue ignites.
+    let novel = organism.step(&Event::Speech {
+        now: Millis(117_001),
+        cue: SpeechCue {
+            energy: 0.1,
+            duration_ms: 100,
+            vad_confidence: 0.45,
+            keyword: false,
+        },
+    });
+    assert!(
+        !matches!(
+            novel.as_slice(),
+            [Action::Abstain {
+                why: Abstention::Habituation,
+                ..
+            }]
+        ),
+        "a novel cue is never rejected as habituation, got {novel:?}"
+    );
+    assert!(organism.habituation().abs() < f32::EPSILON);
+    assert!(organism.slow_habituation() > 0.9 * slow);
 }

@@ -210,6 +210,10 @@ impl Machine {
 
 /// Enton's own synthesized voice does not match the user.
 const SELF_ECHO_SPEAKER_SIM: f32 = 0.15;
+/// Clean synthesized speech through the loudspeaker lacks the broadcast cues a media tagger keys on.
+const SELF_ECHO_MEDIA: f32 = 0.4;
+/// Enton speaks whole sentences.
+const SELF_ECHO_TURN_COMPLETE: f32 = 0.8;
 
 struct Feedback {
     pending: BTreeMap<(Millis, u64), Record>,
@@ -273,6 +277,8 @@ impl Feedback {
                         duration_ms: 250,
                         keyword: thought.0.is_multiple_of(4) && index == 0,
                         speaker_sim: Some(SELF_ECHO_SPEAKER_SIM),
+                        media: Some(SELF_ECHO_MEDIA),
+                        turn_complete: Some(SELF_ECHO_TURN_COMPLETE),
                     },
                 },
                 annotation: Annotation::Speech {
@@ -541,6 +547,8 @@ mod tests {
                     duration_ms: 1000,
                     keyword: true,
                     speaker_sim: None,
+                    media: None,
+                    turn_complete: None,
                 },
             },
             annotation: Annotation::Speech {
@@ -751,6 +759,8 @@ mod tests {
             3
         );
     }
+    // Bounded regression test asserts accounting breakdown across multiple stimuli.
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn noise_breakdown_regression_and_accounting() {
         let noise_interval = Interval {
@@ -767,6 +777,8 @@ mod tests {
                         duration_ms: 500,
                         keyword: false,
                         speaker_sim: None,
+                        media: None,
+                        turn_complete: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -784,6 +796,8 @@ mod tests {
                         duration_ms: 500,
                         keyword: false,
                         speaker_sim: None,
+                        media: None,
+                        turn_complete: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -801,6 +815,8 @@ mod tests {
                         duration_ms: 1500,
                         keyword: false,
                         speaker_sim: None,
+                        media: None,
+                        turn_complete: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -875,6 +891,8 @@ mod admission_tests {
                         duration_ms: duration,
                         keyword,
                         speaker_sim: None,
+                        media: None,
+                        turn_complete: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -920,6 +938,8 @@ mod admission_tests {
                         duration_ms: 1000,
                         keyword: true,
                         speaker_sim: None,
+                        media: None,
+                        turn_complete: None,
                     },
                 },
                 annotation: Annotation::Speech {

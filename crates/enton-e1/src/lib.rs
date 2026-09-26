@@ -15,14 +15,14 @@ pub use report::{
     Summary, clopper_pearson_upper_bound,
 };
 pub use run::{Controller, ControllerResult, ExperimentRun, run_tape};
-pub use synth::{SplitMix64, e1a, e1b};
+pub use synth::{SplitMix64, TurnRole, e1a, e1b};
 pub use tape::{
     Annotation, EpisodeId, Interval, Record, SegmentId, Stimulus, Tape, TapeKind, Turn, TurnId,
 };
 
 /// Version of distributions, feedback, attribution and the report contract.
-/// Version 2.3.0 adds a simulated speaker-similarity dimension; all other draws unchanged.
-pub const BENCHMARK_VERSION: &str = "2.3.0";
+/// Version 2.5.0 adds a simulated turn-completion dimension; all other draws unchanged.
+pub const BENCHMARK_VERSION: &str = "2.5.0";
 
 /// Invalid experiments fail explicitly rather than dropping stimuli or granting free calls.
 #[derive(Debug, thiserror::Error)]

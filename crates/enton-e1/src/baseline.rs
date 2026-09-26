@@ -97,6 +97,8 @@ mod tests {
                 duration_ms: 250,
                 keyword: false,
                 speaker_sim: None,
+                media: None,
+                turn_complete: None,
             },
         };
         assert!(matches!(
@@ -125,6 +127,8 @@ mod tests {
                 duration_ms: 250,
                 keyword: false,
                 speaker_sim: None,
+                media: None,
+                turn_complete: None,
             },
         };
         assert!(matches!(
@@ -147,6 +151,8 @@ mod tests {
                 duration_ms: 1000,
                 keyword,
                 speaker_sim: None,
+                media: None,
+                turn_complete: None,
             },
         }
     }

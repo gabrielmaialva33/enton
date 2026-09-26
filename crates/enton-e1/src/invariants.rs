@@ -117,12 +117,19 @@ impl Watch {
             return Err(self.violation(event, "habituation and echo levels stay within [0, 1]"));
         }
         let profile = organism.profile();
-        let reach = profile.attention.attention_ms + profile.echo.echo_hangover_ms;
-        if organism
-            .attention_until()
-            .is_some_and(|until| until.0 > organism.last_seen().0.saturating_add(reach))
-        {
-            return Err(self.violation(event, "the attention window never reaches past its span"));
+        let hangover = profile.echo.echo_hangover_ms;
+        let windows = [
+            (organism.attention_until(), profile.attention.attention_ms),
+            (
+                organism.verified_attention_until(),
+                profile.attention.verified_attention_ms,
+            ),
+        ];
+        let seen = organism.last_seen().0;
+        if windows.iter().any(|(until, span)| {
+            until.is_some_and(|until| until.0 > seen.saturating_add(span + hangover))
+        }) {
+            return Err(self.violation(event, "an attention window never reaches past its span"));
         }
         Ok(())
     }
@@ -188,6 +195,8 @@ mod tests {
                 vad_confidence: 0.2,
                 keyword: false,
                 speaker_sim: None,
+                media: None,
+                turn_complete: None,
             },
         }
     }

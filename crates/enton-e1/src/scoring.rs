@@ -245,6 +245,8 @@ mod tests {
                     duration_ms: 250,
                     keyword: true,
                     speaker_sim: None,
+                    media: None,
+                    turn_complete: None,
                 },
             },
             annotation: Annotation::Speech {

@@ -62,9 +62,68 @@ pub const SPEAKER_SIM_CROSSOVER_RATE: f32 = 0.03;
 /// Stream salt for the independent speaker-similarity RNG stream.
 const SPEAKER_STREAM_SALT: u64 = 0x5350_4541_4b45_5231;
 
+/// Lower bound of the nominal media likelihood range for television and reproduced media.
+pub const TV_MEDIA_MIN: f32 = 0.6;
+/// Upper bound of the nominal media likelihood range for television and reproduced media.
+pub const TV_MEDIA_MAX: f32 = 0.98;
+
+/// Probability that the audio tagger misses a TV segment and tags it within the live range.
+pub const TV_MEDIA_MISS_RATE: f32 = 0.05;
+
+/// Lower bound of the media likelihood range for live voices.
+pub const LIVE_VOICE_MEDIA_MIN: f32 = 0.0;
+/// Upper bound of the media likelihood range for live voices.
+pub const LIVE_VOICE_MEDIA_MAX: f32 = 0.35;
+
+/// Probability of a false alarm where a live voice is tagged in the media range.
+pub const LIVE_VOICE_MEDIA_FALSE_ALARM_RATE: f32 = 0.03;
+
+/// Lower bound of the media likelihood range for non-speech acoustic segments.
+pub const NON_SPEECH_MEDIA_MIN: f32 = 0.0;
+/// Upper bound of the media likelihood range for non-speech acoustic segments.
+pub const NON_SPEECH_MEDIA_MAX: f32 = 0.3;
+
+/// Stream salt for the independent media-tagger RNG stream.
+const MEDIA_STREAM_SALT: u64 = 0x4d45_4449_415f_5331;
+
+/// Lower bound of the nominal turn-completion score for complete user turns.
+pub const COMPLETE_USER_TURN_MIN: f32 = 0.6;
+/// Upper bound of the nominal turn-completion score for complete user turns.
+pub const COMPLETE_USER_TURN_MAX: f32 = 0.99;
+/// Probability that an acoustic end-of-turn model misses a complete user turn.
+pub const COMPLETE_USER_TURN_MISS_RATE: f32 = 0.02;
+
+/// Lower bound of the nominal turn-completion score for incomplete user segments.
+pub const INCOMPLETE_USER_TURN_MIN: f32 = 0.01;
+/// Upper bound of the nominal turn-completion score for incomplete user segments.
+pub const INCOMPLETE_USER_TURN_MAX: f32 = 0.4;
+/// Probability that an acoustic end-of-turn model prematurely signals completion on an incomplete turn.
+pub const INCOMPLETE_USER_TURN_PREMATURE_RATE: f32 = 0.03;
+
+/// Lower bound of the turn-completion score for non-user acoustic segments.
+pub const NON_USER_TURN_MIN: f32 = 0.2;
+/// Upper bound of the turn-completion score for non-user acoustic segments.
+pub const NON_USER_TURN_MAX: f32 = 0.9;
+
+/// Stream salt for the independent turn-completion RNG stream.
+const TURN_STREAM_SALT: u64 = 0x5455_524e_5f53_3130;
+
+/// Synthesized turn role classifying segment completion expectations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnRole {
+    /// Incomplete user turn segment preceding a pause before the final segment.
+    Incomplete,
+    /// Final or only segment of a user turn.
+    Complete,
+    /// Non-user audio (TV, background noise, or other talkers) without turn structure.
+    Other,
+}
+
 struct Builder {
     rng: SplitMix64,
     speaker_rng: SplitMix64,
+    media_rng: SplitMix64,
+    turn_rng: SplitMix64,
     records: Vec<Record>,
     turns: Vec<Turn>,
     next_segment: u32,
@@ -75,6 +134,8 @@ impl Builder {
         Self {
             rng: SplitMix64::with_seed(seed),
             speaker_rng: SplitMix64::with_seed(seed ^ SPEAKER_STREAM_SALT),
+            media_rng: SplitMix64::with_seed(seed ^ MEDIA_STREAM_SALT),
+            turn_rng: SplitMix64::with_seed(seed ^ TURN_STREAM_SALT),
             records: Vec::new(),
             turns: Vec::new(),
             next_segment: 0,
@@ -106,14 +167,66 @@ impl Builder {
                 .real(NON_SPEECH_SPEAKER_SIM_MIN, NON_SPEECH_SPEAKER_SIM_MAX),
         }
     }
+    fn draw_media(&mut self, source: Stimulus) -> f32 {
+        match source {
+            Stimulus::Tv => {
+                if self.media_rng.real(0.0, 1.0) < TV_MEDIA_MISS_RATE {
+                    self.media_rng
+                        .real(LIVE_VOICE_MEDIA_MIN, LIVE_VOICE_MEDIA_MAX)
+                } else {
+                    self.media_rng.real(TV_MEDIA_MIN, TV_MEDIA_MAX)
+                }
+            }
+            Stimulus::Request(_)
+            | Stimulus::BargeIn(_)
+            | Stimulus::OtherSpeech
+            | Stimulus::FalseKeyword => {
+                if self.media_rng.real(0.0, 1.0) < LIVE_VOICE_MEDIA_FALSE_ALARM_RATE {
+                    self.media_rng.real(TV_MEDIA_MIN, TV_MEDIA_MAX)
+                } else {
+                    self.media_rng
+                        .real(LIVE_VOICE_MEDIA_MIN, LIVE_VOICE_MEDIA_MAX)
+                }
+            }
+            Stimulus::Noise | Stimulus::Motor | Stimulus::Ventilation | Stimulus::SelfEcho => self
+                .media_rng
+                .real(NON_SPEECH_MEDIA_MIN, NON_SPEECH_MEDIA_MAX),
+        }
+    }
+    fn draw_turn_complete(&mut self, role: TurnRole) -> f32 {
+        match role {
+            TurnRole::Complete => {
+                if self.turn_rng.real(0.0, 1.0) < COMPLETE_USER_TURN_MISS_RATE {
+                    self.turn_rng
+                        .real(INCOMPLETE_USER_TURN_MIN, INCOMPLETE_USER_TURN_MAX)
+                } else {
+                    self.turn_rng
+                        .real(COMPLETE_USER_TURN_MIN, COMPLETE_USER_TURN_MAX)
+                }
+            }
+            TurnRole::Incomplete => {
+                if self.turn_rng.real(0.0, 1.0) < INCOMPLETE_USER_TURN_PREMATURE_RATE {
+                    self.turn_rng
+                        .real(COMPLETE_USER_TURN_MIN, COMPLETE_USER_TURN_MAX)
+                } else {
+                    self.turn_rng
+                        .real(INCOMPLETE_USER_TURN_MIN, INCOMPLETE_USER_TURN_MAX)
+                }
+            }
+            TurnRole::Other => self.turn_rng.real(NON_USER_TURN_MIN, NON_USER_TURN_MAX),
+        }
+    }
     fn segment(
         &mut self,
         end: u64,
         mut cue: SpeechCue,
         episode: EpisodeId,
         source: Stimulus,
+        role: TurnRole,
     ) -> SegmentId {
         cue.speaker_sim = Some(self.draw_speaker_sim(source));
+        cue.media = Some(self.draw_media(source));
+        cue.turn_complete = Some(self.draw_turn_complete(role));
         let id = SegmentId(self.next_segment);
         // All generator loops are protocol-bounded to fewer than MAX_EVENTS entries.
         self.next_segment += 1;
@@ -137,6 +250,8 @@ impl Builder {
             energy: self.rng.real(0.65, 1.0),
             vad_confidence: self.rng.real(0.65, 1.0),
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         }
     }
     fn request(
@@ -158,7 +273,7 @@ impl Builder {
         } else {
             Stimulus::Request(id)
         };
-        let segment = self.segment(end, cue, episode, source);
+        let segment = self.segment(end, cue, episode, source, TurnRole::Complete);
         self.turns.push(Turn {
             id,
             episode,
@@ -176,12 +291,18 @@ impl Builder {
         let name_duration = self.rng.range(250, 650);
         let name_end = start + u64::from(name_duration);
         let name = self.user_cue(name_duration, true);
-        let first = self.segment(name_end, name, episode, Stimulus::Request(id));
+        let first = self.segment(
+            name_end,
+            name,
+            episode,
+            Stimulus::Request(id),
+            TurnRole::Incomplete,
+        );
         let pause = self.rng.range(150, 700);
         let duration = self.rng.range(700, 1600);
         let end = name_end + u64::from(pause) + u64::from(duration);
         let cue = self.user_cue(duration, false);
-        let second = self.segment(end, cue, episode, Stimulus::Request(id));
+        let second = self.segment(end, cue, episode, Stimulus::Request(id), TurnRole::Complete);
         self.turns.push(Turn {
             id,
             episode,
@@ -229,8 +350,10 @@ impl Builder {
             energy: self.rng.real(0.55, 0.95),
             vad_confidence: self.rng.real(0.65, 1.0),
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         };
-        self.segment(end, cue, episode, Stimulus::OtherSpeech);
+        self.segment(end, cue, episode, Stimulus::OtherSpeech, TurnRole::Other);
     }
     fn noise(&mut self, start: u64, episode: EpisodeId) {
         let duration_ms = self.rng.range(250, 1000);
@@ -240,12 +363,15 @@ impl Builder {
             energy: self.rng.real(0.1, 0.8),
             vad_confidence: self.rng.real(0.02, 0.35),
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         };
         self.segment(
             start + u64::from(duration_ms),
             cue,
             episode,
             Stimulus::Noise,
+            TurnRole::Other,
         );
     }
     fn television(&mut self, start: u64, episode: EpisodeId) {
@@ -263,9 +389,12 @@ impl Builder {
                     energy,
                     vad_confidence: vad,
                     speaker_sim: None,
+                    media: None,
+                    turn_complete: None,
                 },
                 episode,
                 Stimulus::Tv,
+                TurnRole::Other,
             );
             now += u64::from(self.rng.range(3000, 6000));
         }
@@ -351,9 +480,12 @@ pub fn e1a(seed: u64) -> Result<Tape, Error> {
                 duration_ms: 250,
                 keyword: true,
                 speaker_sim: None,
+                media: None,
+                turn_complete: None,
             },
             EpisodeId(distractor + 2),
             Stimulus::FalseKeyword,
+            TurnRole::Other,
         );
         for n in 0..5 {
             b.noise(origin + 60_000 + n * 3000, EpisodeId(distractor + 3));
@@ -410,9 +542,12 @@ pub fn e1b(seed: u64) -> Result<Tape, Error> {
                     duration_ms,
                     keyword: false,
                     speaker_sim: None,
+                    media: None,
+                    turn_complete: None,
                 },
                 EpisodeId(100 + block),
                 source,
+                TurnRole::Other,
             );
         }
         let start = origin + 300_000 + u64::from(b.rng.range(1000, 54_000));
@@ -607,6 +742,349 @@ mod tests {
             (0.01..=0.06).contains(&pooled_impostor_ge_06),
             "pooled impostor share >= 0.6 was {pooled_impostor_ge_06}, expected in 0.01..=0.06"
         );
+    }
+    #[test]
+    fn media_distribution_properties() {
+        let mut pooled_tv = Vec::new();
+        let mut pooled_live = Vec::new();
+
+        for seed in [0, 1, 7, 42] {
+            let a = e1a(seed).unwrap();
+            let b = e1b(seed).unwrap();
+            let mut tv_media = Vec::new();
+            let mut live_media = Vec::new();
+
+            for tape in [&a, &b] {
+                for record in tape.records() {
+                    if let Event::Speech { cue, .. } = &record.event {
+                        let media = cue
+                            .media
+                            .expect("every speech cue in a generated tape must have Some media");
+                        match record.annotation.source() {
+                            Some(Stimulus::Tv) => {
+                                tv_media.push(media);
+                                pooled_tv.push(media);
+                            }
+                            Some(
+                                Stimulus::Request(_)
+                                | Stimulus::BargeIn(_)
+                                | Stimulus::OtherSpeech
+                                | Stimulus::FalseKeyword,
+                            ) => {
+                                live_media.push(media);
+                                pooled_live.push(media);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            let tv_mean = tv_media.iter().copied().sum::<f32>() / tv_media.len() as f32;
+            let live_mean = live_media.iter().copied().sum::<f32>() / live_media.len() as f32;
+            let tv_lt_05 =
+                tv_media.iter().filter(|&&m| m < 0.5).count() as f32 / tv_media.len() as f32;
+            let live_ge_05 =
+                live_media.iter().filter(|&&m| m >= 0.5).count() as f32 / live_media.len() as f32;
+
+            assert!(
+                tv_mean > 0.7,
+                "seed {seed}: tv mean was {tv_mean}, expected > 0.7"
+            );
+            assert!(
+                live_mean < 0.25,
+                "seed {seed}: live mean was {live_mean}, expected < 0.25"
+            );
+            assert!(
+                (0.01..=0.08).contains(&tv_lt_05),
+                "seed {seed}: tv share < 0.5 was {tv_lt_05}, expected in 0.01..=0.08"
+            );
+            assert!(
+                (0.01..=0.08).contains(&live_ge_05),
+                "seed {seed}: live share >= 0.5 was {live_ge_05}, expected in 0.01..=0.08"
+            );
+        }
+
+        let pooled_tv_mean = pooled_tv.iter().copied().sum::<f32>() / pooled_tv.len() as f32;
+        let pooled_live_mean = pooled_live.iter().copied().sum::<f32>() / pooled_live.len() as f32;
+        let pooled_tv_lt_05 =
+            pooled_tv.iter().filter(|&&m| m < 0.5).count() as f32 / pooled_tv.len() as f32;
+        let pooled_live_ge_05 =
+            pooled_live.iter().filter(|&&m| m >= 0.5).count() as f32 / pooled_live.len() as f32;
+
+        assert!(
+            pooled_tv_mean > 0.7,
+            "pooled tv mean was {pooled_tv_mean}, expected > 0.7"
+        );
+        assert!(
+            pooled_live_mean < 0.25,
+            "pooled live mean was {pooled_live_mean}, expected < 0.25"
+        );
+        assert!(
+            (0.01..=0.08).contains(&pooled_tv_lt_05),
+            "pooled tv share < 0.5 was {pooled_tv_lt_05}, expected in 0.01..=0.08"
+        );
+        assert!(
+            (0.01..=0.08).contains(&pooled_live_ge_05),
+            "pooled live share >= 0.5 was {pooled_live_ge_05}, expected in 0.01..=0.08"
+        );
+    }
+    #[test]
+    fn speaker_sim_draws_are_independent_of_media_stream() {
+        let tape = e1a(42).unwrap();
+        let mut sim_rng = SplitMix64::with_seed(0x2a ^ SPEAKER_STREAM_SALT);
+        let mut speech_records: Vec<_> = tape
+            .records()
+            .iter()
+            .filter(|r| matches!(r.event, Event::Speech { .. }))
+            .collect();
+        speech_records.sort_by_key(|r| match r.annotation {
+            Annotation::Speech { segment, .. } => segment.0,
+            Annotation::Clock => 0,
+        });
+        for record in speech_records {
+            if let Event::Speech { cue, .. } = &record.event {
+                let source = record.annotation.source().unwrap();
+                let expected_sim = match source {
+                    Stimulus::Request(_) | Stimulus::BargeIn(_) => {
+                        if sim_rng.real(0.0, 1.0) < SPEAKER_SIM_CROSSOVER_RATE {
+                            sim_rng.real(IMPOSTOR_SPEAKER_SIM_MIN, IMPOSTOR_SPEAKER_SIM_MAX)
+                        } else {
+                            sim_rng.real(USER_SPEAKER_SIM_MIN, USER_SPEAKER_SIM_MAX)
+                        }
+                    }
+                    Stimulus::Tv | Stimulus::OtherSpeech | Stimulus::FalseKeyword => {
+                        if sim_rng.real(0.0, 1.0) < SPEAKER_SIM_CROSSOVER_RATE {
+                            sim_rng.real(USER_SPEAKER_SIM_MIN, USER_SPEAKER_SIM_MAX)
+                        } else {
+                            sim_rng.real(IMPOSTOR_SPEAKER_SIM_MIN, IMPOSTOR_SPEAKER_SIM_MAX)
+                        }
+                    }
+                    Stimulus::Noise
+                    | Stimulus::Motor
+                    | Stimulus::Ventilation
+                    | Stimulus::SelfEcho => {
+                        sim_rng.real(NON_SPEECH_SPEAKER_SIM_MIN, NON_SPEECH_SPEAKER_SIM_MAX)
+                    }
+                };
+                assert_eq!(
+                    cue.speaker_sim,
+                    Some(expected_sim),
+                    "speaker_sim must match independent stream unaffected by media"
+                );
+            }
+        }
+    }
+    #[test]
+    fn turn_complete_distribution_properties() {
+        let mut pooled_complete = Vec::new();
+        let mut pooled_incomplete = Vec::new();
+
+        for seed in 0..=31 {
+            let a = e1a(seed).unwrap();
+            let b = e1b(seed).unwrap();
+
+            for tape in [&a, &b] {
+                let mut incomplete_segments = std::collections::BTreeSet::new();
+                let mut complete_segments = std::collections::BTreeSet::new();
+                for turn in tape.turns() {
+                    if let Some((&last, prefix)) = turn.segments.split_last() {
+                        complete_segments.insert(last);
+                        for &seg in prefix {
+                            incomplete_segments.insert(seg);
+                        }
+                    }
+                }
+
+                for record in tape.records() {
+                    if let Event::Speech { cue, .. } = &record.event {
+                        let score = cue.turn_complete.expect(
+                            "every speech cue in a generated tape must have Some turn_complete",
+                        );
+                        if let Annotation::Speech { segment, .. } = record.annotation {
+                            if complete_segments.contains(&segment) {
+                                pooled_complete.push(score);
+                            } else if incomplete_segments.contains(&segment) {
+                                pooled_incomplete.push(score);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let pooled_complete_mean =
+            pooled_complete.iter().copied().sum::<f32>() / pooled_complete.len() as f32;
+        let pooled_incomplete_mean =
+            pooled_incomplete.iter().copied().sum::<f32>() / pooled_incomplete.len() as f32;
+        let pooled_complete_lt_05 = pooled_complete.iter().filter(|&&t| t < 0.5).count() as f32
+            / pooled_complete.len() as f32;
+        let pooled_incomplete_ge_05 = pooled_incomplete.iter().filter(|&&t| t >= 0.5).count()
+            as f32
+            / pooled_incomplete.len() as f32;
+
+        assert!(
+            pooled_complete_mean > 0.75,
+            "pooled complete mean was {pooled_complete_mean}, expected > 0.75"
+        );
+        assert!(
+            pooled_incomplete_mean < 0.25,
+            "pooled incomplete mean was {pooled_incomplete_mean}, expected < 0.25"
+        );
+        assert!(
+            pooled_complete_lt_05 < 0.05,
+            "pooled complete share < 0.5 was {pooled_complete_lt_05}, expected < 0.05"
+        );
+        assert!(
+            pooled_incomplete_ge_05 < 0.05,
+            "pooled incomplete share >= 0.5 was {pooled_incomplete_ge_05}, expected < 0.05"
+        );
+    }
+    #[test]
+    fn speaker_sim_and_media_draws_are_independent_of_turn_stream() {
+        let tape = e1a(42).unwrap();
+        let mut sim_rng = SplitMix64::with_seed(0x2a ^ SPEAKER_STREAM_SALT);
+        let mut media_rng = SplitMix64::with_seed(0x2a ^ MEDIA_STREAM_SALT);
+
+        let mut speech_records: Vec<_> = tape
+            .records()
+            .iter()
+            .filter(|r| matches!(r.event, Event::Speech { .. }))
+            .collect();
+        speech_records.sort_by_key(|r| match r.annotation {
+            Annotation::Speech { segment, .. } => segment.0,
+            Annotation::Clock => 0,
+        });
+        for record in speech_records {
+            if let Event::Speech { cue, .. } = &record.event {
+                let source = match record.annotation {
+                    Annotation::Speech { source, .. } => source,
+                    Annotation::Clock => continue,
+                };
+                let expected_sim = match source {
+                    Stimulus::Request(_) | Stimulus::BargeIn(_) => {
+                        if sim_rng.real(0.0, 1.0) < SPEAKER_SIM_CROSSOVER_RATE {
+                            sim_rng.real(IMPOSTOR_SPEAKER_SIM_MIN, IMPOSTOR_SPEAKER_SIM_MAX)
+                        } else {
+                            sim_rng.real(USER_SPEAKER_SIM_MIN, USER_SPEAKER_SIM_MAX)
+                        }
+                    }
+                    Stimulus::Tv | Stimulus::OtherSpeech | Stimulus::FalseKeyword => {
+                        if sim_rng.real(0.0, 1.0) < SPEAKER_SIM_CROSSOVER_RATE {
+                            sim_rng.real(USER_SPEAKER_SIM_MIN, USER_SPEAKER_SIM_MAX)
+                        } else {
+                            sim_rng.real(IMPOSTOR_SPEAKER_SIM_MIN, IMPOSTOR_SPEAKER_SIM_MAX)
+                        }
+                    }
+                    Stimulus::Noise
+                    | Stimulus::Motor
+                    | Stimulus::Ventilation
+                    | Stimulus::SelfEcho => {
+                        sim_rng.real(NON_SPEECH_SPEAKER_SIM_MIN, NON_SPEECH_SPEAKER_SIM_MAX)
+                    }
+                };
+                let expected_media = match source {
+                    Stimulus::Tv => {
+                        if media_rng.real(0.0, 1.0) < TV_MEDIA_MISS_RATE {
+                            media_rng.real(LIVE_VOICE_MEDIA_MIN, LIVE_VOICE_MEDIA_MAX)
+                        } else {
+                            media_rng.real(TV_MEDIA_MIN, TV_MEDIA_MAX)
+                        }
+                    }
+                    Stimulus::Request(_)
+                    | Stimulus::BargeIn(_)
+                    | Stimulus::OtherSpeech
+                    | Stimulus::FalseKeyword => {
+                        if media_rng.real(0.0, 1.0) < LIVE_VOICE_MEDIA_FALSE_ALARM_RATE {
+                            media_rng.real(TV_MEDIA_MIN, TV_MEDIA_MAX)
+                        } else {
+                            media_rng.real(LIVE_VOICE_MEDIA_MIN, LIVE_VOICE_MEDIA_MAX)
+                        }
+                    }
+                    Stimulus::Noise
+                    | Stimulus::Motor
+                    | Stimulus::Ventilation
+                    | Stimulus::SelfEcho => {
+                        media_rng.real(NON_SPEECH_MEDIA_MIN, NON_SPEECH_MEDIA_MAX)
+                    }
+                };
+
+                assert_eq!(
+                    cue.speaker_sim,
+                    Some(expected_sim),
+                    "speaker_sim must match independent stream unaffected by turn_complete"
+                );
+                assert_eq!(
+                    cue.media,
+                    Some(expected_media),
+                    "media must match independent stream unaffected by turn_complete"
+                );
+            }
+        }
+    }
+    #[test]
+    fn turn_complete_draws_match_independent_stream() {
+        let tape = e1a(42).unwrap();
+        let mut turn_rng = SplitMix64::with_seed(0x2a ^ TURN_STREAM_SALT);
+
+        let mut incomplete_segments = std::collections::BTreeSet::new();
+        let mut complete_segments = std::collections::BTreeSet::new();
+        for turn in tape.turns() {
+            if let Some((&last, prefix)) = turn.segments.split_last() {
+                complete_segments.insert(last);
+                for &seg in prefix {
+                    incomplete_segments.insert(seg);
+                }
+            }
+        }
+
+        let mut speech_records: Vec<_> = tape
+            .records()
+            .iter()
+            .filter(|r| matches!(r.event, Event::Speech { .. }))
+            .collect();
+        speech_records.sort_by_key(|r| match r.annotation {
+            Annotation::Speech { segment, .. } => segment.0,
+            Annotation::Clock => 0,
+        });
+        for record in speech_records {
+            if let Event::Speech { cue, .. } = &record.event {
+                let seg = match record.annotation {
+                    Annotation::Speech { segment, .. } => segment,
+                    Annotation::Clock => continue,
+                };
+                let role = if complete_segments.contains(&seg) {
+                    TurnRole::Complete
+                } else if incomplete_segments.contains(&seg) {
+                    TurnRole::Incomplete
+                } else {
+                    TurnRole::Other
+                };
+                let expected_turn = match role {
+                    TurnRole::Complete => {
+                        if turn_rng.real(0.0, 1.0) < COMPLETE_USER_TURN_MISS_RATE {
+                            turn_rng.real(INCOMPLETE_USER_TURN_MIN, INCOMPLETE_USER_TURN_MAX)
+                        } else {
+                            turn_rng.real(COMPLETE_USER_TURN_MIN, COMPLETE_USER_TURN_MAX)
+                        }
+                    }
+                    TurnRole::Incomplete => {
+                        if turn_rng.real(0.0, 1.0) < INCOMPLETE_USER_TURN_PREMATURE_RATE {
+                            turn_rng.real(COMPLETE_USER_TURN_MIN, COMPLETE_USER_TURN_MAX)
+                        } else {
+                            turn_rng.real(INCOMPLETE_USER_TURN_MIN, INCOMPLETE_USER_TURN_MAX)
+                        }
+                    }
+                    TurnRole::Other => turn_rng.real(NON_USER_TURN_MIN, NON_USER_TURN_MAX),
+                };
+
+                assert_eq!(
+                    cue.turn_complete,
+                    Some(expected_turn),
+                    "turn_complete must match independent stream"
+                );
+            }
+        }
     }
 }
 

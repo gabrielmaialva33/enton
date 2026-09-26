@@ -1,3 +1,5 @@
 [toolchain]
-channel = "stable"
+# Pinned so a new stable release (and its new lints) cannot break CI by surprise.
+# Bump it on purpose, together with the dtolnay/rust-toolchain refs in ci.yml.
+channel = "1.98.1"
 components = ["rustfmt", "clippy"]

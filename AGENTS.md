@@ -14,14 +14,14 @@ energy thinking, and explains why it did not.
 1. Enton is a digital organism: its body is the hardware, its economy is
    auditable, and its learning is reversible.
 2. Life is cheap and continuous; thought is expensive and rare.
-3. The thesis only holds if it is measured — experiment E1 (RFC §7) exists to
+3. The thesis only holds if it is measured: experiment E1 (RFC §7) exists to
    refute it.
 
 ## M1 scope
 
-- P1: metabolic cognition — drives, ignition, budget (RFC §6).
+- P1: metabolic cognition (drives, ignition, budget; RFC §6).
 - P4: soul = durable event log, replayable after restart.
-- P5: audio perception by surprise — VAD + keyword before any STT.
+- P5: audio perception by surprise: VAD + keyword before any STT.
 - D1: interoception (body signals) + self-echo cancellation (PipeWire AEC).
 - D2: per-profile price table, counterfactuals, offline evaluation.
 - E1 must pass (RFC §7).
@@ -32,7 +32,7 @@ Out of scope for M1: vision, distillation, multiple bodies, WASM skills.
 
 | Crate                   | Responsibility                                                                                                                                                                                                                                                                                               |
 |-------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `crates/enton-core`     | The pure cognitive core: `(state, event) → (state, actions)`. **No I/O, no clock, no randomness, fully deterministic** — time and coin flips enter as data. Drive tables, budgets, ignition, and the port traits for inference (`Cortex`, `SpeechToText`, `TextToSpeech`) live here with no implementations. |
+| `crates/enton-core`     | The pure cognitive core: `(state, event) → (state, actions)`. **No I/O, no clock, no randomness, fully deterministic**: time and coin flips enter as data. Drive tables, budgets, ignition, and the port traits for inference (`Cortex`, `SpeechToText`, `TextToSpeech`) live here with no implementations. |
 | `crates/enton-adapters` | All I/O: body-signal readers (sysfs/procfs), monotonic clock, audio, log, cortex clients.                                                                                                                                                                                                                    |
 | `crates/enton`          | The binary: composes core + adapters according to the hardware profile (`--profile t1-ref\|desktop`).                                                                                                                                                                                                        |
 
@@ -40,8 +40,8 @@ Cross a boundary only through the core's public API.
 
 ## Language
 
-Everything in the repository — code, comments, doc comments, identifiers,
-commits, and these docs — is in **English**.
+Everything in the repository (code, comments, doc comments, identifiers,
+commits, and these docs) is in **English**.
 
 ## Quality bar
 
@@ -57,14 +57,14 @@ when done. 56 such scripts had to be removed from the root on 2026-09-25.
 
 ## Agent roster (measured 2026-09-25)
 
-- **Codex / Antigravity** — multi-file features, audio, async, anything with FFI.
-- **laguna-xs-2.1** (local, free) — small bounded units (1–2 files with tests);
+- **Codex / Antigravity:** multi-file features, audio, async, anything with FFI.
+- **laguna-xs-2.1** (local, free): small bounded units (1 or 2 files with tests);
   its output always gets an external check: it has reported "done" with a red build.
-- **qwen3.8:27b-gato** (local, free) — reviews (`@revisor`), docs, synthesis; not
+- **qwen3.8:27b-gato** (local, free): reviews (`@revisor`), docs, synthesis; not
   long compile-fix loops.
-- **ornith-1.5:35b-gato** (local) — fast (~158 tok/s) but, under OpenCode, writes code as chat text
+- **ornith-1.5:35b-gato** (local): fast (~158 tok/s) but, under OpenCode, writes code as chat text
   instead of calling the file tools; failed the same bounded task twice. Not used as a coding agent.
-- **Cline / Gemini 3.1 Pro** — paid per token (cost shown in its TUI); good at bounded module work. As a reviewer it is
+- **Cline / Gemini 3.1 Pro:** paid per token (cost shown in its TUI); good at bounded module work. As a reviewer it is
   weak: review 0003 had 3 of 10 findings real (it cited code it had misread), so verify every claim before dispatching
   fixes.
 - **Knowing when an agent finished (herdr):** `herdr agent prompt … --wait` / `agent wait` return on the
@@ -118,7 +118,7 @@ build meet the RFC §4 core budget (< 20 MB with native runtimes outside the bin
 Note: When using the `shared-runtime` feature, the `libsherpa-onnx-c-api.so` and `libonnxruntime.so` shared libraries
 must be accessible in the library path (e.g. `LD_LIBRARY_PATH` or a system directory).
 
-The T1-ref reference environment is a cgroup cage on the Acer notebook — it
+The T1-ref reference environment is a cgroup cage on the Acer notebook. It
 reproduces constraints, not the performance or power draw of a real ARM board:
 
 ```sh
@@ -141,8 +141,9 @@ The implementation of the thesis is refuted if it fails any of these:
 ## Git
 
 The repository is under git: `origin` is `github.com/gabrielmaialva33/enton` and
-`main` is the default branch. The history before the Rust rewrite is the Python
-prototype (v0); RFC decision 3 ties it to a `v0-python` tag on its last commit.
+`master` is the default branch on GitHub. The history before the Rust rewrite is
+the Python prototype (v0); RFC decision 3 ties it to a `v0-python` tag on its
+last commit.
 
 - Read-only commands (`status`, `log`, `diff`, `show`) are always fine.
 - Commit, branch, tag, push or rewrite history only when the owner asks.

@@ -130,6 +130,7 @@ impl EndpointDetector {
                 speaker_sim: None,
                 media: None,
                 turn_complete: None,
+                directed: None,
             },
             accepted: self.voiced_frames >= MIN_SPEECH_FRAMES || was_continuing,
             forced,

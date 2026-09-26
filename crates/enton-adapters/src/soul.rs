@@ -7,7 +7,9 @@
 //! One connection, one writer, WAL journal mode, synchronous=FULL. The store
 //! keeps only reduced cues and decisions (no raw media, RFC 0001 section 6);
 //! the event tape is replayable, gap-detectable, and bounded by retention and
-//! a database size cap.
+//! a database size cap. Every event is chained into a SHA-256 hash chain and
+//! every snapshot carries a checksum, so a damaged or edited record is reported
+//! with its sequence number instead of being replayed (see `chain.rs`).
 
 use std::path::PathBuf;
 
@@ -82,6 +84,27 @@ pub enum Error {
     /// The file is damaged in a way that opening it would silently hide.
     #[error("damaged soul: {0}")]
     Damaged(&'static str),
+    /// A stored record fails its checksum: its content, its checksum or its
+    /// place in the hash chain changed after it was written (damaged media or
+    /// an edit). Nothing is replayed from it.
+    #[error("damaged soul: the {kind} at sequence number {seq} fails its checksum")]
+    Corrupt {
+        /// What failed: "event", "snapshot", or "anchor" (the checksum retention
+        /// keeps for the last event it pruned).
+        kind: &'static str,
+        /// The event's sequence number, or the one the record was taken at.
+        seq: SeqNo,
+    },
+    /// Events the log recorded are gone from its end.
+    #[error(
+        "damaged soul: the log recorded events up to sequence number {recorded}, but keeps them only up to {found}"
+    )]
+    Truncated {
+        /// The last sequence number the log assigned.
+        recorded: SeqNo,
+        /// The latest one it still holds.
+        found: SeqNo,
+    },
     /// The database contains events or snapshots from an incompatible reducer version.
     #[error("incompatible {kind} reducer version: found {found}, expected {expected}")]
     IncompatibleHistory {
@@ -146,11 +169,12 @@ impl Default for SoulConfig {
 }
 
 impl Soul {
-    const SCHEMA_VERSION: u32 = 3;
+    const SCHEMA_VERSION: u32 = 4;
     const PRUNE_BATCH: usize = 512;
     const REPLAY_PAGE: usize = 1024;
 }
 
+mod chain;
 mod schema;
 mod snapshot;
 mod store;

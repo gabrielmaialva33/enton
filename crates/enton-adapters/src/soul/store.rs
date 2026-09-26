@@ -5,6 +5,7 @@ use std::path::Path;
 use enton_core::{Action, Event, ThoughtId};
 use rusqlite::{Connection, OpenFlags};
 
+use super::chain::{self, EVENT_CHECKSUM, EVENT_COLUMNS, StoredEvent, sql_seq};
 use super::{ActionStatus, Error, SeqNo, Soul, SoulConfig};
 
 /// Size of the header every SQLite database file starts with.
@@ -13,9 +14,12 @@ const SQLITE_HEADER_BYTES: u64 = 100;
 impl Soul {
     /// Open a log at `path`, creating the file when it does not exist yet.
     ///
-    /// Existing rows are never modified here. Returns
+    /// Existing rows are only rewritten by a schema migration, which runs in one
+    /// transaction; migrating to schema 4 computes the checksums of the rows
+    /// already stored, trusting them as they stand. Returns
     /// [`Error::UnsupportedSchema`] when the file was written by a newer
-    /// version of this code.
+    /// version of this code, and [`Error::Truncated`] when events recorded at
+    /// the end of the log are gone.
     pub fn open(path: impl AsRef<Path>, config: SoulConfig) -> Result<Self, Error> {
         if config.max_snapshots == Some(0)
             && (config.max_events.is_some() || config.max_db_bytes.is_some())
@@ -86,7 +90,8 @@ impl Soul {
     }
 
     /// Reject a log whose latest snapshot (or, without one, latest event) was
-    /// reduced by another reducer version, and a pruned log left with no anchor.
+    /// reduced by another reducer version, a pruned log left with no anchor, and
+    /// a log whose last recorded events are gone.
     fn check_history(conn: &Connection, config: &SoulConfig) -> Result<(), Error> {
         let mut stmt =
             conn.prepare("SELECT reducer_version FROM snapshots ORDER BY seq DESC LIMIT 1")?;
@@ -125,7 +130,7 @@ impl Soul {
                 }
             }
         }
-        Ok(())
+        chain::head(conn)?.check()
     }
 
     /// The database file backing this log. The journal keeps `-wal` and
@@ -135,7 +140,10 @@ impl Soul {
         &self.path
     }
 
-    /// Appends a new event to the soul.
+    /// Appends a new event to the soul, chained after the latest one.
+    ///
+    /// Returns [`Error::Truncated`] when events recorded at the end of the log
+    /// are gone, since the new event would have nothing to chain from.
     pub fn append_event(&self, event: &Event) -> Result<SeqNo, Error> {
         let at_ms = i64::try_from(event.now().0)
             .map_err(|_| Error::Storage(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX)))?;
@@ -144,14 +152,31 @@ impl Soul {
         let payload = serde_json::to_string(&event.clone().canonical())?;
         let reducer_version = i64::from(self.config.reducer_version);
         let config_version = i64::from(self.config.config_version);
+        let head = chain::head(&self.conn)?;
+        head.check()?;
+        let seq = head.seq.saturating_add(1);
+        let checksum = chain::event_checksum(
+            &head.checksum,
+            seq,
+            at_ms,
+            reducer_version,
+            config_version,
+            payload.as_bytes(),
+        );
+        // One statement, so the event and its checksum commit together. Naming
+        // the sequence number keeps AUTOINCREMENT's record of it up to date.
         self.conn.execute(
-            "INSERT INTO events (at_ms, payload_json, reducer_version, config_version) \
-             VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![at_ms, payload, reducer_version, config_version],
+            "INSERT INTO events (seq, at_ms, payload_json, reducer_version, config_version, checksum) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                sql_seq(seq)?,
+                at_ms,
+                payload,
+                reducer_version,
+                config_version,
+                checksum.as_slice()
+            ],
         )?;
-        let rowid = self.conn.last_insert_rowid();
-        let seq = u64::try_from(rowid)
-            .map_err(|_| Error::Storage(rusqlite::Error::IntegralValueOutOfRange(0, rowid)))?;
         Ok(seq)
     }
 
@@ -227,45 +252,52 @@ impl Soul {
         Ok(Some((status, result)))
     }
 
-    /// Read up to `limit` events after `cursor`, in sequence order.
+    /// Read up to `limit` events after `cursor`, in sequence order, verifying
+    /// each against the hash chain.
     ///
-    /// Returns [`Error::ReplayGap`] when the first event read is not the one
-    /// immediately after the cursor, so a truncated log is never replayed
-    /// silently.
+    /// The chain continues from the checksum held for the cursor's event (its
+    /// own, as stored, or the retention anchor's), which a snapshot at the
+    /// cursor must agree with. Returns [`Error::ReplayGap`] when the first event
+    /// read is not the one immediately after the cursor, so a truncated log is
+    /// never replayed silently, and [`Error::Corrupt`] naming the first event
+    /// that fails its checksum, whose payload is never parsed.
     pub fn read_after(&self, cursor: SeqNo, limit: usize) -> Result<Vec<(SeqNo, Event)>, Error> {
         if limit == 0 {
             return Ok(Vec::new());
         }
-        let cursor_i64 = i64::try_from(cursor)
-            .map_err(|_| Error::Storage(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX)))?;
+        let cursor_i64 = sql_seq(cursor)?;
         let limit_i64 = i64::try_from(limit)
             .map_err(|_| Error::Storage(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX)))?;
-        let mut stmt = self.conn.prepare(
-            "SELECT seq, payload_json, reducer_version FROM events WHERE seq > ?1 ORDER BY seq ASC LIMIT ?2",
-        )?;
+        let mut prev = chain::link(&self.conn, cursor)?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {EVENT_COLUMNS} FROM events WHERE seq > ?1 ORDER BY seq ASC LIMIT ?2"
+        ))?;
         let mut rows = stmt.query(rusqlite::params![cursor_i64, limit_i64])?;
         let mut out = Vec::with_capacity(limit.min(Self::REPLAY_PAGE));
         let mut expected = cursor.saturating_add(1);
         while let Some(row) = rows.next()? {
-            let raw: i64 = row.get(0)?;
-            let payload: String = row.get(1)?;
-            let rv: u32 = row.get(2)?;
-            if rv != self.config.reducer_version {
+            let event = StoredEvent::read(row)?;
+            if event.seq != expected {
+                return Err(Error::ReplayGap {
+                    expected,
+                    found: event.seq,
+                });
+            }
+            // Nothing vouches for the event before: the chain cannot reach this one.
+            let link = prev.ok_or(Error::Corrupt {
+                kind: "event",
+                seq: event.seq,
+            })?;
+            prev = Some(event.verify(row, EVENT_CHECKSUM, &link)?);
+            if event.reducer_version != i64::from(self.config.reducer_version) {
                 return Err(Error::IncompatibleHistory {
                     kind: "event",
-                    found: rv,
+                    found: u32::try_from(event.reducer_version).unwrap_or(u32::MAX),
                     expected: self.config.reducer_version,
                 });
             }
-            let seq = u64::try_from(raw).unwrap_or(0);
-            if seq != expected {
-                return Err(Error::ReplayGap {
-                    expected,
-                    found: seq,
-                });
-            }
-            out.push((seq, serde_json::from_str(&payload)?));
-            expected = seq.saturating_add(1);
+            out.push((event.seq, serde_json::from_slice(&event.payload)?));
+            expected = event.seq.saturating_add(1);
         }
         Ok(out)
     }
@@ -349,19 +381,8 @@ impl Soul {
                 Self::PRUNE_BATCH
             }
             .min(Self::PRUNE_BATCH);
-            let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
-            let max_seq_i64 = i64::try_from(max_droppable_seq).unwrap_or(i64::MAX);
 
-            let n = self.conn.execute(
-                "DELETE FROM events WHERE seq IN (
-                    SELECT seq FROM events
-                    WHERE seq <= ?1
-                    ORDER BY seq ASC
-                    LIMIT ?2
-                )",
-                rusqlite::params![max_seq_i64, limit_i64],
-            )?;
-
+            let n = self.prune(max_droppable_seq, limit)?;
             if n == 0 {
                 break;
             }
@@ -394,6 +415,50 @@ impl Soul {
         }
 
         Ok(deleted)
+    }
+
+    /// Drop up to `limit` of the oldest events, none after `through`, and move
+    /// the chain anchor to the last one dropped, in one transaction.
+    ///
+    /// The dropped events are verified first: pruning never erases the evidence
+    /// of damage, it reports it as [`Error::Corrupt`] and drops nothing.
+    fn prune(&self, through: SeqNo, limit: usize) -> Result<usize, Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut stmt = tx.prepare(&format!(
+            "SELECT {EVENT_COLUMNS} FROM events WHERE seq <= ?1 ORDER BY seq ASC LIMIT ?2"
+        ))?;
+        let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
+        let through_i64 = i64::try_from(through).unwrap_or(i64::MAX);
+        let mut rows = stmt.query(rusqlite::params![through_i64, limit_i64])?;
+        let mut last: Option<(SeqNo, chain::Checksum)> = None;
+        let mut count = 0;
+        while let Some(row) = rows.next()? {
+            let event = StoredEvent::read(row)?;
+            let link = match last {
+                Some((seq, checksum)) if event.seq == seq.saturating_add(1) => checksum,
+                Some((seq, _)) => {
+                    return Err(Error::ReplayGap {
+                        expected: seq.saturating_add(1),
+                        found: event.seq,
+                    });
+                }
+                None => chain::link(&tx, event.seq.saturating_sub(1))?.ok_or(Error::Corrupt {
+                    kind: "event",
+                    seq: event.seq,
+                })?,
+            };
+            last = Some((event.seq, event.verify(row, EVENT_CHECKSUM, &link)?));
+            count += 1;
+        }
+        drop(rows);
+        drop(stmt);
+        let Some((seq, checksum)) = last else {
+            return Ok(0);
+        };
+        tx.execute("DELETE FROM events WHERE seq <= ?1", [sql_seq(seq)?])?;
+        chain::set_anchor(&tx, seq, &checksum)?;
+        tx.commit()?;
+        Ok(count)
     }
 
     pub(super) fn event_count(&self) -> Result<usize, Error> {

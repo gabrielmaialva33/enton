@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use enton_adapters::soul::Error;
 use enton_adapters::{Soul, SoulConfig};
 use enton_core::{
     Action, BodySignals, Event, Millis, Organism, Profile, SpeechCue, ThoughtId, UtteranceId,
@@ -501,21 +502,37 @@ fn overwrite(
     Ok(())
 }
 
+/// The sequence number of the event `result` reports as failing its checksum.
+fn corrupt_event<T>(result: &Result<T, Error>) -> Option<u64> {
+    match result {
+        Err(Error::Corrupt { kind: "event", seq }) => Some(*seq),
+        _ => None,
+    }
+}
+
 /// A corrupt event payload in the replayed tail never panics reading or
-/// replaying the log, and bytes that are not text never read back as an event.
+/// replaying the log. Any change to it, bytes that are not text or text that
+/// still parses as an event alike, fails its checksum and is reported with its
+/// sequence number (before checksums, only a payload that no longer parsed was
+/// caught).
 #[test]
 fn a_corrupt_event_payload_never_panics_a_replay() {
     let directory = TestDirectory::new().unwrap();
     let profile = Profile::t1_ref();
     let (soul, snapshot_seq, _) = soul_with_snapshot(&directory, &profile).unwrap();
-    // Only the tail after the snapshot is replayed, so that is what gets corrupted.
-    let stored: Vec<(u64, String)> = soul
-        .read_after(snapshot_seq, 64)
-        .unwrap()
-        .iter()
-        .map(|(seq, event)| (*seq, serde_json::to_string(event).unwrap()))
-        .collect();
     let database = rusqlite::Connection::open(directory.database()).unwrap();
+    // Only the tail after the snapshot is replayed, so that is what gets corrupted.
+    // Its payloads are kept byte for byte, so restoring them restores the checksums.
+    let stored: Vec<(u64, String)> = database
+        .prepare("SELECT seq, payload_json FROM events WHERE seq > ?1 ORDER BY seq")
+        .unwrap()
+        .query_map([i64::try_from(snapshot_seq).unwrap()], |row| {
+            Ok((u64::try_from(row.get::<_, i64>(0)?).unwrap(), row.get(1)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(stored.len(), tail().len());
     let mut runner = TestRunner::new(config(128));
     runner
         .run(&payload(), |payload| {
@@ -533,12 +550,16 @@ fn a_corrupt_event_payload_never_panics_a_replay() {
                     )
                 }
             };
-            overwrite(&database, event.get(&stored).0, &corrupted)?;
+            let (seq, original) = event.get(&stored);
+            overwrite(&database, *seq, &corrupted)?;
             let read = soul.read_after(0, 64);
             let replay = soul.replay_organism(&profile);
-            if matches!(payload, Payload::Bytes(..)) {
-                prop_assert!(read.is_err(), "a blob payload read back: {read:?}");
-                prop_assert!(replay.is_err(), "a blob payload replayed");
+            if corrupted == rusqlite::types::Value::Text(original.clone()) {
+                prop_assert!(read.is_ok(), "an untouched log failed to read: {read:?}");
+                prop_assert!(replay.is_ok(), "an untouched log failed to replay");
+            } else {
+                prop_assert_eq!(corrupt_event(&read), Some(*seq), "read as {:?}", read);
+                prop_assert_eq!(corrupt_event(&replay), Some(*seq), "replayed");
             }
             Ok(())
         })

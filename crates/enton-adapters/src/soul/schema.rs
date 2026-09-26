@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-use super::{Error, Soul};
+use super::{Error, Soul, chain};
 
 /// `PRAGMA auto_vacuum` value for FULL.
 const AUTO_VACUUM_FULL: u32 = 1;
@@ -86,6 +86,23 @@ impl Soul {
                      blob BLOB NOT NULL
                  );",
             )?;
+            current_version = 3;
+        }
+
+        if current_version == 3 {
+            // Checksums (see `chain.rs`). Rows already stored are trusted as they
+            // stand now and get theirs computed here, in the same transaction.
+            conn.execute_batch(
+                "ALTER TABLE events ADD COLUMN checksum BLOB NOT NULL DEFAULT x'';
+                 ALTER TABLE snapshots ADD COLUMN chain BLOB NOT NULL DEFAULT x'';
+                 ALTER TABLE snapshots ADD COLUMN checksum BLOB NOT NULL DEFAULT x'';
+                 CREATE TABLE chain_anchor (
+                     id INTEGER PRIMARY KEY CHECK (id = 1),
+                     seq INTEGER NOT NULL,
+                     checksum BLOB NOT NULL
+                 );",
+            )?;
+            chain::seal(conn)?;
         }
         Ok(())
     }

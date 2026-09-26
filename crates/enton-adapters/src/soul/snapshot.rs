@@ -1,6 +1,7 @@
 //! Snapshots: opaque blobs at a sequence number, and the typed organism
 //! snapshot built on them so replay only has to reduce the tail.
 
+use super::chain::{self, SNAPSHOT_COLUMNS, StoredSnapshot, sql_seq};
 use super::{Error, SeqNo, Soul};
 use enton_core::{Action, Organism, Profile};
 use serde::{Deserialize, Serialize, de::Error as _};
@@ -34,8 +35,10 @@ impl Soul {
     /// migration. Use the original reducer/config versions in [`crate::SoulConfig`],
     /// and keep at least one snapshot when pruning (`max_snapshots` must not be zero).
     /// Malformed/unknown blob formats and profile mismatches return a JSON error;
-    /// missing events return a replay gap. This never falls back after a failed
-    /// restore and never executes returned actions (including `Speak`).
+    /// missing events return a replay gap; a snapshot or tail event that fails
+    /// its checksum returns [`Error::Corrupt`] with its sequence number. This
+    /// never falls back after a failed restore and never executes returned
+    /// actions (including `Speak`).
     ///
     /// Returned actions cover only the replayed tail, not the snapshotted prefix.
     /// As with [`Soul::replay`], callers must bound the log with retention to bound
@@ -69,7 +72,8 @@ impl Soul {
     /// Snapshots are checked against `profile` even when replay starts fresh, so
     /// a wrong profile fails here instead of replaying different decisions.
     /// Returns [`Error::ReplayGap`] when the log was pruned and no snapshot
-    /// anchors what is left. Read-only; no actuators are invoked.
+    /// anchors what is left, and [`Error::Corrupt`] when the snapshot fails its
+    /// checksum. Read-only; no actuators are invoked.
     pub fn earliest_organism(&self, profile: &Profile) -> Result<(Organism, SeqNo), Error> {
         let first: Option<i64> = self
             .conn
@@ -79,28 +83,22 @@ impl Soul {
         let floor = first.map_or(0, |seq| seq.saturating_sub(1));
         let floor = i64::try_from(floor)
             .map_err(|_| Error::Storage(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX)))?;
-        let anchor: Option<(i64, Vec<u8>)> = {
-            let mut stmt = self.conn.prepare(
-                "SELECT seq, blob FROM snapshots WHERE reducer_version = ?1 AND seq >= ?2 \
-                 ORDER BY seq ASC LIMIT 1",
-            )?;
+        let anchor = {
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT {SNAPSHOT_COLUMNS} FROM snapshots WHERE reducer_version = ?1 AND seq >= ?2 \
+                 ORDER BY seq ASC LIMIT 1"
+            ))?;
             let mut rows = stmt.query(rusqlite::params![self.config.reducer_version, floor])?;
-            match rows.next()? {
-                Some(row) => Some((row.get(0)?, row.get(1)?)),
-                None => None,
-            }
+            rows.next()?.map(StoredSnapshot::read).transpose()?
         };
         match (first, anchor) {
             (Some(1), anchor) => {
-                if let Some((_, blob)) = anchor {
-                    decode_organism(&blob, profile)?;
+                if let Some(snapshot) = anchor {
+                    decode_organism(&snapshot.blob, profile)?;
                 }
                 Ok((Organism::new(profile.clone())?, 0))
             }
-            (_, Some((seq, blob))) => Ok((
-                decode_organism(&blob, profile)?,
-                u64::try_from(seq).unwrap_or(0),
-            )),
+            (_, Some(snapshot)) => Ok((decode_organism(&snapshot.blob, profile)?, snapshot.seq)),
             (None, None) => Ok((Organism::new(profile.clone())?, 0)),
             (Some(found), None) => Err(Error::ReplayGap { expected: 1, found }),
         }
@@ -121,6 +119,10 @@ fn decode_organism(blob: &[u8], profile: &Profile) -> Result<Organism, Error> {
 
 impl Soul {
     /// Save an opaque state snapshot at a given sequence number.
+    ///
+    /// The snapshot's checksum binds it to the checksum held for event
+    /// `at_seq`, so that event must still be stored (or be the one retention
+    /// pruned last).
     pub fn save_snapshot(&self, at_seq: SeqNo, blob: &[u8]) -> Result<(), Error> {
         if at_seq == 0 {
             return Err(Error::InvalidSnapshotSequence("snapshot seq cannot be 0"));
@@ -135,28 +137,33 @@ impl Soul {
             return Err(Error::InvalidSnapshotSequence("snapshot seq out of bounds"));
         }
 
-        let seq_i64 = i64::try_from(at_seq)
-            .map_err(|_| Error::Storage(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX)))?;
+        let chain = chain::held(&self.conn, at_seq)?.ok_or(Error::InvalidSnapshotSequence(
+            "the event at the snapshot seq was pruned",
+        ))?;
+        let reducer_version = i64::from(self.config.reducer_version);
+        let checksum = chain::snapshot_checksum(at_seq, reducer_version, &chain, blob);
         self.conn.execute(
-            "INSERT OR REPLACE INTO snapshots (seq, reducer_version, blob) VALUES (?1, ?2, ?3)",
-            rusqlite::params![seq_i64, self.config.reducer_version, blob],
+            "INSERT OR REPLACE INTO snapshots (seq, reducer_version, blob, chain, checksum) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                sql_seq(at_seq)?,
+                reducer_version,
+                blob,
+                chain.as_slice(),
+                checksum.as_slice()
+            ],
         )?;
         Ok(())
     }
 
-    /// Return the latest snapshot (if any) matching the current reducer version.
+    /// Return the latest snapshot, if any, after verifying its checksum
+    /// ([`Error::Corrupt`] when it fails).
     pub fn latest_snapshot(&self) -> Result<Option<(SeqNo, Vec<u8>)>, Error> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT seq, blob FROM snapshots ORDER BY seq DESC LIMIT 1")?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {SNAPSHOT_COLUMNS} FROM snapshots ORDER BY seq DESC LIMIT 1"
+        ))?;
         let mut rows = stmt.query([])?;
-        if let Some(row) = rows.next()? {
-            let raw: i64 = row.get(0)?;
-            let seq = u64::try_from(raw).unwrap_or(0);
-            let blob: Vec<u8> = row.get(1)?;
-            Ok(Some((seq, blob)))
-        } else {
-            Ok(None)
-        }
+        let snapshot = rows.next()?.map(StoredSnapshot::read).transpose()?;
+        Ok(snapshot.map(|snapshot| (snapshot.seq, snapshot.blob)))
     }
 }

@@ -58,8 +58,7 @@ fn level(organism: &Organism, drive: &str) -> f32 {
 /// The owner at home with something on the checklist asks Enton something at 3 599 s,
 /// and the drives, an hour old, get ready at the next tick, mid-conversation: curiosity
 /// holds its intent. The answer to the request comes at 3 601 s.
-fn mid_conversation(profile: Profile) -> Organism {
-    let mut organism = Organism::new(profile).unwrap();
+fn mid_conversation(mut organism: Organism) -> Organism {
     assert!(organism.step(&checklist(0, true)).is_empty());
     organism.step(&owner_nearby(3_000_000));
     assert_thought(
@@ -100,7 +99,7 @@ fn assert_ride(actions: &[Action], expected: u64, expected_reason: &Reason, driv
 
 #[test]
 fn a_drive_ready_mid_conversation_rides_the_owners_next_request() {
-    let mut organism = mid_conversation(drives_profile());
+    let mut organism = mid_conversation(Organism::new(drives_profile()).unwrap());
     // The conversation goes on; the intent waits without a word.
     for now in (3_602_000..3_605_000).step_by(1_000) {
         assert!(organism.step(&tick(now)).is_empty(), "{now} ms");
@@ -133,7 +132,7 @@ fn a_drive_ready_mid_conversation_rides_the_owners_next_request() {
 
 #[test]
 fn without_a_request_to_ride_the_drive_thinks_alone_once_the_conversation_ends() {
-    let mut organism = mid_conversation(drives_profile());
+    let mut organism = mid_conversation(Organism::new(drives_profile()).unwrap());
     // The reply reopened the windows: 5 s for anyone, 10 s for the owner's voice.
     for now in (3_602_000..3_611_000).step_by(1_000) {
         assert!(organism.step(&tick(now)).is_empty(), "{now} ms");
@@ -151,7 +150,7 @@ fn without_a_request_to_ride_the_drive_thinks_alone_once_the_conversation_ends()
 
 #[test]
 fn a_call_by_name_carries_the_intent_too() {
-    let mut organism = mid_conversation(drives_profile());
+    let mut organism = mid_conversation(Organism::new(drives_profile()).unwrap());
     // The owner calls again by name inside the window: a whole request, answered at once.
     assert_ride(
         &organism.step(&speech(3_603_000, true)),
@@ -163,7 +162,7 @@ fn a_call_by_name_carries_the_intent_too() {
 
 #[test]
 fn an_unfinished_name_waits_and_the_answer_that_follows_carries_the_intent() {
-    let mut organism = mid_conversation(drives_profile());
+    let mut organism = mid_conversation(Organism::new(drives_profile()).unwrap());
     // "Enton..." alone: Enton waits for the rest, and no thought is bought yet.
     let short = Event::Speech {
         now: Millis(3_603_000),
@@ -191,7 +190,7 @@ fn an_unfinished_name_waits_and_the_answer_that_follows_carries_the_intent() {
 
 #[test]
 fn a_ride_lost_to_a_newer_request_moves_to_it() {
-    let mut organism = mid_conversation(drives_profile());
+    let mut organism = mid_conversation(Organism::new(drives_profile()).unwrap());
     assert_ride(
         &organism.step(&speech(3_605_000, false)),
         2,
@@ -217,7 +216,7 @@ fn a_ride_lost_to_a_newer_request_moves_to_it() {
 
 #[test]
 fn a_failed_ride_keeps_the_intent_for_the_next_request() {
-    let mut organism = mid_conversation(drives_profile());
+    let mut organism = mid_conversation(Organism::new(drives_profile()).unwrap());
     assert_ride(
         &organism.step(&speech(3_605_000, false)),
         2,
@@ -243,7 +242,7 @@ fn a_failed_ride_keeps_the_intent_for_the_next_request() {
 
 #[test]
 fn an_intent_with_no_turn_to_take_expires_once_and_lets_go() {
-    let mut organism = mid_conversation(drives_profile());
+    let mut organism = mid_conversation(Organism::new(drives_profile()).unwrap());
     let expires = organism.deferred().unwrap().expires.0;
     // The owner asks for quiet: the conversation is over, and neither a ride nor a
     // thought of the drive's own may come before the intent runs out.
@@ -274,7 +273,7 @@ fn an_intent_with_no_turn_to_take_expires_once_and_lets_go() {
 fn a_ride_in_flight_is_waited_for_past_the_deadline() {
     let mut profile = drives_profile();
     profile.discretion.deferral_ms = 4_000;
-    let mut organism = mid_conversation(profile);
+    let mut organism = mid_conversation(Organism::new(profile).unwrap());
     assert_ride(
         &organism.step(&speech(3_603_000, false)),
         2,
@@ -317,7 +316,7 @@ fn an_intent_is_held_only_when_the_drive_could_think_but_for_the_conversation() 
 
 #[test]
 fn an_answer_carries_no_intent_while_quiet_hours_hold_and_does_again_after() {
-    let mut organism = mid_conversation(drives_profile());
+    let mut organism = mid_conversation(Organism::new(drives_profile()).unwrap());
     organism.step(&quiet_hours(3_602_000, true));
     let actions = organism.step(&speech(3_603_000, false));
     assert_thought(&actions, 2, &Reason::FollowUp);
@@ -339,7 +338,7 @@ fn an_answer_carries_no_intent_while_quiet_hours_hold_and_does_again_after() {
 
 #[test]
 fn overheard_speech_never_carries_an_intent() {
-    let mut organism = mid_conversation(drives_profile());
+    let mut organism = mid_conversation(Organism::new(drives_profile()).unwrap());
     // Past the windows, overheard speech buys a thought of Enton's own, and the drive
     // thinks alone at the same tick it would anyway: nothing rides a discretionary thought.
     for now in (3_602_000..3_611_000).step_by(1_000) {

@@ -13,7 +13,7 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-dea584?style=for-the-badge&logo=rust&logoColor=white)](./Cargo.toml)
 [![unsafe](https://img.shields.io/badge/unsafe-forbidden-991b1b?style=for-the-badge)](./Cargo.toml)
 [![Binary](https://img.shields.io/badge/core_binary-7.0_MiB-15803d?style=for-the-badge)](#build-profiles)
-[![Tests](https://img.shields.io/badge/tests-211_passing-00C853?style=for-the-badge)](./crates)
+[![Tests](https://img.shields.io/badge/tests-254_passing-00C853?style=for-the-badge)](./crates)
 [![License](https://img.shields.io/badge/license-MIT-dc2626?style=for-the-badge)](./LICENSE)
 
 ---
@@ -92,8 +92,8 @@ flowchart LR
 | **Language** | Rust 2024 · MSRV 1.88 · `unsafe_code = "forbid"` |
 | **Runtime** | tokio `current_thread`: one event loop, bounded channels |
 | **Crates** | 4: core, adapters, binary, E1 harness |
-| **Source** | 13,049 lines + 4,474 lines of tests and examples |
-| **Tests** | 211 passing with default features, 277 with all features |
+| **Source** | 17,118 lines of code (tokei, including inline unit tests) + 5,581 lines of tests and examples |
+| **Tests** | 254 passing with default features, 335 with all features, including property tests |
 | **Lean binary** | 7.0 MiB (5.3 MiB on aarch64), no shared libraries |
 | **Cortex** | Any OpenAI-compatible server, local Ollama by default |
 
@@ -212,9 +212,9 @@ flowchart TD
     ECHO -- no --> KW{"Keyword?"}
     KW -- "yes · unfinished (or under 900 ms)" --> ATTEND[["Attend · wait 5 s for the rest"]]
     KW -- yes --> OBL["Obligation budget"]
-    KW -- no --> WIN{"Inside attention window?<br/>5 s, or 10 s with evidence for the owner's voice"}
-    WIN -- yes --> SPK{"Evidence rules out<br/>the owner speaking live?<br/>(stricter while the TV is on)"}
-    SPK -- yes --> A_O[["Abstain · OtherSpeaker or Media"]]
+    KW -- no --> WIN{"Inside attention window?<br/>5 s, or 10 s with evidence for the owner's voice<br/>or speech clearly addressed to Enton"}
+    WIN -- yes --> SPK{"Evidence rules out the owner speaking live<br/>(stricter while the TV is on),<br/>or says it was addressed to someone else?"}
+    SPK -- yes --> A_O[["Abstain · Media, OtherSpeaker or Undirected"]]
     SPK -- "no · follow-up" --> OBL
     WIN -- no --> MED{"Sounds like<br/>TV or radio?"}
     MED -- yes --> A_M[["Abstain · Media"]]
@@ -253,6 +253,7 @@ audited later to find false negatives.
 | `SelfEcho` | Coincided with its own voice and showed no barge-in evidence |
 | `OtherSpeaker` | Inside an attention window, the evidence ruled out the owner speaking live |
 | `Media` | The sound was reproduced media (TV, radio, music), not a live voice |
+| `Undirected` | Inside an attention window, the speech was addressed to someone else |
 
 ---
 
@@ -363,6 +364,8 @@ combined pressure is still below both profiles' thresholds. Enton is quiet by de
 | Attention window | 5 s | 5 s |
 | Evidence that rules out the owner's live voice | 1 nat | 1 nat |
 | Attention window for the owner's verified voice (≥ 0.1 nat) | 10 s | 10 s |
+| Evidence that speech was addressed to someone else (turned away inside a window) | 1.5 nats | 1.5 nats |
+| Speech clearly addressed to Enton (≥ 1.5 nats) may use the 10 s window | yes | yes |
 | Evidence treated as TV/radio | 1 nat | 1 nat |
 | Extra strictness while the TV is on | 2 nats | 2 nats |
 | Whole request: length (3 nats/s from 900 ms) plus end-of-turn evidence | ≥ 0 | ≥ 0 |
@@ -388,10 +391,11 @@ models, audio and budget. The thesis is refuted if Enton fails any criterion.
 ```bash
 cargo run --release -p enton-e1 -- --seed 42               # one seed, full report
 cargo run --release -p enton-e1 -- --seeds 0..=31 --summary # pooled over 32 seeds
+cargo run --release -p enton-e1 -- --seeds 0..=31 --summary --with-directed # plus a directedness detector
 ```
 
-**Current status** (synthetic proxy, benchmark 3.0.0, reducer v9, report seeds 0 to 31, measured
-2026-09-26). One seed is an anecdote, so the table pools 32:
+**Current status** (synthetic proxy, benchmark 3.1.0, reducer v10, speaker, media and end-of-turn
+sensors, report seeds 0 to 31, measured 2026-09-26). One seed is an anecdote, so the table pools 32:
 
 | Criterion (RFC 0001 §7) | Target | Pooled result | Seeds passing | Status |
 |:------------------------|:------:|:--------------|:-------------:|:------:|
@@ -429,6 +433,24 @@ to Enton (text-based detection, about 14% equal error rate in published work) or
 from (a microphone array; the TV does not move). Thresholds were chosen on calibration seeds 100 to
 131 and are reported here on seeds 0 to 31.
 
+**With a simulated directedness detector** (conservative, desktop-first: needs speech-to-text and
+about 0.5 s of CPU per segment for a 4B model). Benchmark 3.1.0 gives every cue a directedness
+reading on its own random stream, so no other reading moved: 85% of requests read as clearly
+addressed to Enton, as do 12% of the owner's asides and 8% of other people and TV lines, with errors
+correlated per owner and per block. E1 withholds the reading unless run with `--with-directed`, and
+without it reducer v10 decides every call exactly as v9 did, so the table above stands. With it, v10
+turns away speech in a window that reads as addressed to someone else (`Undirected`) and lets speech
+clearly addressed to Enton use the 10 s window, both settings chosen on seeds 100 to 131:
+
+**Result with directedness** (seeds 0 to 31): 1896 / 3200 requests (miss-rate bound 42.2%), 4045 /
+6400 turns, 58.2% fewer calls than the simple controller (30 / 32 seeds), 29 calls in E1b noise,
+0 synthetic self-ignitions.
+
+Waste on the owner's asides falls from 371 calls to 127, on other people from 701 to 415 and on the
+TV from 449 to 137. The turns it adds are where the TV is off (far from the device, 72% to 80%);
+with the TV on, 44 to 47% of turns are served as before, and 28 of the 29 noise calls are overheard
+speech outside any window, where directedness is not consulted.
+
 Every run also watches the reducer at each step, in the spirit of TigerBeetle's VOPR: one
 decision per speech cue, thought IDs in order, time never running backward, budgets and
 habituation in bounds, and a snapshot round trip every 1000 steps that must keep stepping in
@@ -449,7 +471,7 @@ for the freeze owner.
 | **Senses** | YOLO, Whisper, CLAP, InsightFace, FER | Body signals, VAD and keyword before any transcription |
 | **Memory** | Qdrant episodes | Durable, replayable event log |
 | **Voice** | Kokoro in Python | Kokoro via sherpa-onnx, with barge-in |
-| **Proof** | 136 unit tests | 211 tests plus a refutation experiment |
+| **Proof** | 136 unit tests | 254 tests, property tests and a refutation experiment |
 | **Footprint** | CUDA + PyTorch | 7.0 MiB binary, no native runtime in the lean build |
 
 Vision is deliberately out of scope for milestone 1.

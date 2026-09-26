@@ -4,7 +4,7 @@
 
 <br/>
 
-<img src="static/logo.png" width="280" alt="Enton, Son of Anton"/>
+<img src="static/logo.svg" width="280" alt="Enton, Son of Anton"/>
 
 <br/><br/>
 

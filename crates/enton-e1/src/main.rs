@@ -71,7 +71,8 @@ fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, Error> {
                 seeds = parse_seeds(&value)?;
             }
             "--held-out" => held_out = true,
-            "--with-directed" => sensors = Sensors::WITH_DIRECTED,
+            "--with-directed" => sensors.directed = true,
+            "--with-direction" => sensors.direction = true,
             "--json" => json = true,
             "--summary" => summary = true,
             "--help" | "-h" => help = true,
@@ -103,7 +104,7 @@ fn execute() -> Result<(), Error> {
     let cli = parse_cli(std::env::args().skip(1))?;
     if cli.help {
         println!(
-            "E1 benchmark {BENCHMARK_VERSION}\nUsage: e1-sim [--seed N | --seeds A..=B | --seeds A,B] [--with-directed] [--json] [--summary] [--held-out]\n       e1-sim --off-policy [--explore-probability P] [--explore-margin NATS] [--seeds ...] [--with-directed] [--json]\nRanges are inclusive, at most 32 seeds. Calibration seeds: 0 to 999. Held-out mode is reserved for the frozen-manifest owner.\nSensors: speaker verification, media tagger and end of turn; --with-directed adds the simulated device-directedness detector.\nOff policy: run t1-ref as an exploring logging policy (default probability {}, margin {} nats), estimate a family of threshold candidates from that log, and run each for real to measure the estimates.",
+            "E1 benchmark {BENCHMARK_VERSION}\nUsage: e1-sim [--seed N | --seeds A..=B | --seeds A,B] [--with-directed] [--with-direction] [--json] [--summary] [--held-out]\n       e1-sim --off-policy [--explore-probability P] [--explore-margin NATS] [--seeds ...] [--with-directed] [--with-direction] [--json]\nRanges are inclusive, at most 32 seeds. Calibration seeds: 0 to 999. Held-out mode is reserved for the frozen-manifest owner.\nSensors: speaker verification, media tagger and end of turn; --with-directed adds the simulated device-directedness detector and --with-direction a microphone array's direction of arrival.\nOff policy: run t1-ref as an exploring logging policy (default probability {}, margin {} nats), estimate a family of threshold candidates from that log, and run each for real to measure the estimates.",
             Exploration::CALIBRATED.probability,
             Exploration::CALIBRATED.margin_nats,
         );
@@ -218,5 +219,19 @@ mod tests {
         let with = parse_cli(["--with-directed".into(), "--seed=1".into()]).unwrap();
         assert_eq!(with.sensors, Sensors::WITH_DIRECTED);
         assert!(with.sensors.directed);
+    }
+
+    #[test]
+    fn the_microphone_array_runs_only_when_asked_and_combines_with_the_detector() {
+        let array = parse_cli(["--with-direction".into()]).unwrap();
+        assert_eq!(array.sensors, Sensors::WITH_DIRECTION);
+        for flags in [
+            ["--with-direction", "--with-directed"],
+            ["--with-directed", "--with-direction"],
+        ] {
+            let both = parse_cli(flags.map(String::from)).unwrap();
+            assert!(both.sensors.direction && both.sensors.directed);
+            assert!(both.sensors.speaker && both.sensors.media && both.sensors.turn);
+        }
     }
 }

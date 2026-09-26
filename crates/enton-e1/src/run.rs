@@ -170,6 +170,18 @@ pub struct Sensors {
     /// speech-to-text inside the window and about 0.5 s of CPU per segment for a 4B
     /// model, so it is a desktop-first sensor.
     pub directed: bool,
+    /// Direction of arrival from a microphone array (`direction`). Off by default: it
+    /// needs an array of two or more microphones, which a single-microphone device
+    /// lacks. Serialized only when on, so a report without it reads as before it existed.
+    #[serde(skip_serializing_if = "is_off")]
+    pub direction: bool,
+}
+
+/// Whether a sensor is off, for fields serialized only when on.
+// Serde's `skip_serializing_if` passes a reference.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_off(on: &bool) -> bool {
+    !*on
 }
 
 impl Sensors {
@@ -179,11 +191,18 @@ impl Sensors {
         media: true,
         turn: true,
         directed: false,
+        direction: false,
     };
 
     /// The default sensors plus the device-directedness detector.
     pub const WITH_DIRECTED: Self = Self {
         directed: true,
+        ..Self::DEFAULT
+    };
+
+    /// The default sensors plus the microphone array's direction of arrival.
+    pub const WITH_DIRECTION: Self = Self {
+        direction: true,
         ..Self::DEFAULT
     };
 
@@ -196,6 +215,7 @@ impl Sensors {
             media: cue.media.filter(|_| self.media),
             turn_complete: cue.turn_complete.filter(|_| self.turn),
             directed: cue.directed.filter(|_| self.directed),
+            direction: cue.direction.filter(|_| self.direction),
             ..cue
         }
     }
@@ -218,6 +238,7 @@ impl Sensors {
             (self.media, "media tagger"),
             (self.turn, "end of turn"),
             (self.directed, "directedness"),
+            (self.direction, "direction of arrival"),
         ]
         .into_iter()
         .filter_map(|(on, name)| on.then_some(name))
@@ -410,6 +431,9 @@ impl Feedback {
                         media: Some(SELF_ECHO_MEDIA),
                         turn_complete: Some(SELF_ECHO_TURN_COMPLETE),
                         directed: Some(SELF_ECHO_DIRECTED),
+                        // Enton's own loudspeaker sits in the device, too close to the
+                        // array for a far-field direction: an estimator reports none.
+                        direction: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -854,6 +878,7 @@ mod tests {
                     media: None,
                     turn_complete: None,
                     directed: None,
+                    direction: None,
                 },
             },
             annotation: Annotation::Speech {
@@ -1128,6 +1153,7 @@ mod tests {
                         media: None,
                         turn_complete: None,
                         directed: None,
+                        direction: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -1149,6 +1175,7 @@ mod tests {
                         media: None,
                         turn_complete: None,
                         directed: None,
+                        direction: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -1170,6 +1197,7 @@ mod tests {
                         media: None,
                         turn_complete: None,
                         directed: None,
+                        direction: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -1249,6 +1277,7 @@ mod admission_tests {
                         media: None,
                         turn_complete: None,
                         directed: None,
+                        direction: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -1300,6 +1329,7 @@ mod admission_tests {
                         media: None,
                         turn_complete: None,
                         directed: None,
+                        direction: None,
                     },
                 },
                 annotation: Annotation::Speech {
@@ -1527,20 +1557,41 @@ mod ablation_tests {
             media: Some(0.2),
             turn_complete: Some(0.9),
             directed: Some(0.95),
+            direction: Some([0.6, 0.8]),
         };
         assert_eq!(
             Sensors::DEFAULT.sense(cue),
             SpeechCue {
                 directed: None,
+                direction: None,
                 ..cue
             }
         );
-        assert_eq!(Sensors::WITH_DIRECTED.sense(cue), cue);
+        assert_eq!(
+            Sensors::WITH_DIRECTED.sense(cue),
+            SpeechCue {
+                direction: None,
+                ..cue
+            }
+        );
+        assert_eq!(
+            Sensors::WITH_DIRECTION.sense(cue),
+            SpeechCue {
+                directed: None,
+                ..cue
+            }
+        );
+        let all = Sensors {
+            directed: true,
+            ..Sensors::WITH_DIRECTION
+        };
+        assert_eq!(all.sense(cue), cue);
         let none = Sensors {
             speaker: false,
             media: false,
             turn: false,
             directed: false,
+            direction: false,
         };
         assert_eq!(
             none.sense(cue),
@@ -1549,6 +1600,7 @@ mod ablation_tests {
                 media: None,
                 turn_complete: None,
                 directed: None,
+                direction: None,
                 ..cue
             }
         );
@@ -1585,6 +1637,78 @@ mod ablation_tests {
             Sensors::WITH_DIRECTED.to_string(),
             "speaker verification, media tagger, end of turn, directedness"
         );
+        assert_eq!(
+            all.to_string(),
+            "speaker verification, media tagger, end of turn, directedness, direction of arrival"
+        );
+        // A report without the array serializes its sensors as before the array existed.
+        let json = serde_json::to_value(Sensors::WITH_DIRECTED).unwrap();
+        assert!(json.get("direction").is_none(), "{json}");
+        assert_eq!(
+            serde_json::to_value(all).unwrap()["direction"],
+            serde_json::Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn without_the_array_no_direction_setting_moves_a_call() {
+        // Tapes carry a direction reading on every cue; withheld, the most eager settings
+        // decide every call as the shipped ones do.
+        let mut eager = Profile::t1_ref();
+        eager.source.tv_direction_min_lines = 1.0;
+        eager.source.tv_direction_half_life_ms = 1;
+        eager.source.tv_caution_confinement = enton_core::TvCautionConfinement::Always;
+        for tape in [e1a(7).unwrap(), e1b(7).unwrap()] {
+            for sensors in [Sensors::DEFAULT, Sensors::WITH_DIRECTED] {
+                let shipped = run_tape_with(&tape, &Profile::t1_ref(), sensors).unwrap();
+                let other = run_tape_with(&tape, &eager, sensors).unwrap();
+                assert_eq!(results(&shipped), results(&other));
+            }
+        }
+    }
+
+    #[test]
+    fn only_the_organism_hears_the_array_and_reports_say_so() {
+        let (a, b) = (e1a(42).unwrap(), e1b(42).unwrap());
+        let profile = Profile::t1_ref();
+        let both = Sensors {
+            directed: true,
+            ..Sensors::WITH_DIRECTION
+        };
+        for sensors in [Sensors::WITH_DIRECTION, both] {
+            let without = Sensors {
+                direction: false,
+                ..sensors
+            };
+            let off = run_tape_with(&a, &profile, without).unwrap();
+            let on = run_tape_with(&a, &profile, sensors).unwrap();
+            assert_eq!(off.simple, on.simple);
+            assert_eq!(off.fixed_window, on.fixed_window);
+            assert_eq!(on.sensors, sensors);
+            assert_ne!(off.organism.thoughts, on.organism.thoughts);
+        }
+        let report = Report::new(
+            run_tape_with(&a, &profile, Sensors::WITH_DIRECTION).unwrap(),
+            run_tape_with(&b, &profile, Sensors::WITH_DIRECTION).unwrap(),
+        )
+        .unwrap();
+        assert!(report.to_string().contains(
+            "Sensors: speaker verification, media tagger, end of turn, direction of arrival\n"
+        ));
+        let summary = Summary::from_reports(std::slice::from_ref(&report)).unwrap();
+        let text = summary.to_string();
+        assert!(text.contains(
+            "sensors: speaker verification, media tagger, end of turn, direction of arrival"
+        ));
+        assert!(text.contains("  turns by TV: off "), "{text}");
+        let json = serde_json::to_value(&summary).unwrap();
+        assert_eq!(json["sensors"]["direction"], serde_json::Value::Bool(true));
+        let pooled: u64 = summary
+            .e1a_turns_by_condition
+            .values()
+            .map(|tally| tally.total)
+            .sum();
+        assert_eq!(pooled, summary.e1a_total_turns);
     }
 
     #[test]

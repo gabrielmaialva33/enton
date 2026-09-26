@@ -781,6 +781,9 @@ pub struct Summary {
     pub pooled_reduction_percentage: f64,
     /// Total synthetic self-ignitions for E1a organism.
     pub e1a_synthetic_self_ignitions: u64,
+    /// E1a organism turns served and total, pooled, by the block condition of each
+    /// turn's first segment: where the TV background costs turns.
+    pub e1a_turns_by_condition: BTreeMap<ConditionKey, crate::scoring::Tally>,
 }
 
 impl Summary {
@@ -895,6 +898,7 @@ impl Summary {
             pooled_simple_paid_calls,
             pooled_reduction_percentage,
             e1a_synthetic_self_ignitions,
+            e1a_turns_by_condition: pooled_turns_by_condition(reports),
         })
     }
 
@@ -941,6 +945,80 @@ impl Summary {
     }
 }
 
+/// The E1a organism's turns served and total by block condition, pooled over `reports`.
+fn pooled_turns_by_condition(reports: &[Report]) -> BTreeMap<ConditionKey, crate::scoring::Tally> {
+    let mut pooled: BTreeMap<ConditionKey, crate::scoring::Tally> = BTreeMap::new();
+    for report in reports {
+        for (key, tally) in &report.e1a.organism.turns_by_condition {
+            let sum = pooled.entry(*key).or_default();
+            sum.served += tally.served;
+            sum.total += tally.total;
+        }
+    }
+    pooled
+}
+
+impl Summary {
+    /// Pooled E1a turns by TV background, over both distances and then per distance.
+    fn print_turns_by_tv(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let tvs = [
+            TvBackground::Off,
+            TvBackground::Moderate,
+            TvBackground::Loud,
+        ];
+        let tally = |distances: &[Distance], tv| {
+            distances
+                .iter()
+                .filter_map(|distance| {
+                    self.e1a_turns_by_condition
+                        .get(&ConditionKey::new(*distance, tv))
+                })
+                .fold(crate::scoring::Tally::default(), |sum, tally| {
+                    crate::scoring::Tally {
+                        served: sum.served + tally.served,
+                        total: sum.total + tally.total,
+                    }
+                })
+        };
+        let share = |tally: crate::scoring::Tally| {
+            if tally.total == 0 {
+                "n/a".to_owned()
+            } else {
+                format!("{:.1}%", 100.0 * tally.served as f64 / tally.total as f64)
+            }
+        };
+        let [off, moderate, loud] = tvs.map(|tv| tally(&[Distance::Near, Distance::Far], tv));
+        writeln!(
+            f,
+            "  turns by TV: off {}/{} ({}), moderate {}/{} ({}), loud {}/{} ({})",
+            off.served,
+            off.total,
+            share(off),
+            moderate.served,
+            moderate.total,
+            share(moderate),
+            loud.served,
+            loud.total,
+            share(loud),
+        )?;
+        for distance in [Distance::Near, Distance::Far] {
+            let [off, moderate, loud] = tvs.map(|tv| tally(&[distance], tv));
+            writeln!(
+                f,
+                "    {:<4}: off {}/{}, moderate {}/{}, loud {}/{}",
+                distance.to_string().to_lowercase(),
+                off.served,
+                off.total,
+                moderate.served,
+                moderate.total,
+                loud.served,
+                loud.total,
+            )?;
+        }
+        Ok(())
+    }
+}
+
 impl fmt::Display for Summary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
@@ -982,6 +1060,7 @@ impl fmt::Display for Summary {
             "  synthetic self-ignitions: {} total",
             self.e1a_synthetic_self_ignitions
         )?;
+        self.print_turns_by_tv(f)?;
         writeln!(f, "E1b organism:")?;
         writeln!(
             f,

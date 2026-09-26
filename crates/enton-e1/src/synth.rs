@@ -1,4 +1,4 @@
-//! Protocol 3.1.0 populations. Deliberately does not import the cognitive Profile.
+//! Protocol 3.3.0 populations. Deliberately does not import the cognitive Profile.
 
 use crate::Error;
 use crate::tape::{
@@ -52,6 +52,29 @@ impl SplitMix64 {
         let r = (-2.0 * u1.ln()).sqrt();
         let theta = 2.0 * std::f32::consts::PI * u2;
         mean + sd * (r * theta.cos())
+    }
+    /// An angle in radians, uniform around the circle.
+    fn angle(&mut self) -> f64 {
+        std::f64::consts::TAU * f64::from(self.real(0.0, 1.0))
+    }
+    /// A von Mises angle in radians around zero with concentration `kappa`, by Best and
+    /// Fisher's rejection sampler (Applied Statistics 28, 1979).
+    pub fn von_mises(&mut self, kappa: f64) -> f64 {
+        let tau = 1.0 + (1.0 + 4.0 * kappa * kappa).sqrt();
+        let rho = (tau - (2.0 * tau).sqrt()) / (2.0 * kappa);
+        let r = (1.0 + rho * rho) / (2.0 * rho);
+        loop {
+            let u1 = f64::from(self.real(0.0, 1.0));
+            let u2 = f64::from(self.real(0.0, 1.0));
+            let u3 = f64::from(self.real(0.0, 1.0));
+            let z = (std::f64::consts::PI * u1).cos();
+            let f = (1.0 + r * z) / (r + z);
+            let c = kappa * (r - f);
+            if c * (2.0 - c) - u2 > 0.0 || (c / u2).ln() + 1.0 - c >= 0.0 {
+                let angle = f.clamp(-1.0, 1.0).acos();
+                return if u3 < 0.5 { -angle } else { angle };
+            }
+        }
     }
 }
 
@@ -114,6 +137,54 @@ pub const MISSED_TV_DIRECTED: f32 = 0.15;
 /// Share of 1 to 3 s requests that do not score as clearly addressed, over all blocks:
 /// the casual and plain rates average to it, and other durations scale by the same ratio.
 const REQUEST_MISSED: f32 = 0.15;
+
+/// Stream salt for the independent direction-of-arrival RNG stream. The TV's place, the
+/// seats of each block and every cue's reading are drawn from it alone, so adding the
+/// sensor moved no reading of the other four.
+const DIRECTION_STREAM_SALT: u64 = 0x4449_5245_4354_4e31;
+
+/// Width, in degrees, of the bins of [`OWNER_TV_ANGLE_PERCENT`].
+pub const OWNER_TV_ANGLE_BIN_DEG: f64 = 15.0;
+/// Angle between the owner and the TV, seen from the device, folded to 0 to 180 degrees
+/// in 15-degree bins: percent of three-minute blocks, measured on 240 simulated living
+/// rooms. The side is a coin flip.
+pub const OWNER_TV_ANGLE_PERCENT: [f64; 12] = [
+    11.2, 13.8, 16.2, 19.1, 16.4, 9.2, 5.6, 3.4, 2.2, 1.6, 1.0, 0.4,
+];
+/// Concentration of a persistent direction offset: the owner's in each block, the TV's in
+/// each tape (reflections and array geometry bias an estimate the same way for a while).
+pub const POSITION_KAPPA: f64 = 20.0;
+/// Chance that a persistent offset lands anywhere at all instead.
+pub const POSITION_OUTLIER: f32 = 0.05;
+/// Concentration of one live segment's reading around its talker's direction.
+pub const LIVE_SEGMENT_KAPPA: f64 = 60.0;
+/// Chance that a live segment's reading lands anywhere at all, with the TV off, moderate
+/// and loud.
+pub const LIVE_OUTLIER: [f32; 3] = [0.03, 0.08, 0.12];
+/// Chance that a live segment's reading points at the TV instead (the TV drowned the
+/// talker), with the TV moderate and loud.
+pub const TV_CAPTURE: [f32; 2] = [0.10, 0.25];
+/// Concentration of a TV line's reading around the TV's direction.
+pub const TV_SEGMENT_KAPPA: f64 = 15.0;
+/// Chance that a TV line's reading lands anywhere at all.
+pub const TV_OUTLIER: f32 = 0.15;
+
+/// Where the talkers of one three-minute block are, as the array sees them, in radians.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct Seats {
+    /// The owner's direction, persistent offset included.
+    owner: f64,
+    /// Where other live people talk from in this block.
+    other: f64,
+}
+
+/// The unit vector of an azimuth in radians.
+fn unit(azimuth: f64) -> [f32; 2] {
+    let (sin, cos) = azimuth.sin_cos();
+    // A unit vector's components lie in [-1, 1]: narrowing loses precision only.
+    #[allow(clippy::cast_possible_truncation)]
+    [cos as f32, sin as f32]
+}
 
 /// Who a speech cue is addressed to, as a directedness detector is scored on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,6 +347,43 @@ pub fn interpolate_log2(duration_ms: u32, y: [f32; 3]) -> f32 {
     }
 }
 
+/// A persistent direction offset in radians: von Mises, or anywhere at all now and then.
+fn persistent_offset(rng: &mut SplitMix64) -> f64 {
+    if rng.real(0.0, 1.0) < POSITION_OUTLIER {
+        rng.angle()
+    } else {
+        rng.von_mises(POSITION_KAPPA)
+    }
+}
+
+/// The owner's angle from the TV in radians: a bin of [`OWNER_TV_ANGLE_PERCENT`], a
+/// uniform point in it, and a side.
+fn owner_tv_angle(rng: &mut SplitMix64) -> f64 {
+    let total: f64 = OWNER_TV_ANGLE_PERCENT.iter().sum();
+    let mut roll = f64::from(rng.real(0.0, 1.0)) * total;
+    let mut bin = OWNER_TV_ANGLE_PERCENT.len() - 1;
+    for (index, share) in OWNER_TV_ANGLE_PERCENT.iter().enumerate() {
+        if roll < *share {
+            bin = index;
+            break;
+        }
+        roll -= share;
+    }
+    let degrees = (bin as f64 + f64::from(rng.real(0.0, 1.0))) * OWNER_TV_ANGLE_BIN_DEG;
+    let side = if rng.real(0.0, 1.0) < 0.5 { -1.0 } else { 1.0 };
+    side * degrees.to_radians()
+}
+
+impl Seats {
+    /// The owner at a measured angle from the TV (which stands at `tv`), with this
+    /// block's persistent offset; other people anywhere around the room.
+    fn draw(rng: &mut SplitMix64, tv: f64) -> Self {
+        let owner = tv + owner_tv_angle(rng) + persistent_offset(rng);
+        let other = rng.angle();
+        Self { owner, other }
+    }
+}
+
 fn draw_block_condition(rng: &mut SplitMix64) -> RoomCondition {
     let distance = if rng.real(0.0, 1.0) < 0.25 {
         Distance::Near
@@ -324,6 +432,11 @@ struct Builder {
     media_rng: SplitMix64,
     turn_rng: SplitMix64,
     directed_rng: SplitMix64,
+    direction_rng: SplitMix64,
+    /// Where the TV's readings cluster, in radians: its place plus the tape's offset.
+    tv_azimuth: f64,
+    /// Per-block seats, drawn on the direction stream.
+    seats: Vec<Seats>,
     owner_offset: f32,
     /// Per-owner factor on the owner's confusable directedness shares.
     owner_confusion: f32,
@@ -349,6 +462,12 @@ impl Builder {
         let habits = (0..num_blocks)
             .map(|_| AddressHabits::draw(&mut directed_rng))
             .collect();
+        let mut direction_rng = SplitMix64::with_seed(seed ^ DIRECTION_STREAM_SALT);
+        let tv = direction_rng.angle();
+        let tv_azimuth = tv + persistent_offset(&mut direction_rng);
+        let seats = (0..num_blocks)
+            .map(|_| Seats::draw(&mut direction_rng, tv))
+            .collect();
         Self {
             rng: SplitMix64::with_seed(seed),
             condition_rng,
@@ -356,6 +475,9 @@ impl Builder {
             media_rng: SplitMix64::with_seed(seed ^ MEDIA_STREAM_SALT),
             turn_rng: SplitMix64::with_seed(seed ^ TURN_STREAM_SALT),
             directed_rng,
+            direction_rng,
+            tv_azimuth,
+            seats,
             owner_offset,
             owner_confusion,
             conditions,
@@ -548,6 +670,50 @@ impl Builder {
             score
         }
     }
+    /// A direction-of-arrival reading as a unit vector: a TV line around the TV, a live
+    /// talker around their seat (or, with the TV on, sometimes at the TV), anything else
+    /// anywhere.
+    fn draw_direction(&mut self, source: Stimulus, cond: RoomCondition, block: usize) -> [f32; 2] {
+        let seats = self.seats.get(block).copied().unwrap_or_default();
+        let azimuth = match source {
+            Stimulus::Tv => self.tv_reading(),
+            Stimulus::Request(_) | Stimulus::BargeIn(_) | Stimulus::Aside => {
+                self.live_reading(seats.owner, cond.tv)
+            }
+            Stimulus::OtherSpeech | Stimulus::FalseKeyword => {
+                self.live_reading(seats.other, cond.tv)
+            }
+            // Enton's own echo never reaches a tape; the runner gives it no reading.
+            Stimulus::Noise | Stimulus::Motor | Stimulus::Ventilation | Stimulus::SelfEcho => {
+                self.direction_rng.angle()
+            }
+        };
+        unit(azimuth)
+    }
+    fn tv_reading(&mut self) -> f64 {
+        if self.direction_rng.real(0.0, 1.0) < TV_OUTLIER {
+            self.direction_rng.angle()
+        } else {
+            self.tv_azimuth + self.direction_rng.von_mises(TV_SEGMENT_KAPPA)
+        }
+    }
+    fn live_reading(&mut self, seat: f64, tv: TvBackground) -> f64 {
+        let [quiet, moderate, loud] = LIVE_OUTLIER;
+        let [moderate_capture, loud_capture] = TV_CAPTURE;
+        let (capture, outlier) = match tv {
+            TvBackground::Off => (0.0, quiet),
+            TvBackground::Moderate => (moderate_capture, moderate),
+            TvBackground::Loud => (loud_capture, loud),
+        };
+        if self.direction_rng.real(0.0, 1.0) < capture {
+            return self.tv_reading();
+        }
+        if self.direction_rng.real(0.0, 1.0) < outlier {
+            self.direction_rng.angle()
+        } else {
+            seat + self.direction_rng.von_mises(LIVE_SEGMENT_KAPPA)
+        }
+    }
     fn segment(
         &mut self,
         end: u64,
@@ -566,6 +732,7 @@ impl Builder {
         cue.media = Some(media);
         cue.turn_complete = Some(self.draw_turn_complete(role, cue.duration_ms, cond, pause_style));
         cue.directed = Some(self.draw_directed(source, cue.duration_ms, media, block_idx));
+        cue.direction = Some(self.draw_direction(source, cond, block_idx));
         let id = SegmentId(self.next_segment);
         // All generator loops are protocol-bounded to fewer than MAX_EVENTS entries.
         self.next_segment += 1;
@@ -593,6 +760,7 @@ impl Builder {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         }
     }
     fn request(
@@ -722,6 +890,7 @@ impl Builder {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         };
         self.segment(
             end,
@@ -755,6 +924,7 @@ impl Builder {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         };
         self.segment(
             start + u64::from(duration_ms),
@@ -793,6 +963,7 @@ impl Builder {
                     media: None,
                     turn_complete: None,
                     directed: None,
+                    direction: None,
                 },
                 episode,
                 Stimulus::Tv,
@@ -904,6 +1075,7 @@ pub fn e1a(seed: u64) -> Result<Tape, Error> {
                     media: None,
                     turn_complete: None,
                     directed: None,
+                    direction: None,
                 },
                 EpisodeId(distractor + 2),
                 Stimulus::FalseKeyword,
@@ -975,6 +1147,7 @@ pub fn e1b(seed: u64) -> Result<Tape, Error> {
                     media: None,
                     turn_complete: None,
                     directed: None,
+                    direction: None,
                 },
                 EpisodeId(100 + block),
                 source,
@@ -1409,6 +1582,127 @@ mod tests {
                 assert_eq!(b1.media_rng.next_u64(), b2.media_rng.next_u64());
                 assert_eq!(b1.turn_rng.next_u64(), b2.turn_rng.next_u64());
             }
+        }
+    }
+
+    #[test]
+    fn direction_draws_do_not_alter_other_streams() {
+        for seed in [0, 1, 7, 42] {
+            let mut b1 = Builder::new(seed, 3_600_000);
+            let mut b2 = Builder::new(seed, 3_600_000);
+            for _ in 0..100 {
+                b2.draw_direction(Stimulus::Tv, RoomCondition::default(), 0);
+                b2.draw_direction(Stimulus::Aside, RoomCondition::default(), 3);
+                b2.direction_rng.next_u64();
+            }
+            for _ in 0..100 {
+                assert_eq!(b1.rng.next_u64(), b2.rng.next_u64());
+                assert_eq!(b1.condition_rng.next_u64(), b2.condition_rng.next_u64());
+                assert_eq!(b1.speaker_rng.next_u64(), b2.speaker_rng.next_u64());
+                assert_eq!(b1.media_rng.next_u64(), b2.media_rng.next_u64());
+                assert_eq!(b1.turn_rng.next_u64(), b2.turn_rng.next_u64());
+                assert_eq!(b1.directed_rng.next_u64(), b2.directed_rng.next_u64());
+            }
+        }
+    }
+
+    /// Mean resultant length of `draws` von Mises angles: I1(kappa) / I0(kappa).
+    fn resultant(kappa: f64, draws: u32) -> f64 {
+        let mut rng = SplitMix64::with_seed(48);
+        let (mut x, mut y) = (0.0, 0.0);
+        for _ in 0..draws {
+            let (sin, cos) = rng.von_mises(kappa).sin_cos();
+            x += cos;
+            y += sin;
+        }
+        (x * x + y * y).sqrt() / f64::from(draws)
+    }
+
+    #[test]
+    fn von_mises_draws_have_their_concentration() {
+        // I1(kappa) / I0(kappa) from the asymptotic series 1 - 1/(2k) - 1/(8k^2) - 1/(8k^3).
+        for (kappa, expected) in [(15.0, 0.966_07), (20.0, 0.974_67), (60.0, 0.991_63)] {
+            let got = resultant(kappa, 40_000);
+            assert!((got - expected).abs() < 0.002, "kappa {kappa}: {got}");
+        }
+        let mut rng = SplitMix64::with_seed(49);
+        for _ in 0..10_000 {
+            let angle = rng.von_mises(15.0);
+            assert!((-std::f64::consts::PI..=std::f64::consts::PI).contains(&angle));
+        }
+    }
+
+    #[test]
+    fn owner_angles_from_the_tv_follow_the_measured_bins() {
+        let draws = 50_000_u32;
+        let mut rng = SplitMix64::with_seed(50);
+        let mut bins = [0_u32; 12];
+        let mut left = 0_u32;
+        for _ in 0..draws {
+            let angle = owner_tv_angle(&mut rng);
+            left += u32::from(angle < 0.0);
+            let bin = (angle.abs().to_degrees() / OWNER_TV_ANGLE_BIN_DEG).floor();
+            // A bin index between zero and twelve: exact in f64 and in u8.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let bin = usize::from(bin as u8);
+            bins[bin.min(11)] += 1;
+        }
+        let total: f64 = OWNER_TV_ANGLE_PERCENT.iter().sum();
+        for (count, percent) in bins.iter().zip(OWNER_TV_ANGLE_PERCENT) {
+            let share = f64::from(*count) / f64::from(draws);
+            assert!((share - percent / total).abs() < 0.006, "{bins:?}");
+        }
+        assert!((f64::from(left) / f64::from(draws) - 0.5).abs() < 0.01);
+    }
+
+    /// Share of `draws` live readings from a seat opposite the TV that land within 30
+    /// degrees of the TV.
+    fn at_the_tv(tv: TvBackground, draws: u32) -> f64 {
+        let mut b = Builder::new(51, 3_600_000);
+        let seat = b.tv_azimuth + std::f64::consts::PI;
+        let near = (0..draws)
+            .filter(|_| {
+                let (sin, cos) = (b.live_reading(seat, tv) - b.tv_azimuth).sin_cos();
+                sin.atan2(cos).abs() < 30_f64.to_radians()
+            })
+            .count();
+        near as f64 / f64::from(draws)
+    }
+
+    #[test]
+    fn a_loud_tv_captures_live_readings() {
+        // Capture times a TV reading within 30 degrees (0.87), plus the outliers that
+        // land there by chance (one sixth of them).
+        for (tv, expected) in [
+            (TvBackground::Off, 0.005),
+            (TvBackground::Moderate, 0.099),
+            (TvBackground::Loud, 0.233),
+        ] {
+            let share = at_the_tv(tv, 20_000);
+            assert!((share - expected).abs() < 0.015, "{tv}: {share}");
+        }
+    }
+
+    #[test]
+    fn tv_lines_cluster_around_the_tv_and_every_cue_carries_a_unit_direction() {
+        for tape in [e1a(3).unwrap(), e1b(3).unwrap()] {
+            let b = Builder::new(3, 3_600_000);
+            let (mut tv_lines, mut near_tv) = (0_u32, 0_u32);
+            for record in tape.records() {
+                let Event::Speech { cue, .. } = record.event else {
+                    continue;
+                };
+                let [x, y] = cue.direction.expect("every cue is read");
+                assert!(((x * x + y * y).sqrt() - 1.0).abs() < 1e-6);
+                if record.annotation.source() == Some(Stimulus::Tv) {
+                    tv_lines += 1;
+                    let off = (f64::from(y).atan2(f64::from(x)) - b.tv_azimuth).sin_cos();
+                    near_tv += u32::from(off.0.atan2(off.1).abs() < 20_f64.to_radians());
+                }
+            }
+            // 85% within about 20 degrees (von Mises 15: 90%), plus outliers by chance.
+            let share = f64::from(near_tv) / f64::from(tv_lines);
+            assert!((0.68..=0.88).contains(&share), "{share} of {tv_lines}");
         }
     }
 

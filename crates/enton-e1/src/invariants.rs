@@ -121,6 +121,12 @@ impl Watch {
         if unit.iter().any(|level| !(0.0..=1.0).contains(level)) {
             return Err(self.violation(event, "habituation, echo and TV levels stay within [0, 1]"));
         }
+        if organism
+            .tv_direction_as_of(organism.last_seen())
+            .is_some_and(|[x, y]| ((x * x + y * y).sqrt() - 1.0).abs() > 1e-5)
+        {
+            return Err(self.violation(event, "a learned TV direction is a unit vector"));
+        }
         let profile = organism.profile();
         let hangover = profile.echo.echo_hangover_ms;
         let windows = [
@@ -254,6 +260,7 @@ mod tests {
                 media: None,
                 turn_complete: None,
                 directed: None,
+                direction: None,
             },
         }
     }

@@ -31,7 +31,10 @@ pub use tape::{
 /// Version 3.2.0 adds off-policy evaluation ([`offpolicy`]): the organism as an exploring
 /// logging policy and a family of threshold candidates estimated from its log. Tapes and
 /// the default runs are unchanged.
-pub const BENCHMARK_VERSION: &str = "3.2.0";
+/// Version 3.3.0 adds a simulated direction of arrival from a microphone array to every
+/// speech cue, drawn on its own random stream so no other reading moved; runs withhold it
+/// unless asked, and then decide every call exactly as 3.2.0 did.
+pub const BENCHMARK_VERSION: &str = "3.3.0";
 
 /// Invalid experiments fail explicitly rather than dropping stimuli or granting free calls.
 #[derive(Debug, thiserror::Error)]

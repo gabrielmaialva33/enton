@@ -2,7 +2,7 @@
 //! the `TigerBeetle` VOPR: the synthetic tapes explore, the watch asserts, and a
 //! violation stops the run naming the step and the event that broke it.
 
-use enton_core::{Action, Budget, Event, Millis, Organism, Reason, ThoughtId};
+use enton_core::{Abstention, Action, Budget, Event, Millis, Organism, Reason, ThoughtId};
 
 use crate::Error;
 
@@ -23,6 +23,10 @@ pub(crate) struct Watch {
     /// Obligation and discretionary budgets after the previous step. Only ticks refill,
     /// so a speech cue finds exactly these.
     budgets: Option<(Budget, Budget)>,
+    /// Whether the last checklist event said there is something to check (none yet: no).
+    checklist_actionable: bool,
+    /// Whether the cortex failed since its last reply, so a backoff may be under way.
+    failed_since_reply: bool,
 }
 
 impl Watch {
@@ -35,6 +39,7 @@ impl Watch {
     ) -> Result<(), Error> {
         self.steps += 1;
         self.check_decisions(event, actions)?;
+        self.check_discretion(event, actions)?;
         self.check_thought_ids(event, actions)?;
         self.check_time(organism, event)?;
         self.check_bounds(organism, event)?;
@@ -68,17 +73,75 @@ impl Watch {
         let broken = match event {
             Event::Speech { .. } => (decisions != 1 || speaks != 0)
                 .then_some("a speech cue yields exactly one decision"),
-            Event::CortexReply { .. } => (decisions != 0 || speaks != 1)
-                .then_some("a cortex reply yields exactly one Speak and nothing else"),
+            Event::CortexReply { text, .. } => {
+                let expected = usize::from(!text.trim().is_empty());
+                (decisions != 0 || speaks != expected).then_some(
+                    "a cortex reply yields exactly one Speak, none when silent, and nothing else",
+                )
+            }
             Event::Tick { .. } => actions
                 .iter()
                 .any(|action| !tick_may_emit(action))
                 .then_some("a tick only thinks or abstains, for a drive or an attend timeout"),
-            Event::Body { .. } | Event::PlaybackStarted { .. } | Event::PlaybackFinished { .. } => {
-                (!actions.is_empty()).then_some("body and playback events decide nothing")
-            }
+            Event::Body { .. }
+            | Event::PlaybackStarted { .. }
+            | Event::PlaybackFinished { .. }
+            | Event::Checklist { .. }
+            | Event::CortexFailed { .. } => (!actions.is_empty())
+                .then_some("body, playback, checklist and failure events decide nothing"),
         };
         broken.map_or(Ok(()), |what| Err(self.violation(event, what)))
+    }
+
+    /// What holds a discretionary thought back never touches an obligation, and each
+    /// reason holds only when what it names was seen: a drive thinks only with something
+    /// on the checklist, abstains as `NothingToCheck` only without it, and backs off only
+    /// after a cortex failure that no reply has answered yet.
+    fn check_discretion(&mut self, event: &Event, actions: &[Action]) -> Result<(), Error> {
+        // Only outcomes of thoughts the organism issued count, as in the reducer.
+        let issued = |thought: &ThoughtId| {
+            thought.0 >= 1 && self.last_thought.is_some_and(|last| *thought <= last)
+        };
+        match event {
+            Event::Checklist { actionable, .. } => self.checklist_actionable = *actionable,
+            Event::CortexFailed { thought, .. } if issued(thought) => {
+                self.failed_since_reply = true;
+            }
+            Event::CortexReply { thought, .. } if issued(thought) => {
+                self.failed_since_reply = false;
+            }
+            _ => {}
+        }
+        for action in actions {
+            let (reason, why) = match action {
+                Action::Think {
+                    reason: Reason::Drive(_),
+                    ..
+                } if !self.checklist_actionable => {
+                    return Err(
+                        self.violation(event, "a drive thinks only with something to check")
+                    );
+                }
+                Action::Abstain { reason, why, .. } => (reason, *why),
+                _ => continue,
+            };
+            let discretionary = matches!(reason, Reason::Drive(_) | Reason::Speech);
+            let broken = match why {
+                Abstention::NothingToCheck => (!matches!(reason, Reason::Drive(_))
+                    || self.checklist_actionable)
+                    .then_some("only a drive abstains for nothing to check, and only without it"),
+                Abstention::NobodyHome => (!discretionary)
+                    .then_some("only a discretionary thought waits for somebody home"),
+                Abstention::Backoff => (!discretionary || !self.failed_since_reply).then_some(
+                    "only a discretionary thought backs off, and only after an unanswered failure",
+                ),
+                _ => None,
+            };
+            if let Some(what) = broken {
+                return Err(self.violation(event, what));
+            }
+        }
+        Ok(())
     }
 
     fn check_thought_ids(&mut self, event: &Event, actions: &[Action]) -> Result<(), Error> {
@@ -236,6 +299,8 @@ fn kind(event: &Event) -> &'static str {
         Event::CortexReply { .. } => "CortexReply",
         Event::PlaybackStarted { .. } => "PlaybackStarted",
         Event::PlaybackFinished { .. } => "PlaybackFinished",
+        Event::Checklist { .. } => "Checklist",
+        Event::CortexFailed { .. } => "CortexFailed",
     }
 }
 
@@ -388,6 +453,106 @@ mod tests {
             .after_step(&organism, &tick, &[on_a_tick])
             .unwrap_err();
         assert!(err.to_string().contains("only a speech cue"), "{err}");
+    }
+
+    #[test]
+    fn checklist_and_failure_events_decide_nothing() {
+        let mut organism = organism();
+        let mut watch = Watch::default();
+        for event in [
+            Event::Checklist {
+                now: Millis(100),
+                actionable: true,
+            },
+            Event::CortexFailed {
+                now: Millis(200),
+                thought: ThoughtId(1),
+            },
+        ] {
+            let actions = organism.step(&event);
+            assert!(actions.is_empty());
+            watch.after_step(&organism, &event, &actions).unwrap();
+            let err = watch
+                .after_step(&organism, &event, &[abstain()])
+                .unwrap_err();
+            assert!(err.to_string().contains("decide nothing"), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_silent_reply_speaks_nothing() {
+        let mut organism = organism();
+        let first = cue(100);
+        let mut watch = Watch::default();
+        let actions = organism.step(&first);
+        watch.after_step(&organism, &first, &actions).unwrap();
+        let silent = Event::CortexReply {
+            now: Millis(200),
+            thought: ThoughtId(1),
+            text: String::new(),
+        };
+        let actions = organism.step(&silent);
+        assert!(actions.is_empty());
+        watch.after_step(&organism, &silent, &actions).unwrap();
+        let spoken = Action::Speak {
+            text: String::new(),
+        };
+        let err = watch.after_step(&organism, &silent, &[spoken]).unwrap_err();
+        assert!(err.to_string().contains("none when silent"), "{err}");
+    }
+
+    #[test]
+    fn a_discretionary_gate_where_it_cannot_hold_is_a_violation() {
+        let gated = |reason: Reason, why| Action::Abstain {
+            reason,
+            salience: 0.8,
+            why,
+            propensity: None,
+        };
+        let mut organism = organism();
+        let event = cue(100);
+        organism.step(&event);
+        // Nothing to check holds back a drive only, never speech.
+        let err = Watch::default()
+            .after_step(
+                &organism,
+                &event,
+                &[gated(Reason::Speech, Abstention::NothingToCheck)],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("nothing to check"), "{err}");
+        // An obligation never waits for somebody home.
+        let err = Watch::default()
+            .after_step(
+                &organism,
+                &event,
+                &[gated(Reason::Keyword, Abstention::NobodyHome)],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("somebody home"), "{err}");
+        // Backing off takes a failure first.
+        let err = Watch::default()
+            .after_step(
+                &organism,
+                &event,
+                &[gated(Reason::Speech, Abstention::Backoff)],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("backs off"), "{err}");
+
+        // A drive thought with nothing on the checklist.
+        let tick = Event::Tick { now: Millis(300) };
+        organism.step(&tick);
+        let drive = Action::Think {
+            thought: ThoughtId(1),
+            reason: Reason::Drive("curiosity".into()),
+            salience: 0.8,
+            propensity: None,
+        };
+        let err = Watch::default()
+            .after_step(&organism, &tick, &[drive])
+            .unwrap_err();
+        assert!(err.to_string().contains("something to check"), "{err}");
     }
 
     #[test]

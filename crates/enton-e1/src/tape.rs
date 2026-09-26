@@ -218,7 +218,7 @@ impl<'de> Deserialize<'de> for ConditionKey {
 /// Annotation attached to an exogenous event or a generated feedback cue.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Annotation {
-    /// A tick or synthetic completion, with no request attribution.
+    /// A tick, a checklist reading or a synthetic completion, with no request attribution.
     Clock,
     /// A speech segment and its independently annotated origin.
     Speech {
@@ -472,7 +472,9 @@ impl Tape {
             }
             previous = now;
             match (&record.event, &record.annotation) {
-                (Event::Tick { .. }, Annotation::Clock) => {}
+                // A tape may read the owner's checklist; runs otherwise assume one with
+                // something to check (see `run`).
+                (Event::Tick { .. } | Event::Checklist { .. }, Annotation::Clock) => {}
                 (
                     Event::Speech { cue, .. },
                     Annotation::Speech {

@@ -34,7 +34,10 @@ pub use tape::{
 /// Version 3.3.0 adds a simulated direction of arrival from a microphone array to every
 /// speech cue, drawn on its own random stream so no other reading moved; runs withhold it
 /// unless asked, and then decide every call exactly as 3.2.0 did.
-pub const BENCHMARK_VERSION: &str = "3.3.0";
+/// Version 3.4.0 opens every run with the owner's checklist holding something to check
+/// (see [`run::CHECKLIST_ACTIONABLE`]), and lets a tape read the checklist itself. Generated tapes
+/// are unchanged and carry no checklist reading of their own.
+pub const BENCHMARK_VERSION: &str = "3.4.0";
 
 /// Invalid experiments fail explicitly rather than dropping stimuli or granting free calls.
 #[derive(Debug, thiserror::Error)]

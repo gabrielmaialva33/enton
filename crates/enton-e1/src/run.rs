@@ -23,6 +23,17 @@ use std::collections::{BTreeMap, BTreeSet};
 const MAX_PROCESSED: usize = 100_000;
 const MAX_PENDING: usize = 4096;
 
+/// What E1 assumes of the owner's checklist: something on it, read when the run starts.
+///
+/// E1's tapes carry no checklist, and a drive with nothing to check never thinks, so
+/// without an assumption no drive could ever think in E1. Assuming something to check
+/// keeps drives deciding as they did before checklists existed, so E1 stays comparable
+/// across versions. It changes nothing on the generated tapes either way: they last at
+/// most two hours, and t1-ref's drives need about three and a half hours of unrelieved
+/// pressure to reach their threshold. A tape may read the checklist itself (a
+/// `Checklist` record); a reading at time zero follows this one and overrides it.
+pub const CHECKLIST_ACTIONABLE: bool = true;
+
 /// Policy identity; all policies receive the same exogenous events and outer economy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Controller {
@@ -456,6 +467,7 @@ impl Feedback {
             event: Event::PlaybackFinished {
                 now: Millis(now.0 + 2000),
                 utterance: UtteranceId(thought.0),
+                interrupted: false,
             },
             annotation: Annotation::Clock,
         })
@@ -491,6 +503,7 @@ impl Feedback {
                 event: Event::PlaybackFinished {
                     now,
                     utterance: *utterance,
+                    interrupted: true,
                 },
                 annotation: Annotation::Clock,
             })?;
@@ -814,16 +827,26 @@ fn horizon(tape: &Tape) -> Millis {
     Millis(tape.duration().0 + 12_000)
 }
 
-/// Feed the tape, the 12 s drain and the closed-loop feedback to one controller, in time
-/// order, and settle its result.
+/// Feed the checklist E1 assumes, the tape, the 12 s drain and the closed-loop feedback to
+/// one controller, in time order, and settle its result.
 fn drive<'a>(mut execution: Execution<'a>, tape: &'a Tape) -> Result<Execution<'a>, Error> {
+    let checklist = Record {
+        event: Event::Checklist {
+            now: Millis(0),
+            actionable: CHECKLIST_ACTIONABLE,
+        },
+        annotation: Annotation::Clock,
+    };
     let drain = (1..=12).map(|second| Record {
         event: Event::Tick {
             now: Millis(tape.duration().0 + second * 1000),
         },
         annotation: Annotation::Clock,
     });
-    let mut events = tape.records().iter().cloned().chain(drain).peekable();
+    let mut events = std::iter::once(checklist)
+        .chain(tape.records().iter().cloned())
+        .chain(drain)
+        .peekable();
     let mut processed = 0;
     loop {
         let endogenous = match (events.peek(), execution.feedback.pending.first_key_value()) {
@@ -1035,6 +1058,7 @@ mod tests {
             Event::PlaybackFinished {
                 now: Millis(3000),
                 utterance: UtteranceId(7),
+                interrupted: false,
             }
         );
 
@@ -1380,6 +1404,7 @@ mod admission_tests {
             vec![Event::PlaybackFinished {
                 now: Millis(2000),
                 utterance: UtteranceId(1),
+                interrupted: true,
             }]
         );
         assert_eq!(
@@ -1521,19 +1546,21 @@ mod ablation_tests {
 
     #[test]
     fn the_default_sensors_reproduce_benchmark_3_0_0_exactly() {
-        // Known answers computed with the benchmark 3.0.0 generator and reducer v9
-        // (commit e54e8bf) through the same fingerprints: the new stream moved no other
-        // reading, and a run without the detector decides every call as v9 did.
+        // Tape fingerprints computed with the benchmark 3.0.0 generator (commit e54e8bf):
+        // no later stream moved a reading. Outcomes are reducer v13's: a run without the
+        // detector decided every call as v9 did until v13, whose presence gate turns away
+        // overheard speech before the owner was ever heard (seed 7's E1a, seed 42's E1b;
+        // the other two runs are v9's to the bit).
         for (seed, tapes, outcomes) in [
             (
                 7,
                 [0x8c07_f602_b73b_bf00, 0x5090_69ff_e027_008b],
-                [0x8c80_8877_938d_d6cd, 0xb04d_2f78_5781_6f6f],
+                [0xc1f0_c11a_9094_60fc, 0xb04d_2f78_5781_6f6f],
             ),
             (
                 42,
                 [0x931b_93da_b8ea_fac2, 0x4d66_ddc9_dc28_49c4],
-                [0xad0d_7822_cec3_7b65, 0x5f7c_40bd_f7d6_26f7],
+                [0xad0d_7822_cec3_7b65, 0xaa2d_2783_7838_f7b8],
             ),
         ] {
             let pair = [e1a(seed).unwrap(), e1b(seed).unwrap()];
@@ -1760,5 +1787,141 @@ mod ablation_tests {
                 .contains("sensors: speaker verification, media tagger, end of turn, directedness")
         );
         assert!(Summary::from_reports(&[off, on]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod checklist_tests {
+    use super::*;
+    use crate::tape::{RoomCondition, TurnKind};
+    use crate::{EpisodeId, Turn, TurnId};
+
+    /// Half an hour of ticks; with `owner`, the owner asks Enton something two seconds in,
+    /// so someone is home all along; with `checklist`, the tape reads the checklist at the
+    /// start.
+    fn quiet_half_hour(checklist: Option<bool>, owner: bool) -> Tape {
+        let duration = 1_800_000;
+        let mut records: Vec<Record> = checklist
+            .map(|actionable| Record {
+                event: Event::Checklist {
+                    now: Millis(0),
+                    actionable,
+                },
+                annotation: Annotation::Clock,
+            })
+            .into_iter()
+            .collect();
+        for now in (0..=duration).step_by(1_000) {
+            records.push(Record {
+                event: Event::Tick { now: Millis(now) },
+                annotation: Annotation::Clock,
+            });
+            if owner && now == 1_000 {
+                records.push(Record {
+                    event: Event::Speech {
+                        now: Millis(2_000),
+                        cue: SpeechCue {
+                            energy: 0.9,
+                            vad_confidence: 0.9,
+                            duration_ms: 1_500,
+                            keyword: true,
+                            ..SpeechCue::default()
+                        },
+                    },
+                    annotation: Annotation::Speech {
+                        segment: SegmentId(0),
+                        episode: Some(EpisodeId(0)),
+                        source: Stimulus::Request(TurnId(0)),
+                        pause_style: None,
+                    },
+                });
+            }
+        }
+        let turns = if owner {
+            vec![Turn {
+                id: TurnId(0),
+                episode: EpisodeId(0),
+                segments: vec![SegmentId(0)],
+                available_at: Millis(2_000),
+                deadline: Millis(12_000),
+                kind: TurnKind::Single,
+                gap: None,
+                pause_style: None,
+            }]
+        } else {
+            Vec::new()
+        };
+        Tape::new(
+            TapeKind::Fixture,
+            0,
+            Millis(duration),
+            records,
+            turns,
+            vec![],
+            vec![RoomCondition::default(); 10],
+        )
+        .unwrap()
+    }
+
+    /// t1-ref with drives that reach their threshold in about 25 minutes.
+    fn eager() -> Profile {
+        let mut profile = Profile::t1_ref();
+        profile.ignition.threshold = 0.01;
+        profile.ignition.hysteresis = 0.002;
+        profile.ignition.ema_alpha = 1.0;
+        profile
+    }
+
+    fn drive_thoughts(tape: &Tape) -> Vec<PaidThought> {
+        run_organism(tape, &eager(), Sensors::DEFAULT)
+            .unwrap()
+            .thoughts
+            .into_iter()
+            .filter(|thought| matches!(thought.reason, Reason::Drive(_)))
+            .collect()
+    }
+
+    #[test]
+    fn e1_assumes_something_to_check_so_a_ready_drive_thinks_with_the_owner_home() {
+        let thoughts = drive_thoughts(&quiet_half_hour(None, true));
+        let [thought] = thoughts.as_slice() else {
+            panic!("expected one drive thought, got {thoughts:?}");
+        };
+        assert_eq!(thought.reason, Reason::Drive("curiosity".into()));
+        assert_eq!(thought.trigger, Trigger::Internal);
+        assert_eq!(thought.credit, Credit::Waste);
+        // The tape saying so explicitly changes nothing.
+        assert_eq!(drive_thoughts(&quiet_half_hour(Some(true), true)), thoughts);
+    }
+
+    #[test]
+    fn a_tape_whose_checklist_has_nothing_to_check_never_buys_a_drive_thought() {
+        assert!(drive_thoughts(&quiet_half_hour(Some(false), true)).is_empty());
+        // The owner's request is served all the same.
+        let result = run_organism(
+            &quiet_half_hour(Some(false), true),
+            &eager(),
+            Sensors::DEFAULT,
+        )
+        .unwrap();
+        assert_eq!(result.served_turns, 1);
+    }
+
+    #[test]
+    fn with_nobody_home_a_ready_drive_never_thinks() {
+        assert!(drive_thoughts(&quiet_half_hour(None, false)).is_empty());
+    }
+
+    #[test]
+    fn the_generated_tapes_never_ready_a_drive_at_t1_ref() {
+        for tape in [crate::e1a(100).unwrap(), crate::e1b(100).unwrap()] {
+            let result = run_organism(&tape, &Profile::t1_ref(), Sensors::DEFAULT).unwrap();
+            assert!(
+                result
+                    .thoughts
+                    .iter()
+                    .all(|thought| !matches!(thought.reason, Reason::Drive(_)))
+            );
+        }
     }
 }

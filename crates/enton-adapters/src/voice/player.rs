@@ -316,6 +316,7 @@ impl VoicePlayer {
             text: String::new(),
             samples,
         });
+        drop(state);
         Ok(id)
     }
 

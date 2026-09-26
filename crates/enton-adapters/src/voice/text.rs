@@ -155,12 +155,11 @@ fn parenthetical(chars: &[char], i: usize, out: &mut String) -> usize {
         let inside = chars.get(i + 1..*close).unwrap_or_default();
         at_sentence_start(out) && is_stage_direction(inside) && ends_sentence(chars, close + 1)
     });
-    match whole {
-        Some(close) => skip_own_terminator(chars, close + 1, true),
-        None => {
-            out.push('(');
-            i + 1
-        }
+    if let Some(close) = whole {
+        skip_own_terminator(chars, close + 1, true)
+    } else {
+        out.push('(');
+        i + 1
     }
 }
 
@@ -192,7 +191,7 @@ fn ends_sentence(chars: &[char], from: usize) -> bool {
 }
 
 /// `_italic_` and `__bold__` lose their markers; an underscore inside a word, as in
-/// "nome_do_arquivo", stays.
+/// `nome_do_arquivo`, stays.
 fn underscore(chars: &[char], i: usize, out: &mut String) -> usize {
     let inside_word = |at: Option<usize>| {
         at.and_then(|at| chars.get(at))

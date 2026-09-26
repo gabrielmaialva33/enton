@@ -15,7 +15,7 @@ voice = ["enton-adapters/voice"]
 shared-runtime = ["enton-adapters/shared-runtime"]
 
 [dependencies]
-enton-adapters = { workspace = true, features = ["cortex", "soul"] }
+enton-adapters = { workspace = true, features = ["cortex", "local-time", "soul"] }
 enton-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true

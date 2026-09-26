@@ -118,7 +118,7 @@ fn tv_clause(context: &Context) -> String {
     }
 }
 
-// `Abstention` is not `#[non_exhaustive]`, so a wildcard after its twelve variants is
+// `Abstention` is not `#[non_exhaustive]`, so a wildcard after its fifteen variants is
 // unreachable today. It stays so that `enton why` keeps compiling, with a generic
 // line, while the core grows a new abstention.
 #[allow(unreachable_patterns)]
@@ -210,6 +210,16 @@ fn abstention_cause(
             "the body was in torpor (fever or a low battery), and then only a call by name buys a thought"
                 .to_owned()
         }
+        _ => held_back(profile, why),
+    }
+}
+
+/// What held back a thought of Enton's own: the owner's quiet, the quiet hours, the
+/// checklist, nobody home, the cortex backing off, or a drive's intent running out.
+// The wildcard is unreachable today for the same reason as in `abstention_cause`.
+#[allow(unreachable_patterns)]
+fn held_back(profile: &Profile, why: Abstention) -> String {
+    match why {
         Abstention::NothingToCheck => {
             "a drive was ready, but the checklist (CHECKLIST.md) held nothing to bring up".to_owned()
         }
@@ -219,6 +229,17 @@ fn abstention_cause(
         ),
         Abstention::Backoff => {
             "nobody called Enton, and the cortex had just failed, so thoughts of its own waited out a backoff"
+                .to_owned()
+        }
+        Abstention::Quiet => {
+            "nobody called Enton, and the owner had asked for quiet, so thoughts of its own waited"
+                .to_owned()
+        }
+        Abstention::QuietHours => {
+            "nobody called Enton, and it was the quiet hours, so thoughts of its own waited".to_owned()
+        }
+        Abstention::Expired => {
+            "a drive held its intent through a conversation, and neither a request to ride nor a turn of its own came in time, so it let go"
                 .to_owned()
         }
         _ => "the reducer gave no reason this version of enton why can explain".to_owned(),

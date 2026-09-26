@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use enton_adapters::checklist::{self, Checklist, ChecklistWatcher};
 use enton_adapters::cortex::OpenAiCortex;
+use enton_adapters::initiative::{QuietHours, QuietHoursWatcher, quiet_command, without_ride};
 #[cfg(feature = "voice")]
 use enton_adapters::voice::{
     PlaybackEvent, UtteranceId, VoiceConfig, VoiceEngine, VoiceModel, VoicePlayer, speakable,
@@ -33,7 +34,12 @@ pub(crate) fn user_turn(request: &ThoughtRequest) -> Option<String> {
     if may_stay_silent(request) {
         None
     } else {
-        request.transcript.clone()
+        // A riding drive's line is the checklist, which the owner did not say either.
+        request
+            .transcript
+            .as_deref()
+            .and_then(without_ride)
+            .map(str::to_owned)
     }
 }
 
@@ -219,6 +225,12 @@ fn report_checklist(watcher: &ChecklistWatcher, checklist: &Checklist) {
 pub(crate) fn spawn_timer_task(tx: mpsc::Sender<LoopMessage>, clock: MonotonicClock) {
     tokio::spawn(async move {
         let mut checklist = Some(ChecklistWatcher::new(checklist::default_path()));
+        // The quiet hours follow the local clock; the core hears only their edges.
+        let mut quiet_hours =
+            QuietHoursWatcher::new(QuietHours::configured().unwrap_or_else(|error| {
+                eprintln!("[enton] {error}; using {}", QuietHours::DEFAULT);
+                Some(QuietHours::DEFAULT)
+            }));
         let mut body_counter: u32 = 0;
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         loop {
@@ -238,6 +250,18 @@ pub(crate) fn spawn_timer_task(tx: mpsc::Sender<LoopMessage>, clock: MonotonicCl
                         checklist = Some(watcher);
                     }
                     Err(error) => eprintln!("checklist worker failed: {error}"),
+                }
+            }
+            if body_counter == 0
+                && let Some(active) = quiet_hours.poll()
+            {
+                eprintln!("[enton] {}", quiet_hours.describe(active));
+                let event = Event::QuietHours {
+                    now: clock.now(),
+                    active,
+                };
+                if tx.send(LoopMessage::Event(event)).await.is_err() {
+                    break;
                 }
             }
             let now = clock.now();
@@ -306,6 +330,20 @@ pub(crate) fn spawn_stdin_task(tx: mpsc::Sender<LoopMessage>, clock: MonotonicCl
                     // Receiver closed; main loop is terminating.
                 }
                 return;
+            }
+            // "Enton, silêncio" is an instruction, not a request: it reaches the core as a
+            // quiet command in place of its cue, so it buys no thought (enton_adapters::initiative).
+            if let Some(command) = quiet_command(trimmed) {
+                eprintln!("[enton] {command}");
+                let now = clock.now();
+                let until = command.until(now);
+                if tx
+                    .blocking_send(LoopMessage::Event(Event::Quiet { now, until }))
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
             }
             let cue = speech_cue(trimmed);
             let event = Event::Speech {

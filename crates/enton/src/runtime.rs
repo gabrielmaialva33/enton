@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use enton_adapters::checklist::Checklist;
 use enton_adapters::cortex::OpenAiCortex;
+use enton_adapters::initiative::with_ride;
 #[cfg(feature = "voice")]
 use enton_adapters::voice::{UtteranceId, VoicePlayer};
 use enton_adapters::{MonotonicClock, SeqNo};
@@ -355,7 +356,10 @@ impl RuntimeState {
             flush_stdout();
             match action {
                 Action::Think {
-                    thought, reason, ..
+                    thought,
+                    reason,
+                    rider,
+                    ..
                 } => {
                     self.abandon_in_flight("superseded").await?;
                     // Recorded before the effect, so a crash mid-call leaves a row to reconcile.
@@ -378,6 +382,9 @@ impl RuntimeState {
                         self.attended_transcript = None;
                         heard
                     };
+                    // A drive's deferred intent riding this answer adds one line to it.
+                    let transcript =
+                        with_ride(transcript, rider.as_deref(), self.checklist.as_deref());
 
                     let request = ThoughtRequest {
                         thought,

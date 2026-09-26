@@ -48,6 +48,7 @@ fn speech(now: u64, keyword: bool, duration_ms: u32) -> Event {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     }
 }

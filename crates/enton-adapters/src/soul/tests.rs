@@ -198,6 +198,7 @@ fn keyword_speech(now: u64) -> Event {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     }
 }

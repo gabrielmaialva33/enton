@@ -407,6 +407,7 @@ mod tests {
                     speaker_sim: None,
                     media: None,
                     turn_complete: None,
+                    directed: None,
                 },
             },
             input_end_time: Instant::now(),

@@ -7,8 +7,10 @@
 //!
 //! Only what the soul stores is shown: cue measurements, decisions, the
 //! evidence recomputed from those measurements with the profile's calibration,
-//! the organism's own state, and how recorded thoughts resolved. The soul keeps
-//! no transcripts, and the text of Enton's replies is never read back here.
+//! the organism's own state, how recorded thoughts resolved, and the persona
+//! each was asked with (a hash, since the soul never keeps the persona's text).
+//! The soul keeps no transcripts, and the text of Enton's replies is never read
+//! back here.
 
 mod audit;
 mod explain;
@@ -31,6 +33,19 @@ pub(crate) enum WhyError {
     /// The log does not exist.
     #[error("no soul at {}: Enton has not recorded anything there yet", .0.display())]
     Missing(PathBuf),
+    /// The log was written with an older schema, which only a live run migrates.
+    #[error(
+        "the soul at {} has schema {found}, older than this enton's {expected}: run enton on it once to migrate it (enton why only reads)",
+        path.display()
+    )]
+    OldSchema {
+        /// The log.
+        path: PathBuf,
+        /// Its schema version.
+        found: u32,
+        /// The version this build reads.
+        expected: u32,
+    },
     /// The log exists but could not be opened or replayed.
     #[error("cannot replay the soul at {}: {source}", path.display())]
     Soul {

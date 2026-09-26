@@ -12,6 +12,7 @@ pub(super) fn explain(record: &CueRecord, profile: &Profile) -> String {
             salience,
             propensity,
             fate,
+            ..
         } => {
             let cause = if *reason == Reason::Keyword {
                 if record.cue.keyword {
@@ -117,7 +118,7 @@ fn tv_clause(context: &Context) -> String {
     }
 }
 
-// `Abstention` is not `#[non_exhaustive]`, so a wildcard after its nine variants is
+// `Abstention` is not `#[non_exhaustive]`, so a wildcard after its twelve variants is
 // unreachable today. It stays so that `enton why` keeps compiling, with a generic
 // line, while the core grows a new abstention.
 #[allow(unreachable_patterns)]
@@ -209,6 +210,17 @@ fn abstention_cause(
             "the body was in torpor (fever or a low battery), and then only a call by name buys a thought"
                 .to_owned()
         }
+        Abstention::NothingToCheck => {
+            "a drive was ready, but the checklist (CHECKLIST.md) held nothing to bring up".to_owned()
+        }
+        Abstention::NobodyHome => format!(
+            "nobody called Enton, and the owner had not been heard in the last {}, so nobody was home to hear a thought of its own",
+            duration(profile.discretion.presence_window_ms)
+        ),
+        Abstention::Backoff => {
+            "nobody called Enton, and the cortex had just failed, so thoughts of its own waited out a backoff"
+                .to_owned()
+        }
         _ => "the reducer gave no reason this version of enton why can explain".to_owned(),
     }
 }
@@ -283,6 +295,7 @@ mod tests {
             evidence,
             context: quiet_context(),
             then: None,
+            cut_off: false,
             explanation: String::new(),
         }
     }
@@ -404,6 +417,8 @@ mod tests {
             salience: 1.6,
             propensity: None,
             fate,
+            persona: None,
+            persona_changed: None,
         };
         let failed = record(
             name_alone(),
@@ -446,6 +461,8 @@ mod tests {
                 fate: Some(Fate::Done {
                     reply_chars: Some(12),
                 }),
+                persona: None,
+                persona_changed: None,
             },
             SensorEvidence::default(),
         );

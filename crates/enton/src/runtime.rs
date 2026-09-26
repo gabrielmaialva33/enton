@@ -1,21 +1,26 @@
 //! The event loop: record each event in the soul, reduce it, act on the decisions.
 
-use std::collections::VecDeque;
 use std::io::Write;
 #[cfg(feature = "voice")]
 use std::sync::Arc;
 use std::time::Instant;
 
+use enton_adapters::checklist::Checklist;
 use enton_adapters::cortex::OpenAiCortex;
 #[cfg(feature = "voice")]
 use enton_adapters::voice::{UtteranceId, VoicePlayer};
 use enton_adapters::{MonotonicClock, SeqNo};
 use enton_core::ports::{ConversationTurn, ThoughtRequest};
-use enton_core::{Action, Event, Organism, ThoughtId};
+use enton_core::{Action, Event, Organism, Reason, ThoughtId};
 use tokio::sync::mpsc;
 
+use crate::conversation::Conversation;
+#[cfg(feature = "voice")]
+use crate::conversation::Heard;
 use crate::journal::{Journal, JournalError};
-use crate::tasks::spawn_cortex_think;
+#[cfg(feature = "voice")]
+use crate::tasks::user_turn;
+use crate::tasks::{drive_prompt, spawn_cortex_think};
 
 /// Snapshot the organism after this many recorded events (about ten minutes of ticks).
 pub(crate) const SNAPSHOT_EVERY: u32 = 600;
@@ -34,14 +39,24 @@ pub(crate) enum LoopMessage {
     PlaybackStarted {
         id: UtteranceId,
     },
+    /// An utterance ended: played to its end, or cut off (`interrupted`).
     #[cfg(feature = "voice")]
     PlaybackFinished {
         id: UtteranceId,
+        interrupted: bool,
     },
     #[cfg(feature = "voice")]
     PlaybackFailed {
         id: UtteranceId,
         reason: String,
+    },
+    /// A sentence of `thought`'s reply went to the voice, as `utterance` (`None` when
+    /// it had nothing to say out loud or the player refused it).
+    #[cfg(feature = "voice")]
+    Sentence {
+        thought: ThoughtId,
+        text: String,
+        utterance: Option<UtteranceId>,
     },
     CortexFinished {
         thought: ThoughtId,
@@ -49,6 +64,8 @@ pub(crate) enum LoopMessage {
         user_prompt: Option<String>,
         outcome: Outcome,
     },
+    /// The owner's checklist was read: at startup, and whenever it changed.
+    Checklist(Checklist),
     Quit,
 }
 
@@ -59,21 +76,39 @@ pub(crate) fn flush_stdout() {
     }
 }
 
+/// Enton's voice: the player, and whether it chimes while it waits for the rest of a
+/// request.
+#[cfg(feature = "voice")]
+pub(crate) struct Voice {
+    pub(crate) player: Arc<VoicePlayer>,
+    /// Play the acknowledgement chime on `Attend`.
+    pub(crate) chime: bool,
+}
+
 pub(crate) struct RuntimeState {
     organism: Organism,
     clock: MonotonicClock,
     cortex: OpenAiCortex,
     #[cfg(feature = "voice")]
-    voice_player: Option<Arc<VoicePlayer>>,
+    voice: Option<Voice>,
+    /// What the owner heard of the replies spoken aloud.
+    #[cfg(feature = "voice")]
+    heard: Heard,
+    /// The last acknowledgement chime, to tell its playback from speech.
+    #[cfg(feature = "voice")]
+    chime: Option<UtteranceId>,
     last_transcript: Option<String>,
     attended_transcript: Option<String>,
-    history: VecDeque<ConversationTurn>,
+    conversation: Conversation,
     pending_first_audio_timer: Option<Instant>,
     active_cortex_task: Option<tokio::task::JoinHandle<()>>,
     in_flight_thought: Option<ThoughtId>,
     journal: Option<Journal>,
     last_seq: Option<SeqNo>,
     unsnapshotted: u32,
+    /// The checklist's text while it holds something to check: what a drive thought
+    /// brings to the cortex. The core only ever learns whether there is one.
+    checklist: Option<String>,
 }
 
 impl RuntimeState {
@@ -82,7 +117,7 @@ impl RuntimeState {
         organism: Organism,
         clock: MonotonicClock,
         cortex: OpenAiCortex,
-        #[cfg(feature = "voice")] voice_player: Option<Arc<VoicePlayer>>,
+        #[cfg(feature = "voice")] voice: Option<Voice>,
         journal: Option<Journal>,
     ) -> Self {
         Self {
@@ -90,16 +125,21 @@ impl RuntimeState {
             clock,
             cortex,
             #[cfg(feature = "voice")]
-            voice_player,
+            voice,
+            #[cfg(feature = "voice")]
+            heard: Heard::default(),
+            #[cfg(feature = "voice")]
+            chime: None,
             last_transcript: None,
             attended_transcript: None,
-            history: VecDeque::with_capacity(32),
+            conversation: Conversation::default(),
             pending_first_audio_timer: None,
             active_cortex_task: None,
             in_flight_thought: None,
             journal,
             last_seq: None,
             unsnapshotted: 0,
+            checklist: None,
         }
     }
 
@@ -135,11 +175,9 @@ impl RuntimeState {
             .any(|a| matches!(a, Action::Think { .. } | Action::Attend { .. }));
 
         if is_accepted {
-            self.abandon_in_flight("superseded").await?;
             #[cfg(feature = "voice")]
-            if let Some(ref player) = self.voice_player {
-                player.cancel();
-            }
+            self.cut_off();
+            self.abandon_in_flight("superseded").await?;
 
             self.pending_first_audio_timer = Some(input_end_time);
             let full_text = match self.attended_transcript.take() {
@@ -161,6 +199,8 @@ impl RuntimeState {
         outcome: Outcome,
         tx: &mpsc::Sender<LoopMessage>,
     ) -> Result<(), JournalError> {
+        // A thought superseded or cut off by a shutdown was abandoned (and resolved) when
+        // it was dropped: its late end is no outcome, so the core never hears of it.
         if self.in_flight_thought != Some(thought) {
             return Ok(());
         }
@@ -170,19 +210,44 @@ impl RuntimeState {
             .await?;
 
         if let Some(user_text) = user_prompt {
-            self.history.push_back(ConversationTurn::user(user_text));
+            self.conversation.push(ConversationTurn::user(user_text));
         }
-        self.history.push_back(ConversationTurn::assistant(&text));
-        while self.history.len() > 30 {
-            self.history.pop_front();
+        let said = !text.trim().is_empty();
+        if said {
+            // Whole, as the cortex wrote it; a spoken reply the owner cuts off is later
+            // cut down to what they heard.
+            self.conversation.push(ConversationTurn::assistant(&text));
         }
-
-        let reply = Event::CortexReply {
-            now: self.clock.now(),
+        #[cfg(feature = "voice")]
+        self.heard.finished(
             thought,
-            text,
+            said.then(|| self.conversation.newest()).flatten(),
+        );
+
+        let now = self.clock.now();
+        let outcome = if outcome.is_ok() {
+            Event::CortexReply { now, thought, text }
+        } else {
+            // A real failure: the core counts it and backs off discretionary thoughts.
+            Event::CortexFailed { now, thought }
         };
-        self.step_event(&reply, tx).await
+        self.step_event(&outcome, tx).await
+    }
+
+    /// Keep the checklist's text for drive thoughts, and tell the core only whether it
+    /// holds something to check.
+    async fn handle_checklist(
+        &mut self,
+        checklist: Checklist,
+        tx: &mpsc::Sender<LoopMessage>,
+    ) -> Result<(), JournalError> {
+        let actionable = checklist.is_actionable();
+        self.checklist = checklist.text().map(str::to_owned);
+        let event = Event::Checklist {
+            now: self.clock.now(),
+            actionable,
+        };
+        self.step_event(&event, tx).await
     }
 
     /// Handle one loop message; `Ok(false)` asks the loop to stop.
@@ -202,7 +267,15 @@ impl RuntimeState {
             }
             #[cfg(feature = "voice")]
             LoopMessage::PlaybackStarted { id } => {
-                if let Some(start_time) = self.pending_first_audio_timer.take() {
+                if self.chime == Some(id) {
+                    // The acknowledgement is not the answer: time it, and keep the
+                    // answer's timer running.
+                    if let Some(start_time) = self.pending_first_audio_timer {
+                        let ms = start_time.elapsed().as_secs_f64() * 1000.0;
+                        println!("[voice] Chime {ms:.1} ms after the name (utterance {id})");
+                        flush_stdout();
+                    }
+                } else if let Some(start_time) = self.pending_first_audio_timer.take() {
                     let elapsed = start_time.elapsed();
                     let ms = elapsed.as_secs_f64() * 1000.0;
                     println!("[voice] Time to first audio: {ms:.1} ms (utterance {id})");
@@ -215,10 +288,14 @@ impl RuntimeState {
                 self.step_event(&event, tx).await?;
             }
             #[cfg(feature = "voice")]
-            LoopMessage::PlaybackFinished { id } => {
+            LoopMessage::PlaybackFinished { id, interrupted } => {
+                if !interrupted {
+                    self.heard.ended(id, true);
+                }
                 let event = Event::PlaybackFinished {
                     now: self.clock.now(),
                     utterance: id,
+                    interrupted,
                 };
                 self.step_event(&event, tx).await?;
             }
@@ -226,12 +303,21 @@ impl RuntimeState {
             LoopMessage::PlaybackFailed { id, reason } => {
                 eprintln!("[enton-voice] utterance {id} failed: {reason}");
                 self.pending_first_audio_timer = None;
+                self.heard.ended(id, false);
+                // Not cut off: it failed, which the log above explains.
                 let event = Event::PlaybackFinished {
                     now: self.clock.now(),
                     utterance: id,
+                    interrupted: false,
                 };
                 self.step_event(&event, tx).await?;
             }
+            #[cfg(feature = "voice")]
+            LoopMessage::Sentence {
+                thought,
+                text,
+                utterance,
+            } => self.heard.sentence(thought, text, utterance),
             LoopMessage::Event(event) => {
                 self.step_event(&event, tx).await?;
             }
@@ -244,11 +330,14 @@ impl RuntimeState {
                 self.handle_cortex_finished(thought, text, user_prompt, outcome, tx)
                     .await?;
             }
+            LoopMessage::Checklist(checklist) => {
+                self.handle_checklist(checklist, tx).await?;
+            }
             LoopMessage::Quit => {
                 self.abandon_in_flight("shutdown").await?;
                 #[cfg(feature = "voice")]
-                if let Some(ref player) = self.voice_player {
-                    player.cancel();
+                if let Some(voice) = &self.voice {
+                    voice.player.cancel();
                 }
                 self.attended_transcript = None;
                 flush_stdout();
@@ -277,29 +366,44 @@ impl RuntimeState {
                     }
                     self.in_flight_thought = Some(thought);
 
-                    let user_prompt = self
-                        .last_transcript
-                        .take()
-                        .or_else(|| self.attended_transcript.take());
-                    self.attended_transcript = None;
+                    let transcript = if matches!(reason, Reason::Drive(_)) {
+                        // A drive brings up what is on the checklist, never speech heard
+                        // earlier, which stays with the turn it belongs to.
+                        self.checklist
+                            .as_deref()
+                            .map(|checklist| drive_prompt(&reason, checklist))
+                    } else {
+                        let heard = self
+                            .last_transcript
+                            .take()
+                            .or_else(|| self.attended_transcript.take());
+                        self.attended_transcript = None;
+                        heard
+                    };
 
                     let request = ThoughtRequest {
                         thought,
                         reason,
-                        transcript: user_prompt,
-                        history: self.history.iter().cloned().collect(),
+                        transcript,
+                        history: self.conversation.turns(),
                     };
 
+                    #[cfg(feature = "voice")]
+                    if self.voice.is_some() {
+                        self.heard.begin(thought, user_turn(&request));
+                    }
                     self.active_cortex_task = Some(spawn_cortex_think(
                         self.cortex.clone(),
                         #[cfg(feature = "voice")]
-                        self.voice_player.clone(),
+                        self.voice.as_ref().map(|voice| Arc::clone(&voice.player)),
                         request,
                         tx.clone(),
                     ));
                 }
                 Action::Attend { .. } => {
                     self.attended_transcript = self.last_transcript.take();
+                    #[cfg(feature = "voice")]
+                    self.acknowledge();
                 }
                 Action::Speak { .. } | Action::Abstain { .. } => {}
             }
@@ -313,8 +417,40 @@ impl RuntimeState {
             task.abort();
         }
         match self.in_flight_thought.take() {
-            Some(thought) => self.resolve(thought, Err(reason)).await,
+            Some(thought) => {
+                #[cfg(feature = "voice")]
+                self.heard.forget(thought);
+                self.resolve(thought, Err(reason)).await
+            }
             None => Ok(()),
+        }
+    }
+
+    /// The owner took the turn: stop speaking, and keep in the conversation only what
+    /// they heard of each reply cut off.
+    #[cfg(feature = "voice")]
+    fn cut_off(&mut self) {
+        let Some(voice) = &self.voice else {
+            return;
+        };
+        voice.player.cancel();
+        let player = &voice.player;
+        self.heard.cut(&mut self.conversation, |id| {
+            player
+                .stage_timings(id)
+                .is_some_and(|timings| timings.playback_finished.is_some())
+        });
+    }
+
+    /// Enton heard its name and waits for the rest: chime, so the owner knows it listens.
+    #[cfg(feature = "voice")]
+    fn acknowledge(&mut self) {
+        let Some(voice) = self.voice.as_ref().filter(|voice| voice.chime) else {
+            return;
+        };
+        match voice.player.chime() {
+            Ok(id) => self.chime = Some(id),
+            Err(err) => eprintln!("[enton-voice] chime not played: {err}"),
         }
     }
 
@@ -504,7 +640,10 @@ mod tests {
         let state = test_state(Organism::new(Profile::t1_ref()).unwrap(), None);
         #[cfg(feature = "voice")]
         let state = RuntimeState {
-            voice_player: Some(player),
+            voice: Some(Voice {
+                player,
+                chime: true,
+            }),
             ..state
         };
         run_event_loop(state, rx, tx).await.unwrap();
@@ -524,6 +663,11 @@ mod tests {
         )
     }
 
+    /// The persona of [`test_state`]'s cortex, which has the default configuration.
+    fn built_in_persona() -> enton_adapters::soul::PersonaDigest {
+        (&enton_adapters::cortex::Persona::built_in()).into()
+    }
+
     fn addressed_request() -> LoopMessage {
         let text = "Enton, que horas são?";
         LoopMessage::SpeechInput {
@@ -541,7 +685,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("enton-bin-crash-{}", std::process::id()));
         let path = dir.join("soul.sqlite");
         let profile = Profile::t1_ref();
-        let (journal, restored) = Journal::open(&path, &profile).unwrap();
+        let (journal, restored) = Journal::open(&path, &profile, built_in_persona()).unwrap();
         assert!(restored.abandoned.is_empty());
         let (tx, _rx) = mpsc::channel(8);
         let mut state = test_state(restored.organism, Some(journal));
@@ -557,7 +701,7 @@ mod tests {
         state.active_cortex_task.take().unwrap().abort();
         state.journal.take().unwrap().close().await.unwrap();
 
-        let (_journal, restored) = Journal::open(&path, &profile).unwrap();
+        let (_journal, restored) = Journal::open(&path, &profile, built_in_persona()).unwrap();
         assert_eq!(restored.organism, before);
         assert_eq!(restored.organism.last_seen(), enton_core::Millis(1_000));
         assert_eq!(restored.abandoned, vec![thought]);
@@ -569,7 +713,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("enton-bin-quit-{}", std::process::id()));
         let path = dir.join("soul.sqlite");
         let profile = Profile::t1_ref();
-        let (journal, restored) = Journal::open(&path, &profile).unwrap();
+        let (journal, restored) = Journal::open(&path, &profile, built_in_persona()).unwrap();
         let (tx, _rx) = mpsc::channel(8);
         let mut state = test_state(restored.organism, Some(journal));
 
@@ -581,7 +725,7 @@ mod tests {
         let before = state.organism.clone();
         state.close_journal().await.unwrap();
 
-        let (_journal, restored) = Journal::open(&path, &profile).unwrap();
+        let (_journal, restored) = Journal::open(&path, &profile, built_in_persona()).unwrap();
         assert_eq!(restored.organism, before);
         assert!(restored.abandoned.is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
@@ -603,7 +747,13 @@ mod tests {
 
         // 2. PlaybackFinished forwards to core and transitions from speaking to hangover
         state
-            .handle_message(LoopMessage::PlaybackFinished { id: UtteranceId(1) }, &tx)
+            .handle_message(
+                LoopMessage::PlaybackFinished {
+                    id: UtteranceId(1),
+                    interrupted: false,
+                },
+                &tx,
+            )
             .await
             .unwrap();
         assert!(!state.organism.is_speaking());
@@ -629,5 +779,178 @@ mod tests {
             .unwrap();
         assert!(!state.organism.is_speaking());
         assert!(state.organism.is_hangover());
+    }
+}
+
+/// What reaches the core when a thought ends: a reply, a real failure, or nothing at all
+/// for a thought that was dropped; and what a drive thought brings to the cortex.
+#[cfg(test)]
+mod outcome_tests {
+    use super::*;
+    use crate::tasks::speech_cue;
+    use enton_core::{Millis, Profile};
+
+    fn state(profile: Profile) -> RuntimeState {
+        RuntimeState::new(
+            Organism::new(profile).unwrap(),
+            MonotonicClock::new(),
+            OpenAiCortex::with_endpoint("http://127.0.0.1:9", "unused"),
+            #[cfg(feature = "voice")]
+            None,
+            None,
+        )
+    }
+
+    fn typed(text: &str, now: u64) -> LoopMessage {
+        LoopMessage::SpeechInput {
+            text: text.to_owned(),
+            event: Event::Speech {
+                now: Millis(now),
+                cue: speech_cue(text),
+            },
+            input_end_time: Instant::now(),
+        }
+    }
+
+    fn finished(thought: u64, text: &str, outcome: Outcome) -> LoopMessage {
+        LoopMessage::CortexFinished {
+            thought: ThoughtId(thought),
+            text: text.to_owned(),
+            user_prompt: None,
+            outcome,
+        }
+    }
+
+    /// Stop the real call the dispatch started, so only the test's outcomes arrive.
+    fn stop_the_call(state: &mut RuntimeState) {
+        if let Some(task) = state.active_cortex_task.take() {
+            task.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_real_failure_reaches_the_core_and_backs_off() {
+        let (tx, _rx) = mpsc::channel(8);
+        let mut state = state(Profile::t1_ref());
+        state
+            .handle_message(typed("Enton, que horas são?", 1_000), &tx)
+            .await
+            .unwrap();
+        assert_eq!(state.in_flight_thought, Some(ThoughtId(1)));
+        stop_the_call(&mut state);
+        state
+            .handle_message(
+                finished(1, "(cortex offline in scaffold)", Err("cortex unavailable")),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(state.organism.cortex_failures(), 1);
+        assert!(state.organism.backoff_until().is_some());
+        assert_eq!(state.organism.conversation_thought(), None);
+    }
+
+    #[tokio::test]
+    async fn a_superseded_or_shut_down_thought_is_no_failure() {
+        let (tx, _rx) = mpsc::channel(8);
+        let mut state = state(Profile::t1_ref());
+        state
+            .handle_message(typed("Enton, que horas são?", 1_000), &tx)
+            .await
+            .unwrap();
+        stop_the_call(&mut state);
+        // The owner asks again before the answer: the first thought is dropped.
+        state
+            .handle_message(typed("Enton, e amanhã, vai chover?", 3_000), &tx)
+            .await
+            .unwrap();
+        assert_eq!(state.in_flight_thought, Some(ThoughtId(2)));
+        stop_the_call(&mut state);
+        // Its late end, even a failed one, is no outcome.
+        state
+            .handle_message(finished(1, "", Err("cortex unavailable")), &tx)
+            .await
+            .unwrap();
+        assert_eq!(state.organism.cortex_failures(), 0);
+        // The newer thought's reply is one, and nothing failed.
+        state
+            .handle_message(finished(2, "Não deve chover.", Ok(())), &tx)
+            .await
+            .unwrap();
+        assert_eq!(state.organism.cortex_failures(), 0);
+        assert_eq!(state.in_flight_thought, None);
+
+        // A thought cut off by a shutdown did not fail either.
+        state
+            .handle_message(typed("Enton, conta uma piada.", 20_000), &tx)
+            .await
+            .unwrap();
+        stop_the_call(&mut state);
+        assert!(!state.handle_message(LoopMessage::Quit, &tx).await.unwrap());
+        assert_eq!(state.organism.cortex_failures(), 0);
+    }
+
+    #[tokio::test]
+    async fn the_checklist_reaches_the_core_as_a_flag_and_a_drive_as_its_prompt() {
+        let (tx, _rx) = mpsc::channel(8);
+        let mut profile = Profile::t1_ref();
+        profile.ignition.threshold = 0.01;
+        profile.ignition.hysteresis = 0.002;
+        profile.ignition.ema_alpha = 1.0;
+        let mut state = state(profile);
+        state
+            .handle_message(LoopMessage::Checklist(Checklist::Empty), &tx)
+            .await
+            .unwrap();
+        assert!(!state.organism.checklist_actionable());
+        assert_eq!(state.checklist, None);
+        let text = "# Hoje\n- [ ] regar as plantas\n";
+        state
+            .handle_message(
+                LoopMessage::Checklist(Checklist::Actionable(text.to_owned())),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(state.organism.checklist_actionable());
+        assert_eq!(state.checklist.as_deref(), Some(text));
+
+        // The owner is home: they asked something, and the answer came.
+        state
+            .handle_message(typed("Enton, bom dia!", 1_000), &tx)
+            .await
+            .unwrap();
+        stop_the_call(&mut state);
+        state
+            .handle_message(finished(1, "Bom dia!", Ok(())), &tx)
+            .await
+            .unwrap();
+        let history = state.conversation.len();
+
+        // Half an hour later a drive asks, with the checklist as its prompt.
+        state
+            .handle_message(
+                LoopMessage::Event(Event::Tick {
+                    now: Millis(1_600_000),
+                }),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(state.in_flight_thought, Some(ThoughtId(2)));
+        assert_eq!(
+            state.organism.drive_thought(),
+            Some((ThoughtId(2), "curiosity"))
+        );
+        stop_the_call(&mut state);
+        // Nothing needed saying: silence answers the drive, fails nothing, and leaves the
+        // conversation history as it was.
+        state
+            .handle_message(finished(2, "", Ok(())), &tx)
+            .await
+            .unwrap();
+        assert_eq!(state.organism.drive_thought(), None);
+        assert_eq!(state.organism.cortex_failures(), 0);
+        assert_eq!(state.conversation.len(), history);
     }
 }

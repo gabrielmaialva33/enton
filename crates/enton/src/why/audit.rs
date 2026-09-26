@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::path::Path;
 
+use enton_adapters::soul::{PersonaRecord, PersonaSource};
 use enton_adapters::{ActionStatus, SeqNo, Soul, SoulConfig, soul};
 use enton_core::{
     Action, Budget, Event, Millis, Organism, PlaybackStatus, Profile, Reason, Senses, SpeechCue,
@@ -33,6 +34,9 @@ pub(super) struct Report {
     pub(super) last_event_ms: u64,
     /// How many speech cues were replayed.
     pub(super) speech_cues: u64,
+    /// Every persona a recorded thought was asked with, in the order they were
+    /// first used.
+    pub(super) personas: Vec<PersonaShown>,
     /// The cues shown, oldest first.
     pub(super) cues: Vec<CueRecord>,
     /// The `--since` window, if one was given.
@@ -54,6 +58,10 @@ pub(super) struct CueRecord {
     /// For an `Attend`: how the wait for the rest of the request ended.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) then: Option<Then>,
+    /// Whether Enton, speaking, stopped for this cue: an utterance of its was cut off
+    /// right after it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(super) cut_off: bool,
     pub(super) explanation: String,
 }
 
@@ -73,6 +81,14 @@ pub(super) enum Decision {
         /// How the thought resolved, from the soul's action records.
         #[serde(skip_serializing_if = "Option::is_none")]
         fate: Option<Fate>,
+        /// The persona the thought was asked with; `None` when the soul holds
+        /// none for it (the thought predates persona records, or was never
+        /// recorded).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        persona: Option<Box<PersonaShown>>,
+        /// Set when the thought before it was asked with another persona.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        persona_changed: Option<Box<PersonaChange>>,
     },
     /// Enton waited for the rest of a request.
     Attend { until_ms: u64 },
@@ -102,6 +118,54 @@ pub(super) enum Fate {
     Pending,
     /// The soul holds no record of the thought.
     Unrecorded,
+}
+
+/// A persona, as the soul recorded it: never its text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PersonaShown {
+    /// SHA-256 of the persona's bytes, in hex; for a file, what `sha256sum` prints.
+    pub(super) sha256: String,
+    /// The first digits of that hash, as the startup line shows them.
+    #[serde(skip)]
+    pub(super) short: String,
+    /// The length of those bytes.
+    pub(super) bytes: u64,
+    pub(super) source: PersonaOrigin,
+    /// The event the first thought asked with it was decided at.
+    pub(super) first_seq: SeqNo,
+}
+
+/// Whether a persona was the built-in default or a file the owner wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PersonaOrigin {
+    BuiltIn,
+    File,
+}
+
+impl From<PersonaRecord> for PersonaShown {
+    fn from(record: PersonaRecord) -> Self {
+        let digest = record.digest;
+        Self {
+            sha256: digest.hex(),
+            short: digest.short_hex(),
+            bytes: digest.bytes,
+            source: match digest.source {
+                PersonaSource::BuiltIn => PersonaOrigin::BuiltIn,
+                PersonaSource::File => PersonaOrigin::File,
+            },
+            first_seq: record.first_seq,
+        }
+    }
+}
+
+/// The persona of the thought before, when it differs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PersonaChange {
+    /// The thought before.
+    pub(super) thought: u64,
+    /// The persona it was asked with.
+    pub(super) persona: PersonaShown,
 }
 
 /// How an `Attend` ended.
@@ -244,6 +308,8 @@ fn decision(action: Option<&Action>) -> Decision {
             salience: *salience,
             propensity,
             fate: None,
+            persona: None,
+            persona_changed: None,
         }
     } else if let Action::Attend { until, .. } = action {
         Decision::Attend { until_ms: until.0 }
@@ -278,6 +344,9 @@ struct Recorder {
     tv_on_since: Option<Millis>,
     /// The cue whose `Attend` is still waiting for the rest of its request.
     waiting: Option<SeqNo>,
+    /// The last cue that took the turn (a thought or a wait): the runtime stops Enton's
+    /// voice for such a cue, so an utterance cut off after it was cut for it.
+    took_turn: Option<SeqNo>,
 }
 
 impl Recorder {
@@ -291,6 +360,7 @@ impl Recorder {
             last_seq: None,
             tv_on_since: None,
             waiting: None,
+            took_turn: None,
         }
     }
 
@@ -303,6 +373,12 @@ impl Recorder {
         let waiting_before = organism.is_attending();
 
         let Event::Speech { cue, .. } = event else {
+            if let Event::PlaybackFinished {
+                interrupted: true, ..
+            } = event
+            {
+                self.cut_off_by(self.took_turn);
+            }
             let actions = organism.step(event);
             if waiting_before && !organism.is_attending() {
                 // Only a tick ends the wait on its own: the name alone is decided on.
@@ -351,6 +427,9 @@ impl Recorder {
         if attends {
             self.waiting = Some(seq);
         }
+        if matches!(decision, Decision::Think { .. } | Decision::Attend { .. }) {
+            self.took_turn = Some(seq);
+        }
 
         self.speech_cues += 1;
         self.cues.push_back(CueRecord {
@@ -362,10 +441,18 @@ impl Recorder {
             evidence,
             context,
             then: None,
+            cut_off: false,
             explanation: String::new(),
         });
         if self.cues.len() > self.keep {
             self.cues.pop_front();
+        }
+    }
+
+    /// Record that the cue at `seq`, if it is still kept, cut Enton off.
+    fn cut_off_by(&mut self, seq: Option<SeqNo>) {
+        if let Some(record) = self.cues.iter_mut().find(|record| Some(record.seq) == seq) {
+            record.cut_off = true;
         }
     }
 
@@ -404,7 +491,16 @@ pub(super) fn audit(
         path: path.to_path_buf(),
         source,
     };
-    let soul = Soul::open_read_only(path, SoulConfig::default()).map_err(failed)?;
+    let soul = Soul::open_read_only(path, SoulConfig::default()).map_err(|err| match err {
+        soul::Error::UnsupportedSchema { found, expected } if found < expected => {
+            WhyError::OldSchema {
+                path: path.to_path_buf(),
+                found,
+                expected,
+            }
+        }
+        other => failed(other),
+    })?;
     let (mut organism, start) = soul.earliest_organism(profile).map_err(failed)?;
 
     let mut recorder = Recorder::new(last);
@@ -429,18 +525,18 @@ pub(super) fn audit(
     let last_event = organism.last_seen();
     let mut cues = recorder.finish(last_event, since_ms);
     for record in &mut cues {
-        if let Decision::Think { thought, fate, .. } = &mut record.decision {
-            *fate = Some(fate_of(&soul, *thought).map_err(failed)?);
-        }
-        if let Some(Then::Timeout {
-            decision: Decision::Think { thought, fate, .. },
-            ..
-        }) = &mut record.then
-        {
-            *fate = Some(fate_of(&soul, *thought).map_err(failed)?);
+        resolve(&soul, &mut record.decision).map_err(failed)?;
+        if let Some(Then::Timeout { decision, .. }) = &mut record.then {
+            resolve(&soul, decision).map_err(failed)?;
         }
         record.explanation = explain(record, profile);
     }
+    let personas = soul
+        .personas()
+        .map_err(failed)?
+        .into_iter()
+        .map(PersonaShown::from)
+        .collect();
 
     Ok(Report {
         soul: path.display().to_string(),
@@ -451,9 +547,41 @@ pub(super) fn audit(
         last_seq,
         last_event_ms: last_event.0,
         speech_cues,
+        personas,
         cues,
         since_ms,
     })
+}
+
+/// Fill in what the soul recorded about a thought: how it resolved, the
+/// persona it was asked with, and whether that persona differs from the one
+/// the thought before was asked with.
+fn resolve(soul: &Soul, decision: &mut Decision) -> Result<(), soul::Error> {
+    let Decision::Think {
+        thought,
+        fate,
+        persona,
+        persona_changed,
+        ..
+    } = decision
+    else {
+        return Ok(());
+    };
+    *fate = Some(fate_of(soul, *thought)?);
+    let Some(record) = soul.thought_persona(ThoughtId(*thought))? else {
+        return Ok(());
+    };
+    *persona_changed = match soul.thought_before(ThoughtId(*thought))? {
+        Some((before, Some(previous))) if previous.digest != record.digest => {
+            Some(Box::new(PersonaChange {
+                thought: before.0,
+                persona: previous.into(),
+            }))
+        }
+        _ => None,
+    };
+    *persona = Some(Box::new(record.into()));
+    Ok(())
 }
 
 /// The small result a resolved thought was stored with.
@@ -621,6 +749,56 @@ mod tests {
             "Waited (Attend): Enton heard its name and waited up to 5.0 s for the rest of the request; it was still waiting at the last recorded event."
         );
         assert_eq!(recorder_counts(&events), (7, 4));
+    }
+
+    #[test]
+    fn the_cue_that_cut_enton_off_says_so() {
+        let request = SpeechCue {
+            energy: 0.9,
+            duration_ms: 1_500,
+            vad_confidence: 0.95,
+            keyword: true,
+            ..SpeechCue::default()
+        };
+        let finished = |now: u64, utterance: u64, interrupted: bool| Event::PlaybackFinished {
+            now: Millis(now),
+            utterance: enton_core::UtteranceId(utterance),
+            interrupted,
+        };
+        let events = [
+            speech(1_000, request),
+            Event::PlaybackStarted {
+                now: Millis(3_000),
+                utterance: enton_core::UtteranceId(1),
+            },
+            finished(4_000, 1, false),
+            Event::PlaybackStarted {
+                now: Millis(4_010),
+                utterance: enton_core::UtteranceId(2),
+            },
+            // The owner calls again over the second sentence: it is cut, and so is the
+            // third, which never started.
+            speech(5_000, request),
+            finished(5_010, 2, true),
+            finished(5_010, 3, true),
+        ];
+        let (recorder, organism) = replay(&events).unwrap();
+        let cues = recorder.finish(organism.last_seen(), None);
+        assert!(!cues[0].cut_off);
+        assert!(cues[1].context.enton_speaking);
+        assert!(matches!(
+            cues[1].decision,
+            Decision::Think { thought: 2, .. }
+        ));
+        assert!(cues[1].cut_off);
+        let json = serde_json::to_value(&cues[1]).unwrap();
+        assert_eq!(json["cut_off"], serde_json::Value::Bool(true));
+        assert!(
+            serde_json::to_value(&cues[0])
+                .unwrap()
+                .get("cut_off")
+                .is_none()
+        );
     }
 
     #[test]

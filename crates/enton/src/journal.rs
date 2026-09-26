@@ -9,6 +9,7 @@
 use std::path::Path;
 use std::thread::JoinHandle;
 
+use enton_adapters::soul::PersonaDigest;
 use enton_adapters::{SeqNo, Soul, SoulConfig, soul};
 use enton_core::{Event, Organism, Profile, ThoughtId};
 use tokio::sync::{mpsc, oneshot};
@@ -78,10 +79,16 @@ pub(crate) struct Journal {
 
 impl Journal {
     /// Open (or create) the soul at `path`, abandon thoughts a crash left
-    /// pending, restore the organism for `profile` and start the worker.
+    /// pending, restore the organism for `profile` and start the worker. Every
+    /// thought recorded through this journal was asked with `persona`: the
+    /// cortex reads its persona once, at startup, and keeps it for the run.
     ///
     /// Blocking: call it from `spawn_blocking` or before the event loop runs.
-    pub(crate) fn open(path: &Path, profile: &Profile) -> Result<(Self, Restored), JournalError> {
+    pub(crate) fn open(
+        path: &Path,
+        profile: &Profile,
+        persona: PersonaDigest,
+    ) -> Result<(Self, Restored), JournalError> {
         if let Some(directory) = path.parent() {
             std::fs::create_dir_all(directory).map_err(soul::Error::from)?;
         }
@@ -100,7 +107,7 @@ impl Journal {
         let (requests, inbox) = mpsc::channel(QUEUE);
         let worker = std::thread::Builder::new()
             .name("enton-soul".to_owned())
-            .spawn(move || serve(&soul, inbox))
+            .spawn(move || serve(&soul, &persona, inbox))
             .map_err(soul::Error::from)?;
         let journal = Self {
             requests: Some(requests),
@@ -121,7 +128,8 @@ impl Journal {
         self.call(|reply| Request::Append { event, reply }).await
     }
 
-    /// Record that `thought`, decided at `at_seq`, is about to reach the cortex.
+    /// Record that `thought`, decided at `at_seq`, is about to reach the cortex
+    /// with the journal's persona.
     pub(crate) async fn pending(
         &self,
         thought: ThoughtId,
@@ -193,7 +201,7 @@ impl Journal {
     }
 }
 
-fn serve(soul: &Soul, mut inbox: mpsc::Receiver<Request>) {
+fn serve(soul: &Soul, persona: &PersonaDigest, mut inbox: mpsc::Receiver<Request>) {
     while let Some(request) = inbox.blocking_recv() {
         // A dropped reply means the caller stopped waiting; the write still happened.
         let _delivered = match request {
@@ -202,7 +210,9 @@ fn serve(soul: &Soul, mut inbox: mpsc::Receiver<Request>) {
                 thought,
                 at_seq,
                 reply,
-            } => reply.send(soul.record_pending(thought, at_seq)).is_ok(),
+            } => reply
+                .send(soul.record_pending(thought, at_seq, persona))
+                .is_ok(),
             Request::Resolve {
                 thought,
                 done,

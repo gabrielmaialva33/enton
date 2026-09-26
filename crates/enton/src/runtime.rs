@@ -965,6 +965,7 @@ mod heard_tests {
     use enton_core::{Millis, Profile};
 
     const ASKED: &str = "Enton, conta uma história.";
+    #[cfg(feature = "voice")]
     const REPLY: [&str; 2] = ["Era uma vez um robô.", "Ele morava num PC."];
     const WHOLE: &str = "Era uma vez um robô. Ele morava num PC.";
     /// Loud and addressed by name: it interrupts Enton mid-sentence.

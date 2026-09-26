@@ -64,7 +64,13 @@ jobs:
       - name: Install ALSA headers
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
+      # sherpa-onnx extracts its native libraries to target/sherpa-onnx-prebuilt,
+      # which the cache prunes as "not a dependency" while keeping the build
+      # script's fingerprint, so a restored target dir fails to link. Cache only
+      # the registry here; this job takes about two minutes cold.
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
 
       - name: Test (default features)
         run: cargo test --workspace

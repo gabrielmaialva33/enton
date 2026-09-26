@@ -1,0 +1,41 @@
+[package]
+name = "enton-adapters"
+description = "I/O adapters and physical interfaces for the Enton digital organism."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# Each I/O module is feature-gated so a lean profile (T1) builds only what it runs.
+soul = ["dep:rusqlite", "dep:serde_json"]
+cortex = ["dep:tokio", "dep:reqwest", "dep:serde_json"]
+audio = ["dep:cpal", "dep:sherpa-onnx"]
+voice = ["dep:cpal", "dep:sherpa-onnx"]
+voice-id = ["dep:sherpa-onnx"]
+# The shared-runtime feature uses sherpa-onnx's shared library. 
+# The .so/.dylib must be accessible via LD_LIBRARY_PATH (or in a standard system library dir).
+shared-runtime = ["sherpa-onnx?/shared"]
+
+[dependencies]
+enton-core.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
+serde_json = { version = "1", optional = true }
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"], optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"], optional = true }
+cpal = { version = "0.18", optional = true }
+sherpa-onnx = { version = "1.13", optional = true, default-features = false }
+
+[lints]
+workspace = true
+
+[[example]]
+name = "owner_probe"
+required-features = ["voice-id"]
+test = true
+

@@ -1,25 +1,23 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
+# Build output
+/target
+*.profraw
+*.profdata
 
 # Environment
 .env
+.env.*
+!.env.example
 
-# Model weights (download on first run)
+# Models live in ~/.cache/enton/models, never in the repository
 models/
-*.pt
 *.onnx
-*.engine
 
-# Enton memory (local data)
-# episodes.jsonl and profile.json live in ~/.enton/
+# Private data: the soul's event log, owner voiceprints and voice recordings
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.voiceprint
+*.wav
 
 # IDE
 .idea/

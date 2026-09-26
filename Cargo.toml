@@ -1,0 +1,64 @@
+[workspace]
+resolver = "3"
+members = ["crates/enton-core", "crates/enton-adapters", "crates/enton", "crates/enton-e1"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+authors = ["Gabriel Maia <gabrielmaialva33@gmail.com>"]
+repository = "https://github.com/gabrielmaialva33/enton"
+
+[workspace.dependencies]
+enton-core = { path = "crates/enton-core" }
+enton-adapters = { path = "crates/enton-adapters" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+# The quality bar lives in AGENTS.md. The gate runs clippy with
+# `-D warnings`, so every "warn" below blocks a merge. Tests may unwrap, expect
+# and index (see clippy.toml); binaries opt out of the print lints in main.rs.
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+# The RFC names its experiments E1a/E1b; this pedantic heuristic flags
+# `e1a_tape`/`e1b_tape` and pushed renames that hid the meaning.
+similar_names = "allow"
+# Library code never panics.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+indexing_slicing = "warn"
+# No swallowed errors, no debug leftovers, libraries do not print.
+let_underscore_must_use = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+# Async and lock hygiene.
+await_holding_lock = "warn"
+significant_drop_tightening = "warn"
+large_futures = "warn"
+# Needless work.
+redundant_clone = "warn"
+needless_collect = "warn"
+clone_on_ref_ptr = "warn"
+# Body signals and saliences are f32 by nature; converting time
+# counters to f32 is intentional and the precision loss does not matter here.
+cast_precision_loss = "allow"
+missing_errors_doc = "allow"
+
+# RFC 0001 §4 goal: core binary < 20 MB, with no native runtimes.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

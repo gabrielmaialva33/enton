@@ -55,6 +55,32 @@ pub fn is_actionable(text: &str) -> bool {
     text.lines().any(|line| !is_empty_line(line.trim()))
 }
 
+/// The lines of `text` that hold something to check, trimmed and without their list
+/// marker (`-`, `*`, `+`, `1.` or `1)` followed by a space): what a drive may bring up,
+/// one by one. A checkbox stays, so a ticked item still reads as done.
+pub fn items(text: &str) -> impl Iterator<Item = &str> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !is_empty_line(line))
+        .map(unmarked)
+}
+
+/// A trimmed line without its list marker, when it has one.
+fn unmarked(line: &str) -> &str {
+    let rest = if let Some(rest) = line.strip_prefix(['-', '*', '+']) {
+        Some(rest)
+    } else {
+        let number = line.trim_start_matches(|c: char| c.is_ascii_digit());
+        if number.len() < line.len() {
+            number.strip_prefix(['.', ')'])
+        } else {
+            None
+        }
+    };
+    rest.filter(|rest| rest.starts_with(char::is_whitespace))
+        .map_or(line, str::trim_start)
+}
+
 /// A trimmed line that carries nothing to check.
 fn is_empty_line(line: &str) -> bool {
     line.is_empty()
@@ -242,6 +268,24 @@ mod tests {
         ] {
             assert!(!is_actionable(empty), "{empty:?}");
         }
+    }
+
+    #[test]
+    fn items_are_the_lines_with_content_without_their_list_markers() {
+        let text = "# Hoje\n\n- [ ] regar as plantas\n* ligar para a mae\n  1. tomar o remedio\n\
+                    2) [x] pagar a luz\n- \n---\n1.5 kg de farinha\n-sem espaco\n<!-- nota -->\n";
+        assert_eq!(
+            items(text).collect::<Vec<_>>(),
+            [
+                "[ ] regar as plantas",
+                "ligar para a mae",
+                "tomar o remedio",
+                "[x] pagar a luz",
+                "1.5 kg de farinha",
+                "-sem espaco",
+            ]
+        );
+        assert_eq!(items("# only a heading\n- [ ]\n").count(), 0);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! I/O adapters and physical interfaces for the Enton digital organism.
 
 pub mod body;
+pub mod checklist;
 pub mod clock;
 
 #[cfg(feature = "audio")]

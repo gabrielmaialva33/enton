@@ -44,6 +44,7 @@ fn speech(now: u64, keyword: bool, duration_ms: u32) -> Event {
             vad_confidence: 0.91,
             duration_ms,
             keyword,
+            speaker_sim: None,
         },
     }
 }

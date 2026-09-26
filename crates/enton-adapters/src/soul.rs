@@ -807,6 +807,7 @@ mod tests {
                 duration_ms: 900,
                 vad_confidence: 0.9,
                 keyword: true,
+                speaker_sim: None,
             },
         }
     }

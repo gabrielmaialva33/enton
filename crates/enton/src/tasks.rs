@@ -167,6 +167,8 @@ pub(crate) fn speech_cue(line: &str) -> SpeechCue {
         vad_confidence: 1.0,
         keyword,
         speaker_sim: None,
+        media: None,
+        turn_complete: None,
     }
 }
 

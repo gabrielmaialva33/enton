@@ -405,6 +405,8 @@ mod tests {
                     duration_ms,
                     keyword,
                     speaker_sim: None,
+                    media: None,
+                    turn_complete: None,
                 },
             },
             input_end_time: Instant::now(),

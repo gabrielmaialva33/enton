@@ -116,6 +116,18 @@ enum Checklist {
     Actionable,
 }
 
+/// Whether the owner's quiet hours are on, as far as the core knows. The core has no
+/// wall clock: the adapter reads it and sends only this.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum QuietHours {
+    /// Outside the band, with none configured, or before the first reading.
+    #[default]
+    Off,
+    /// Inside the band.
+    On,
+}
+
 /// A drive's thought awaiting its outcome, and the drive it answers: the drive's own
 /// thought, or an answer to the owner that its deferred intent rides.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -264,7 +276,7 @@ pub struct Organism {
     quiet_until: Option<Millis>,
     /// Whether the owner's quiet hours are on, as of the last `QuietHours` event.
     #[serde(default)]
-    quiet_hours: bool,
+    quiet_hours: QuietHours,
 }
 
 impl Organism {
@@ -319,7 +331,7 @@ impl Organism {
             backoff_until: None,
             deferred: None,
             quiet_until: None,
-            quiet_hours: false,
+            quiet_hours: QuietHours::Off,
         })
     }
 
@@ -536,7 +548,7 @@ impl Organism {
     /// Whether the owner's quiet hours are on, as of the last `QuietHours` event.
     #[must_use]
     pub fn in_quiet_hours(&self) -> bool {
-        self.quiet_hours
+        self.quiet_hours == QuietHours::On
     }
 
     /// Belief, from zero to one, that a TV is playing at `now`: the value a cue
@@ -596,61 +608,14 @@ impl Organism {
                 Vec::new()
             }
             Event::QuietHours { active, .. } => {
-                self.quiet_hours = *active;
+                self.quiet_hours = if *active {
+                    QuietHours::On
+                } else {
+                    QuietHours::Off
+                };
                 Vec::new()
             }
-            Event::CortexReply { now, text, thought } => {
-                self.drives.satisfy("social", 0.3);
-                if self.issued(*thought) {
-                    // The cortex answers again: discretionary thoughts stop backing off.
-                    self.cortex_failures = 0;
-                    self.backoff_until = None;
-                }
-                // Any reply to a drive's thought answers it, silence included: the drive
-                // checked what there was to check, and asks again only once its pressure
-                // builds back up.
-                if let Some(answered) = self
-                    .drive_thought
-                    .take_if(|pending| pending.thought == *thought)
-                {
-                    self.drives.satisfy(&answered.drive, 1.0);
-                    self.ignition.settle(self.drives.pressure());
-                    // A ride's reply answers the intent it carried, as the drive's own would.
-                    if self
-                        .deferred
-                        .as_ref()
-                        .is_some_and(|deferred| deferred.drive == answered.drive)
-                    {
-                        self.deferred = None;
-                    }
-                }
-                self.self_speech_has_keyword = contains_keyword_word(text, "enton");
-                if Some(*thought) == self.conversation_thought {
-                    self.conversation_thought = None;
-                    let new_until =
-                        Millis(now.0.saturating_add(self.profile.attention.attention_ms));
-                    if new_until > self.last_tick {
-                        self.attention_until = Some(match self.attention_until {
-                            Some(current) => current.max(new_until),
-                            None => new_until,
-                        });
-                        let verified = Millis(
-                            now.0
-                                .saturating_add(self.profile.attention.verified_attention_ms),
-                        );
-                        self.verified_attention_until = Some(
-                            self.verified_attention_until
-                                .map_or(verified, |current| current.max(verified)),
-                        );
-                    }
-                }
-                // Silence is an outcome, not a failure: a blank reply says nothing.
-                if text.trim().is_empty() {
-                    Vec::new()
-                } else {
-                    vec![Action::Speak { text: text.clone() }]
-                }
-            }
+            Event::CortexReply { now, text, thought } => self.cortex_replied(*now, *thought, text),
             Event::PlaybackStarted { now, utterance } => {
                 self.playback_status = PlaybackStatus::Speaking {
                     utterance: *utterance,
@@ -848,7 +813,7 @@ impl Organism {
     fn discretion_gate(&self, now: Millis, drive: bool) -> Option<Abstention> {
         if self.quiet(now) {
             Some(Abstention::Quiet)
-        } else if self.quiet_hours {
+        } else if self.quiet_hours == QuietHours::On {
             Some(Abstention::QuietHours)
         } else if drive && self.checklist == Checklist::Empty {
             Some(Abstention::NothingToCheck)
@@ -889,7 +854,7 @@ impl Organism {
     fn may_ride(&self, now: Millis) -> bool {
         !self.torpor
             && !self.quiet(now)
-            && !self.quiet_hours
+            && self.quiet_hours == QuietHours::Off
             && self.checklist == Checklist::Actionable
             && self.owner_present(now)
     }
@@ -919,9 +884,7 @@ impl Organism {
             // A ride in flight waits for its outcome.
             return None;
         }
-        let expired = self
-            .deferred
-            .take_if(|deferred| now >= deferred.expires)?;
+        let expired = self.deferred.take_if(|deferred| now >= deferred.expires)?;
         let salience = self.ignition.salience();
         self.drives.satisfy(&expired.drive, 1.0);
         self.ignition.settle(self.drives.pressure());
@@ -968,6 +931,63 @@ impl Organism {
     /// Whether `thought` is one this organism issued.
     fn issued(&self, thought: ThoughtId) -> bool {
         thought.0 >= 1 && thought.0 < self.next_thought
+    }
+
+    /// The cortex answered `thought` with `text`: every reply eases the social drive, one
+    /// to a thought this organism issued ends a backoff, one to a drive's thought (or to a
+    /// thought its intent rides) answers the drive, and one to the owner reopens the
+    /// conversation's windows. Silence is an outcome, not a failure: a blank reply says
+    /// nothing.
+    fn cortex_replied(&mut self, now: Millis, thought: ThoughtId, text: &str) -> Vec<Action> {
+        self.drives.satisfy("social", 0.3);
+        if self.issued(thought) {
+            // The cortex answers again: discretionary thoughts stop backing off.
+            self.cortex_failures = 0;
+            self.backoff_until = None;
+        }
+        // Any reply to a drive's thought answers it, silence included: the drive checked
+        // what there was to check, and asks again only once its pressure builds back up.
+        if let Some(answered) = self
+            .drive_thought
+            .take_if(|pending| pending.thought == thought)
+        {
+            self.drives.satisfy(&answered.drive, 1.0);
+            self.ignition.settle(self.drives.pressure());
+            // A ride's reply answers the intent it carried, as the drive's own would.
+            if self
+                .deferred
+                .as_ref()
+                .is_some_and(|deferred| deferred.drive == answered.drive)
+            {
+                self.deferred = None;
+            }
+        }
+        self.self_speech_has_keyword = contains_keyword_word(text, "enton");
+        if Some(thought) == self.conversation_thought {
+            self.conversation_thought = None;
+            let new_until = Millis(now.0.saturating_add(self.profile.attention.attention_ms));
+            if new_until > self.last_tick {
+                self.attention_until = Some(match self.attention_until {
+                    Some(current) => current.max(new_until),
+                    None => new_until,
+                });
+                let verified = Millis(
+                    now.0
+                        .saturating_add(self.profile.attention.verified_attention_ms),
+                );
+                self.verified_attention_until = Some(
+                    self.verified_attention_until
+                        .map_or(verified, |current| current.max(verified)),
+                );
+            }
+        }
+        if text.trim().is_empty() {
+            Vec::new()
+        } else {
+            vec![Action::Speak {
+                text: text.to_owned(),
+            }]
+        }
     }
 
     /// A thought failed in the cortex: count the failure and back off discretionary

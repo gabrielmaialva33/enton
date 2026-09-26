@@ -206,7 +206,10 @@ enum Stimulus {
     Tick,
     Body(BodySignals),
     Speech(SpeechCue),
-    Reply { thought: Index, text: String },
+    Reply {
+        thought: Index,
+        text: String,
+    },
     Failed(Index),
     FailedUnknown(u64),
     Checklist(bool),

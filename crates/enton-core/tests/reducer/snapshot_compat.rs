@@ -141,7 +141,10 @@ fn run_tape(mut organism: Organism) -> Organism {
     });
     // An unfinished "Enton..." is still waiting when the snapshot is taken, and the
     // ready drive holds its intent to ride the answer.
-    events.push(speech(14_400_500, cue(0.9, 0.9, 400, true, (0.9, 0.1, 0.2))));
+    events.push(speech(
+        14_400_500,
+        cue(0.9, 0.9, 400, true, (0.9, 0.1, 0.2)),
+    ));
     events.push(Event::Tick {
         now: Millis(14_401_000),
     });

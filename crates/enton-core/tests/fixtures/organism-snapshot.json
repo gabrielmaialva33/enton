@@ -214,5 +214,5 @@
     "expires": 15001000
   },
   "quiet_until": 1920000,
-  "quiet_hours": false
+  "quiet_hours": "off"
 }

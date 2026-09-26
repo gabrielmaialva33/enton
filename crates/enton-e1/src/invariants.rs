@@ -2,7 +2,7 @@
 //! the `TigerBeetle` VOPR: the synthetic tapes explore, the watch asserts, and a
 //! violation stops the run naming the step and the event that broke it.
 
-use enton_core::{Abstention, Action, Budget, Event, Millis, Organism, Reason, ThoughtId};
+use enton_core::{Abstention, Action, Budget, Deferred, Event, Millis, Organism, Reason, ThoughtId};
 
 use crate::Error;
 
@@ -27,6 +27,12 @@ pub(crate) struct Watch {
     checklist_actionable: bool,
     /// Whether the cortex failed since its last reply, so a backoff may be under way.
     failed_since_reply: bool,
+    /// Until when the owner asked for quiet, as of the last quiet command (none yet: never).
+    quiet_until: Option<Millis>,
+    /// Whether the quiet hours are on, as of the last reading (none yet: off).
+    quiet_hours: bool,
+    /// The intent a drive held before this step, if one was held.
+    deferred: Option<Deferred>,
 }
 
 impl Watch {
@@ -40,6 +46,7 @@ impl Watch {
         self.steps += 1;
         self.check_decisions(event, actions)?;
         self.check_discretion(event, actions)?;
+        self.check_initiative(organism, event, actions)?;
         self.check_thought_ids(event, actions)?;
         self.check_time(organism, event)?;
         self.check_bounds(organism, event)?;
@@ -87,8 +94,11 @@ impl Watch {
             | Event::PlaybackStarted { .. }
             | Event::PlaybackFinished { .. }
             | Event::Checklist { .. }
-            | Event::CortexFailed { .. } => (!actions.is_empty())
-                .then_some("body, playback, checklist and failure events decide nothing"),
+            | Event::CortexFailed { .. }
+            | Event::Quiet { .. }
+            | Event::QuietHours { .. } => (!actions.is_empty()).then_some(
+                "body, playback, checklist, failure and quiet events decide nothing",
+            ),
         };
         broken.map_or(Ok(()), |what| Err(self.violation(event, what)))
     }
@@ -96,7 +106,8 @@ impl Watch {
     /// What holds a discretionary thought back never touches an obligation, and each
     /// reason holds only when what it names was seen: a drive thinks only with something
     /// on the checklist, abstains as `NothingToCheck` only without it, and backs off only
-    /// after a cortex failure that no reply has answered yet.
+    /// after a cortex failure that no reply has answered yet; no thought of Enton's own is
+    /// bought in quiet mode or quiet hours, and each abstains for them only while they hold.
     fn check_discretion(&mut self, event: &Event, actions: &[Action]) -> Result<(), Error> {
         // Only outcomes of thoughts the organism issued count, as in the reducer.
         let issued = |thought: &ThoughtId| {
@@ -110,8 +121,12 @@ impl Watch {
             Event::CortexReply { thought, .. } if issued(thought) => {
                 self.failed_since_reply = false;
             }
+            Event::Quiet { now, until } => self.quiet_until = (until > now).then_some(*until),
+            Event::QuietHours { active, .. } => self.quiet_hours = *active,
             _ => {}
         }
+        let now = event.now();
+        let quiet = self.quiet_until.is_some_and(|until| now < until);
         for action in actions {
             let (reason, why) = match action {
                 Action::Think {
@@ -121,6 +136,17 @@ impl Watch {
                     return Err(
                         self.violation(event, "a drive thinks only with something to check")
                     );
+                }
+                Action::Think {
+                    reason, propensity, ..
+                } if (matches!(reason, Reason::Drive(_) | Reason::Speech)
+                    || propensity.is_some())
+                    && (quiet || self.quiet_hours) =>
+                {
+                    return Err(self.violation(
+                        event,
+                        "no thought of Enton's own is bought in quiet mode or quiet hours",
+                    ));
                 }
                 Action::Abstain { reason, why, .. } => (reason, *why),
                 _ => continue,
@@ -135,12 +161,82 @@ impl Watch {
                 Abstention::Backoff => (!discretionary || !self.failed_since_reply).then_some(
                     "only a discretionary thought backs off, and only after an unanswered failure",
                 ),
+                Abstention::Quiet => (!discretionary || !quiet)
+                    .then_some("only a discretionary thought waits for quiet, and only in it"),
+                Abstention::QuietHours => (!discretionary || !self.quiet_hours || quiet)
+                    .then_some("only a discretionary thought waits for the quiet hours, in them"),
                 _ => None,
             };
             if let Some(what) = broken {
                 return Err(self.violation(event, what));
             }
         }
+        Ok(())
+    }
+
+    /// A drive's intent is held only at a tick, while nothing but a conversation holds it
+    /// back; it rides only an answer the owner asked for, and only the intent held before
+    /// the step; it expires only at a tick, once its deadline has passed, and only once.
+    fn check_initiative(
+        &mut self,
+        organism: &Organism,
+        event: &Event,
+        actions: &[Action],
+    ) -> Result<(), Error> {
+        let now = event.now();
+        let before = self.deferred.take();
+        let after = organism.deferred().cloned();
+        let free = !organism.quiet_as_of(now)
+            && !organism.in_quiet_hours()
+            && self.checklist_actionable
+            && !organism.is_torpid()
+            && organism.owner_present_as_of(now);
+        for action in actions {
+            let broken = match action {
+                Action::Think {
+                    reason,
+                    propensity,
+                    rider: Some(drive),
+                    ..
+                } => {
+                    if !matches!(reason, Reason::Keyword | Reason::FollowUp) || propensity.is_some()
+                    {
+                        Some("only an answer the owner asked for carries a drive's intent")
+                    } else if !free {
+                        Some("an intent rides only when its drive could think but for the talk")
+                    } else if before.as_ref().is_none_or(|held| held.drive != *drive) {
+                        Some("a ride carries the intent held before it")
+                    } else {
+                        None
+                    }
+                }
+                Action::Abstain {
+                    reason,
+                    why: Abstention::Expired,
+                    ..
+                } => {
+                    let expired = before.as_ref().is_some_and(|held| {
+                        now >= held.expires && *reason == Reason::Drive(held.drive.clone())
+                    });
+                    (!matches!(event, Event::Tick { .. }) || !expired || after.is_some())
+                        .then_some("an intent expires once, at a tick past its deadline")
+                }
+                _ => None,
+            };
+            if let Some(what) = broken {
+                return Err(self.violation(event, what));
+            }
+        }
+        if let Some(held) = &after
+            && before.is_none()
+            && (!matches!(event, Event::Tick { .. }) || held.since != now || !free)
+        {
+            return Err(self.violation(
+                event,
+                "an intent is held only at a tick, when its drive could think but for the talk",
+            ));
+        }
+        self.deferred = after;
         Ok(())
     }
 
@@ -301,6 +397,8 @@ fn kind(event: &Event) -> &'static str {
         Event::PlaybackFinished { .. } => "PlaybackFinished",
         Event::Checklist { .. } => "Checklist",
         Event::CortexFailed { .. } => "CortexFailed",
+        Event::Quiet { .. } => "Quiet",
+        Event::QuietHours { .. } => "QuietHours",
     }
 }
 
@@ -345,6 +443,7 @@ mod tests {
             reason: Reason::Keyword,
             salience: 1.5,
             propensity: None,
+            rider: None,
         }
     }
 
@@ -434,6 +533,7 @@ mod tests {
             reason: Reason::FollowUp,
             salience: 1.0,
             propensity: Some(0.0),
+            rider: None,
         };
         let err = watch.after_step(&organism, &second, &[free]).unwrap_err();
         assert!(
@@ -548,11 +648,150 @@ mod tests {
             reason: Reason::Drive("curiosity".into()),
             salience: 0.8,
             propensity: None,
+            rider: None,
         };
         let err = Watch::default()
             .after_step(&organism, &tick, &[drive])
             .unwrap_err();
         assert!(err.to_string().contains("something to check"), "{err}");
+    }
+
+    #[test]
+    fn quiet_events_decide_nothing() {
+        let mut organism = organism();
+        let mut watch = Watch::default();
+        for event in [
+            Event::Quiet {
+                now: Millis(100),
+                until: Millis(3_600_100),
+            },
+            Event::QuietHours {
+                now: Millis(200),
+                active: true,
+            },
+        ] {
+            let actions = organism.step(&event);
+            assert!(actions.is_empty());
+            watch.after_step(&organism, &event, &actions).unwrap();
+            let err = watch
+                .after_step(&organism, &event, &[abstain()])
+                .unwrap_err();
+            assert!(err.to_string().contains("decide nothing"), "{err}");
+        }
+    }
+
+    #[test]
+    fn quiet_that_the_events_do_not_support_is_a_violation() {
+        let gated = |reason: Reason, why| Action::Abstain {
+            reason,
+            salience: 0.8,
+            why,
+            propensity: None,
+        };
+        let mut organism = organism();
+        let event = cue(100);
+        organism.step(&event);
+        // Nobody asked for quiet, and the night band never began.
+        let err = Watch::default()
+            .after_step(
+                &organism,
+                &event,
+                &[gated(Reason::Speech, Abstention::Quiet)],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("waits for quiet"), "{err}");
+        let err = Watch::default()
+            .after_step(
+                &organism,
+                &event,
+                &[gated(Reason::Speech, Abstention::QuietHours)],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("quiet hours"), "{err}");
+
+        // In quiet mode, speech overheard buys no thought, and an answer is no quiet wait.
+        let mut watch = Watch::default();
+        let hush = Event::Quiet {
+            now: Millis(200),
+            until: Millis(3_600_200),
+        };
+        organism.step(&hush);
+        watch.after_step(&organism, &hush, &[]).unwrap();
+        let event = cue(300);
+        organism.step(&event);
+        let overheard = Action::Think {
+            thought: ThoughtId(1),
+            reason: Reason::Speech,
+            salience: 0.9,
+            propensity: None,
+            rider: None,
+        };
+        let err = watch
+            .after_step(&organism, &event, &[overheard])
+            .unwrap_err();
+        assert!(err.to_string().contains("quiet mode or quiet hours"), "{err}");
+        let err = watch
+            .after_step(
+                &organism,
+                &event,
+                &[gated(Reason::Keyword, Abstention::Quiet)],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("waits for quiet"), "{err}");
+    }
+
+    #[test]
+    fn a_ride_or_an_expiry_without_a_held_intent_is_a_violation() {
+        let mut organism = organism();
+        organism.step(&Event::Checklist {
+            now: Millis(0),
+            actionable: true,
+        });
+        let mut watch = Watch::default();
+        watch
+            .after_step(
+                &organism,
+                &Event::Checklist {
+                    now: Millis(0),
+                    actionable: true,
+                },
+                &[],
+            )
+            .unwrap();
+        let event = cue(100);
+        organism.step(&event);
+        let ride = |reason: Reason, propensity| Action::Think {
+            thought: ThoughtId(1),
+            reason,
+            salience: 1.5,
+            propensity,
+            rider: Some("curiosity".into()),
+        };
+        // Nothing was held: nothing may ride.
+        let err = watch
+            .after_step(&organism, &event, &[ride(Reason::Keyword, None)])
+            .unwrap_err();
+        assert!(err.to_string().contains("intent held before it"), "{err}");
+        // A discretionary thought, or an explored one, never carries an intent.
+        for (reason, propensity) in [(Reason::Speech, None), (Reason::FollowUp, Some(0.5))] {
+            let err = watch
+                .after_step(&organism, &event, &[ride(reason, propensity)])
+                .unwrap_err();
+            assert!(err.to_string().contains("owner asked for"), "{err}");
+        }
+        // Nothing was held: nothing expires.
+        let tick = Event::Tick { now: Millis(200) };
+        organism.step(&tick);
+        let expired = Action::Abstain {
+            reason: Reason::Drive("curiosity".into()),
+            salience: 0.8,
+            why: Abstention::Expired,
+            propensity: None,
+        };
+        let err = watch
+            .after_step(&organism, &tick, &[expired])
+            .unwrap_err();
+        assert!(err.to_string().contains("expires once"), "{err}");
     }
 
     #[test]

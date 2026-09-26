@@ -494,6 +494,21 @@ fn spawn_timer_task(tx: mpsc::Sender<LoopMessage>, clock: MonotonicClock) {
     });
 }
 
+fn speech_cue(line: &str) -> SpeechCue {
+    let trimmed = line.trim();
+    let char_count = trimmed.chars().count();
+    let duration_ms = u32::try_from(char_count.saturating_mul(60))
+        .unwrap_or(u32::MAX)
+        .min(3000);
+    let keyword = enton_core::contains_keyword_word(line, "enton");
+    SpeechCue {
+        energy: 0.8,
+        duration_ms,
+        vad_confidence: 1.0,
+        keyword,
+    }
+}
+
 fn spawn_stdin_task(tx: mpsc::Sender<LoopMessage>, clock: MonotonicClock) {
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
@@ -509,17 +524,7 @@ fn spawn_stdin_task(tx: mpsc::Sender<LoopMessage>, clock: MonotonicClock) {
                 }
                 return;
             }
-            let char_count = trimmed.chars().count();
-            let duration_ms = u32::try_from(char_count.saturating_mul(60))
-                .unwrap_or(u32::MAX)
-                .min(3000);
-            let keyword = trimmed.to_ascii_lowercase().contains("enton");
-            let cue = SpeechCue {
-                energy: 0.8,
-                duration_ms,
-                vad_confidence: 1.0,
-                keyword,
-            };
+            let cue = speech_cue(trimmed);
             let event = Event::Speech {
                 now: clock.now(),
                 cue,
@@ -868,6 +873,31 @@ mod tests {
         #[cfg(feature = "voice")]
         assert!(weak.upgrade().is_none());
         println!("runtime resources dropped");
+    }
+
+    #[test]
+    fn speech_cue_keyword_addressing() {
+        assert!(speech_cue("enton").keyword);
+        assert!(speech_cue("Enton, que horas são?").keyword);
+        assert!(speech_cue("ei ENTON!").keyword);
+
+        assert!(!speech_cue("Benton").keyword);
+        assert!(!speech_cue("sentenced").keyword);
+        assert!(!speech_cue("então").keyword);
+    }
+
+    #[test]
+    fn speech_cue_duration_rule() {
+        assert_eq!(speech_cue("").duration_ms, 0);
+        assert_eq!(speech_cue("enton").duration_ms, 300);
+        assert_eq!(speech_cue("ei ENTON!").duration_ms, 540);
+        assert_eq!(speech_cue("Enton, que horas são?").duration_ms, 1260);
+
+        let cap_boundary = "a".repeat(50);
+        assert_eq!(speech_cue(&cap_boundary).duration_ms, 3000);
+
+        let over_cap = "a".repeat(100);
+        assert_eq!(speech_cue(&over_cap).duration_ms, 3000);
     }
 
     #[cfg(feature = "voice")]

@@ -1,9 +1,9 @@
-//! Typed organism snapshots on top of the soul's opaque blob API.
+//! Snapshots: opaque blobs at a sequence number, and the typed organism
+//! snapshot built on them so replay only has to reduce the tail.
 
+use super::{Error, SeqNo, Soul};
 use enton_core::{Action, Organism, Profile};
 use serde::{Deserialize, Serialize, de::Error as _};
-
-use crate::soul::{Error, SeqNo, Soul};
 
 // This tag versions the blob layout independently of SoulConfig's reducer
 // version. Unknown formats must fail restoration, never start a fresh organism.
@@ -61,5 +61,47 @@ impl Soul {
             },
             Organism::step,
         )
+    }
+}
+
+impl Soul {
+    /// Save an opaque state snapshot at a given sequence number.
+    pub fn save_snapshot(&self, at_seq: SeqNo, blob: &[u8]) -> Result<(), Error> {
+        if at_seq == 0 {
+            return Err(Error::InvalidSnapshotSequence("snapshot seq cannot be 0"));
+        }
+        let max_seq: i64 =
+            self.conn
+                .query_row("SELECT IFNULL(MAX(seq), 0) FROM events", [], |row| {
+                    row.get(0)
+                })?;
+        let max_seq_u64 = u64::try_from(max_seq).unwrap_or(0);
+        if at_seq > max_seq_u64 {
+            return Err(Error::InvalidSnapshotSequence("snapshot seq out of bounds"));
+        }
+
+        let seq_i64 = i64::try_from(at_seq)
+            .map_err(|_| Error::Storage(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX)))?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO snapshots (seq, reducer_version, blob) VALUES (?1, ?2, ?3)",
+            rusqlite::params![seq_i64, self.config.reducer_version, blob],
+        )?;
+        Ok(())
+    }
+
+    /// Return the latest snapshot (if any) matching the current reducer version.
+    pub fn latest_snapshot(&self) -> Result<Option<(SeqNo, Vec<u8>)>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT seq, blob FROM snapshots ORDER BY seq DESC LIMIT 1")?;
+        let mut rows = stmt.query([])?;
+        if let Some(row) = rows.next()? {
+            let raw: i64 = row.get(0)?;
+            let seq = u64::try_from(raw).unwrap_or(0);
+            let blob: Vec<u8> = row.get(1)?;
+            Ok(Some((seq, blob)))
+        } else {
+            Ok(None)
+        }
     }
 }

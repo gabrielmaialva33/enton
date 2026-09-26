@@ -8,8 +8,6 @@ pub mod audio;
 #[cfg(feature = "cortex")]
 pub mod cortex;
 #[cfg(feature = "soul")]
-mod organism_snapshot;
-#[cfg(feature = "soul")]
 pub mod soul;
 #[cfg(feature = "voice")]
 pub mod voice;

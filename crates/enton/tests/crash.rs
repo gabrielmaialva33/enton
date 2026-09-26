@@ -12,7 +12,9 @@
 //!   some seeds kill again while it recovers;
 //! - a file size limit (`RLIMIT_FSIZE`, with `SIGXFSZ` ignored so writes fail with
 //!   `EFBIG`) so the soul cannot grow, then a restart without it;
-//! - the write-ahead log and the database file cut short at many offsets.
+//! - the write-ahead log and the database file cut short at many offsets;
+//! - one bit of a stored record flipped inside the database file, which SQLite
+//!   cannot see: the soul's checksums must name the record.
 //!
 //! The cortex is a loopback OpenAI-compatible server on `std::net` that streams
 //! each reply in two parts, so a kill can land between them.
@@ -155,6 +157,11 @@ fn a_truncated_database_restores_a_prefix_or_refuses_clearly() {
 #[test]
 fn a_damaged_soul_is_never_silently_replaced_by_a_fresh_one() {
     tiny_database().unwrap_or_else(|err| panic!("{err}"));
+}
+
+#[test]
+fn a_flipped_bit_in_a_stored_record_is_refused_naming_the_record() {
+    flipped_bit().unwrap_or_else(|err| panic!("{err}"));
 }
 
 // ---------------------------------------------------------------------------
@@ -874,6 +881,94 @@ fn tiny_database() -> TestResult {
             )
         })?;
     }
+    Ok(())
+}
+
+/// Media damage SQLite cannot see: one bit of a stored record flips inside a
+/// well-formed page of the database file, and the digit it hits becomes another
+/// digit, so the record still parses. The binary must refuse the soul and name
+/// the record: at startup for the snapshot it restores from, and in `enton why`
+/// for an event of the audited log.
+fn flipped_bit() -> TestResult {
+    let scratch = Scratch::new("flipped-bit")?;
+    let cortex = FakeCortex::start()?;
+    let soul = scratch.soul();
+    let mut enton = Enton::spawn(&soul, &cortex, None)?;
+    enton.banner()?;
+    converse(&mut enton, script().get(..3).unwrap_or_default(), None);
+    ensure(enton.quit()?.status.success(), || {
+        "first life failed".to_owned()
+    })?;
+    // A clean close leaves every record in the database file.
+    let log = Soul::open_read_only(&soul, SoulConfig::default())?;
+    let events = read_log(&log)?;
+    let (snapshot_seq, blob) = log
+        .latest_snapshot()?
+        .ok_or("the close saved no snapshot")?;
+    drop(log);
+
+    let damaged = copy_soul(&soul, &scratch.dir("snapshot")?)?;
+    flip_a_digit_of(&damaged, &blob)?;
+    let finished = run_briefly(&damaged, &cortex)?;
+    let named = format!("the snapshot at sequence number {snapshot_seq} fails its checksum");
+    ensure(
+        refused_clearly(&finished) && finished.stderr.iter().any(|line| line.contains(&named)),
+        || {
+            format!(
+                "a damaged snapshot was not refused by name: {}",
+                finished.describe()
+            )
+        },
+    )?;
+
+    // Restoring starts from the snapshot; only the audit replays older events.
+    let (seq, speech) = events
+        .iter()
+        .find(|(_, event)| matches!(event, Event::Speech { .. }))
+        .ok_or("no speech was recorded")?;
+    let damaged = copy_soul(&soul, &scratch.dir("event")?)?;
+    flip_a_digit_of(&damaged, &serde_json::to_vec(speech)?)?;
+    let audit = Command::new(env!("CARGO_BIN_EXE_enton"))
+        .arg("why")
+        .arg("--soul")
+        .arg(&damaged)
+        .arg("--profile")
+        .arg("t1-ref")
+        .output()?;
+    let stderr = String::from_utf8_lossy(&audit.stderr);
+    let named = format!("the event at sequence number {seq} fails its checksum");
+    ensure(
+        audit.status.code() == Some(1) && stderr.contains(&named) && !stderr.contains("panicked"),
+        || format!("enton why did not name the damaged event: {stderr}"),
+    )
+}
+
+/// Flip the low bit of a digit in the one copy of `record` the database file
+/// holds, found through a window of the record that occurs there exactly once.
+/// The search runs from the end of the record, where the digits are numbers
+/// (a record starts with its type tags, and a snapshot's names its format).
+fn flip_a_digit_of(soul: &Path, record: &[u8]) -> TestResult {
+    let mut file = std::fs::read(soul)?;
+    let at = record
+        .windows(24)
+        .rev()
+        .find_map(|window| {
+            let digit = window.iter().rposition(u8::is_ascii_digit)?;
+            let mut copies = file
+                .windows(window.len())
+                .enumerate()
+                .filter(|(_, candidate)| *candidate == window);
+            match (copies.next(), copies.next()) {
+                (Some((at, _)), None) => Some(at + digit),
+                _ => None,
+            }
+        })
+        .ok_or("the record is not stored contiguously in the file")?;
+    let byte = file
+        .get_mut(at)
+        .ok_or("the digit is past the end of the file")?;
+    *byte ^= 0x01;
+    std::fs::write(soul, file)?;
     Ok(())
 }
 

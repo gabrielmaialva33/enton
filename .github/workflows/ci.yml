@@ -5,77 +5,128 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  lint:
-    name: Lint
+  fmt:
+    name: Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          components: rustfmt
 
-      - name: Install deps
-        run: uv sync --frozen --group dev
+      - name: cargo fmt
+        run: cargo fmt --all --check
 
-      - name: Ruff check
-        run: uv run ruff check src/
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Ruff format check
-        run: uv run ruff format --check src/
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # cpal needs ALSA headers for the audio/voice features.
+      - name: Install ALSA headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy (default features)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Clippy (all features)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
     name: Test
     runs-on: ubuntu-latest
-    needs: lint
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install deps
-        run: uv sync --frozen --group dev
+      - name: Install ALSA headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
-      - name: Run tests (skip hardware)
-        run: uv run pytest -m "not hardware" -v --tb=short
+      - uses: Swatinem/rust-cache@v2
 
-  import-check:
-    name: Import check
+      - name: Test (default features)
+        run: cargo test --workspace
+
+      # Tests that need ONNX models or audio devices are ignored or skip
+      # themselves when the model cache is absent.
+      - name: Test (all features)
+        run: cargo test --workspace --all-features
+
+  dependencies:
+    name: Dependencies
     runs-on: ubuntu-latest
-    needs: lint
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@v2
         with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          tool: cargo-deny,cargo-machete
 
-      - name: Install deps
-        run: uv sync --frozen --group dev
+      - name: cargo deny
+        run: cargo deny --all-features check
 
-      - name: Verify all module imports
+      - name: cargo machete
+        run: cargo machete
+
+  cross:
+    name: Cross (aarch64-musl)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      # zig is the C cross compiler for aws-lc-sys (rustls) on musl.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Install qemu-user
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build lean binaries
+        run: cargo zigbuild --release -p enton -p enton-e1 --target aarch64-unknown-linux-musl
+
+      - name: Smoke test under qemu-user
         run: |
-          uv run python -c "
-          from enton.cognition.brain import EntonBrain
-          from enton.core.memory import Memory
-          from enton.core.events import EventBus
-          from enton.skills.system_toolkit import SystemTools
-          from enton.skills.search_toolkit import SearchTools
-          from enton.skills.shell_toolkit import ShellTools
-          from enton.skills.ptz_toolkit import PTZTools
-          from enton.skills.describe_toolkit import DescribeTools
-          from enton.skills.memory_toolkit import MemoryTools
-          from enton.skills.planner_toolkit import PlannerTools
-          from enton.skills.face_toolkit import FaceTools
-          print('All imports OK')
-          "
+          qemu-aarch64 target/aarch64-unknown-linux-musl/release/enton --help
+          qemu-aarch64 target/aarch64-unknown-linux-musl/release/e1-sim --seed 0
+
+      # RFC 0001 §4: the core binary stays under 20 MB.
+      - name: Core binary budget
+        run: |
+          size=$(stat -c %s target/aarch64-unknown-linux-musl/release/enton)
+          echo "enton (aarch64-musl, lean): $size bytes"
+          test "$size" -lt 20000000

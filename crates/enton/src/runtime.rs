@@ -954,3 +954,250 @@ mod outcome_tests {
         assert_eq!(state.conversation.len(), history);
     }
 }
+
+/// What the conversation remembers of a reply: all of it in text mode; spoken, only what
+/// the owner heard before cutting Enton off. And the chime Enton plays while it waits.
+#[cfg(test)]
+mod heard_tests {
+    use super::*;
+    use crate::tasks::speech_cue;
+    use enton_core::ports::TurnRole;
+    use enton_core::{Millis, Profile};
+
+    const ASKED: &str = "Enton, conta uma história.";
+    const REPLY: [&str; 2] = ["Era uma vez um robô.", "Ele morava num PC."];
+    const WHOLE: &str = "Era uma vez um robô. Ele morava num PC.";
+    /// Loud and addressed by name: it interrupts Enton mid-sentence.
+    const INTERRUPTION: &str = "Enton, para, que horas são?";
+
+    fn state() -> RuntimeState {
+        RuntimeState::new(
+            Organism::new(Profile::t1_ref()).unwrap(),
+            MonotonicClock::new(),
+            OpenAiCortex::with_endpoint("http://127.0.0.1:9", "unused"),
+            #[cfg(feature = "voice")]
+            None,
+            None,
+        )
+    }
+
+    fn typed(text: &str, now: u64) -> LoopMessage {
+        LoopMessage::SpeechInput {
+            text: text.to_owned(),
+            event: Event::Speech {
+                now: Millis(now),
+                cue: speech_cue(text),
+            },
+            input_end_time: Instant::now(),
+        }
+    }
+
+    fn replied(thought: u64, text: &str, asked: &str) -> LoopMessage {
+        LoopMessage::CortexFinished {
+            thought: ThoughtId(thought),
+            text: text.to_owned(),
+            user_prompt: Some(asked.to_owned()),
+            outcome: Ok(()),
+        }
+    }
+
+    /// Stop the real call the dispatch started, so only the test's messages arrive.
+    fn stop_the_call(state: &mut RuntimeState) {
+        if let Some(task) = state.active_cortex_task.take() {
+            task.abort();
+        }
+    }
+
+    fn turns(state: &RuntimeState) -> Vec<(TurnRole, String)> {
+        state
+            .conversation
+            .turns()
+            .into_iter()
+            .map(|turn| (turn.role, turn.content))
+            .collect()
+    }
+
+    async fn send(state: &mut RuntimeState, tx: &mpsc::Sender<LoopMessage>, msg: LoopMessage) {
+        assert!(state.handle_message(msg, tx).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn text_mode_remembers_the_whole_reply() {
+        let (tx, _rx) = mpsc::channel(8);
+        let mut state = state();
+        send(&mut state, &tx, typed(ASKED, 1_000)).await;
+        stop_the_call(&mut state);
+        send(&mut state, &tx, replied(1, WHOLE, ASKED)).await;
+        send(&mut state, &tx, typed(INTERRUPTION, 3_000)).await;
+        stop_the_call(&mut state);
+        assert_eq!(
+            turns(&state),
+            [
+                (TurnRole::User, ASKED.to_owned()),
+                (TurnRole::Assistant, WHOLE.to_owned()),
+            ]
+        );
+    }
+
+    #[cfg(feature = "voice")]
+    fn voiced(chime: bool) -> RuntimeState {
+        RuntimeState {
+            voice: Some(Voice {
+                player: Arc::new(VoicePlayer::mock()),
+                chime,
+            }),
+            ..state()
+        }
+    }
+
+    /// Utterance IDs far above the mock player's own, which starts at one.
+    #[cfg(feature = "voice")]
+    fn utterance(n: u64) -> UtteranceId {
+        UtteranceId(1_000 + n)
+    }
+
+    #[cfg(feature = "voice")]
+    fn sentence(thought: u64, n: usize, id: u64) -> LoopMessage {
+        LoopMessage::Sentence {
+            thought: ThoughtId(thought),
+            text: REPLY[n].to_owned(),
+            utterance: Some(utterance(id)),
+        }
+    }
+
+    #[cfg(feature = "voice")]
+    fn played(id: u64, interrupted: bool) -> LoopMessage {
+        LoopMessage::PlaybackFinished {
+            id: utterance(id),
+            interrupted,
+        }
+    }
+
+    #[cfg(feature = "voice")]
+    #[tokio::test]
+    async fn a_reply_cut_off_is_remembered_as_far_as_it_was_heard() {
+        let (tx, _rx) = mpsc::channel(8);
+        let mut state = voiced(false);
+        send(&mut state, &tx, typed(ASKED, 1_000)).await;
+        stop_the_call(&mut state);
+        send(&mut state, &tx, sentence(1, 0, 1)).await;
+        send(&mut state, &tx, sentence(1, 1, 2)).await;
+        send(&mut state, &tx, replied(1, WHOLE, ASKED)).await;
+        let started = |id| LoopMessage::PlaybackStarted { id: utterance(id) };
+        send(&mut state, &tx, started(1)).await;
+        send(&mut state, &tx, played(1, false)).await;
+        send(&mut state, &tx, started(2)).await;
+        assert!(state.organism.is_speaking());
+
+        // The owner talks over the second sentence and takes the turn.
+        send(&mut state, &tx, typed(INTERRUPTION, 3_000)).await;
+        assert_eq!(state.in_flight_thought, Some(ThoughtId(2)));
+        stop_the_call(&mut state);
+        let heard = "Era uma vez um robô. [interrupted: the owner heard only this]";
+        assert_eq!(
+            turns(&state),
+            [
+                (TurnRole::User, ASKED.to_owned()),
+                (TurnRole::Assistant, heard.to_owned()),
+            ]
+        );
+        // The player reports the cut; the conversation stays as the owner heard it.
+        send(&mut state, &tx, played(2, true)).await;
+        assert_eq!(turns(&state).len(), 2);
+    }
+
+    #[cfg(feature = "voice")]
+    #[tokio::test]
+    async fn a_reply_heard_in_full_is_remembered_whole() {
+        let (tx, _rx) = mpsc::channel(8);
+        let mut state = voiced(false);
+        send(&mut state, &tx, typed(ASKED, 1_000)).await;
+        stop_the_call(&mut state);
+        send(&mut state, &tx, sentence(1, 0, 1)).await;
+        send(&mut state, &tx, sentence(1, 1, 2)).await;
+        send(&mut state, &tx, replied(1, WHOLE, ASKED)).await;
+        send(&mut state, &tx, played(1, false)).await;
+        send(&mut state, &tx, played(2, false)).await;
+        send(&mut state, &tx, typed(INTERRUPTION, 9_000)).await;
+        stop_the_call(&mut state);
+        assert_eq!(
+            turns(&state),
+            [
+                (TurnRole::User, ASKED.to_owned()),
+                (TurnRole::Assistant, WHOLE.to_owned()),
+            ]
+        );
+    }
+
+    #[cfg(feature = "voice")]
+    #[tokio::test]
+    async fn a_reply_cut_off_while_still_being_written_keeps_the_owners_words() {
+        let (tx, _rx) = mpsc::channel(8);
+        let mut state = voiced(false);
+        send(&mut state, &tx, typed(ASKED, 1_000)).await;
+        stop_the_call(&mut state);
+        send(&mut state, &tx, sentence(1, 0, 1)).await;
+        send(&mut state, &tx, LoopMessage::PlaybackStarted { id: utterance(1) }).await;
+        send(&mut state, &tx, played(1, false)).await;
+        // The cortex is still writing when the owner speaks again.
+        send(&mut state, &tx, typed(INTERRUPTION, 3_000)).await;
+        stop_the_call(&mut state);
+        assert_eq!(
+            turns(&state),
+            [
+                (TurnRole::User, ASKED.to_owned()),
+                (
+                    TurnRole::Assistant,
+                    "Era uma vez um robô. [interrupted: the owner heard only this]".to_owned()
+                ),
+            ]
+        );
+        // A late sentence or end of the abandoned thought changes nothing.
+        send(&mut state, &tx, sentence(1, 1, 2)).await;
+        send(&mut state, &tx, replied(1, WHOLE, ASKED)).await;
+        assert_eq!(turns(&state).len(), 2);
+    }
+
+    #[cfg(feature = "voice")]
+    #[tokio::test]
+    async fn waiting_for_the_rest_chimes_through_the_player_and_keeps_the_turn_open() {
+        let (tx, _rx) = mpsc::channel(8);
+        let mut state = voiced(true);
+        let events = state.voice.as_ref().unwrap().player.subscribe().unwrap();
+        send(&mut state, &tx, typed("enton", 1_000)).await;
+        assert!(state.organism.is_attending());
+        let chime = state.chime.expect("the wait chimed");
+        assert_eq!(
+            events.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),
+            enton_adapters::PlaybackEvent::Started {
+                id: chime,
+                text: String::new()
+            }
+        );
+        // The loop hears the chime like speech: Enton's own playback, then its echo.
+        send(&mut state, &tx, LoopMessage::PlaybackStarted { id: chime }).await;
+        assert!(state.organism.is_speaking());
+        send(
+            &mut state,
+            &tx,
+            LoopMessage::PlaybackFinished {
+                id: chime,
+                interrupted: false,
+            },
+        )
+        .await;
+        assert!(state.organism.is_hangover());
+        // The owner goes on after the chime: one request, answered as addressed.
+        send(&mut state, &tx, typed("que horas são?", 3_000)).await;
+        assert_eq!(state.in_flight_thought, Some(ThoughtId(1)));
+        assert_eq!(state.last_transcript, None);
+        stop_the_call(&mut state);
+        assert!(!state.organism.is_attending());
+
+        // With the chime turned off, the wait is silent.
+        let mut quiet = voiced(false);
+        send(&mut quiet, &tx, typed("enton", 1_000)).await;
+        assert!(quiet.organism.is_attending());
+        assert_eq!(quiet.chime, None);
+    }
+}

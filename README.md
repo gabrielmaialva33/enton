@@ -206,14 +206,16 @@ and whether the keyword was heard:
 %%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#fecaca', 'primaryTextColor': '#450a0a', 'primaryBorderColor': '#991b1b', 'secondaryColor': '#bbf7d0', 'secondaryTextColor': '#052e16', 'secondaryBorderColor': '#166534', 'tertiaryColor': '#fee2e2', 'tertiaryTextColor': '#450a0a', 'lineColor': '#991b1b', 'textColor': '#1c1917'}}}%%
 flowchart TD
     CUE(["Speech cue<br/>energy · VAD · duration · keyword"]) --> ECHO{"Enton speaking<br/>or in hangover?"}
-    ECHO -- yes --> BARGE{"Louder than expected echo<br/>plus barge-in margin?"}
+    ECHO -- yes --> BARGE{"Louder than expected echo,<br/>in the caller's voice or saying the name?"}
     BARGE -- no --> A_ECHO[["Abstain · SelfEcho"]]
     BARGE -- yes --> CANCEL["Cancel playback"] --> OBL
     ECHO -- no --> KW{"Keyword?"}
     KW -- "yes · under 900 ms" --> ATTEND[["Attend · wait 5 s for the rest"]]
     KW -- yes --> OBL["Obligation budget"]
     KW -- no --> WIN{"Inside attention window?"}
-    WIN -- "yes · follow-up" --> OBL
+    WIN -- yes --> SPK{"Same voice as<br/>whoever called Enton?"}
+    SPK -- no --> A_O[["Abstain · OtherSpeaker"]]
+    SPK -- "yes · follow-up" --> OBL
     WIN -- no --> SAL["Salience = 0.60·VAD + 0.25·energy + 0.15·duration<br/>+ novelty − habituation"]
     SAL --> TORPOR{"Torpor?"}
     TORPOR -- yes --> A_T[["Abstain · Torpor"]]
@@ -247,6 +249,7 @@ audited later to find false negatives.
 | `Torpor` | The body has a fever or a critical battery |
 | `Habituation` | Suppressed by repetition of similar stimuli |
 | `SelfEcho` | Coincided with its own voice and showed no barge-in evidence |
+| `OtherSpeaker` | Inside an attention window, the voice was not the one that called Enton |
 
 ---
 
@@ -355,6 +358,7 @@ combined pressure is still below both profiles' thresholds. Enton is quiet by de
 | Thought cooldown | 10 s | 5 s |
 | Drive EMA α | 0.1 | 0.2 |
 | Attention window | 5 s | 5 s |
+| Follow-up speaker similarity | ≥ 0.6 | ≥ 0.6 |
 | Habituation half-life | 30 s | 15 s |
 | Slow habituation half-life | 20 min | 10 min |
 | Playback watchdog | 15 s | 20 s |
@@ -378,21 +382,25 @@ cargo run --release -p enton-e1 -- --seed 42               # one seed, full repo
 cargo run --release -p enton-e1 -- --seeds 0..=31 --summary # pooled over 32 seeds
 ```
 
-**Current status** (synthetic proxy, benchmark 2.2.1, calibration seeds 0 to 31, measured
+**Current status** (synthetic proxy, benchmark 2.3.0, calibration seeds 0 to 31, measured
 2026-09-26). One seed is an anecdote, so the table pools 32:
 
 | Criterion (RFC 0001 §7) | Target | Pooled result | Seeds passing | Status |
 |:------------------------|:------:|:--------------|:-------------:|:------:|
-| Fewer cortex calls than the simple controller | ≥ 50 % | 42.8 % (8076 vs 14126) | 0 / 32 | ❌ |
-| Relevant requests served (E1a) | ≥ 99 / 100 | 973 / 3200 | 0 / 32 | ❌ |
+| Fewer cortex calls than the simple controller | ≥ 50 % | 59.7 % (5700 vs 14126) | 32 / 32 | ✅ |
+| Relevant requests served (E1a) | ≥ 99 / 100 | 2585 / 3200 | 0 / 32 | ❌ |
 | Commands served (E1b) | 10 / 10 | 320 / 320 | 32 / 32 | ✅ |
-| Cortex calls during 50 min of noise (E1b) | 0 | 49 (1.5 per seed, at most 3) | 0 / 32 | ❌ |
+| Cortex calls during 50 min of noise (E1b) | 0 | 44 (1.4 per seed, at most 2) | 0 / 32 | ❌ |
 | Self-ignitions | 0 | needs physical measurement | | pending |
 | Added p95 latency | ≤ 100 ms | needs physical measurement | | pending |
 | Core RSS over 24 h | stable | needs physical measurement | | pending |
 
-The summary also reports a 95% Clopper-Pearson upper bound on the request miss rate: a
-"99 / 100" claim is only worth making once that bound, not a single seed, is below 1%.
+The summary also reports a 95% Clopper-Pearson upper bound on the request miss rate (now
+20.4%): a "99 / 100" claim is only worth making once that bound, not a single seed, is below 1%.
+
+Benchmark 2.3.0 simulates an imperfect speaker verifier (3% of voices confused either way), and
+the organism only accepts follow-ups from the voice that called it. Conversations are what still
+fail: replies given while Enton is still talking, and follow-ups after its 5 s attention window.
 
 Every run also watches the reducer at each step, in the spirit of TigerBeetle's VOPR: one
 decision per speech cue, thought IDs in order, time never running backward, budgets and

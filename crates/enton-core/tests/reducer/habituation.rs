@@ -24,6 +24,7 @@ fn habituation_suppresses_repeated_similar_non_addressed_speech() {
             speaker_sim: None,
             media: None,
             turn_complete: None,
+            directed: None,
         },
     });
     assert_thought(&actions1, 1, &Reason::Speech);
@@ -42,6 +43,7 @@ fn habituation_suppresses_repeated_similar_non_addressed_speech() {
                 speaker_sim: None,
                 media: None,
                 turn_complete: None,
+                directed: None,
             },
         });
         if actions.iter().any(|a| {
@@ -74,6 +76,7 @@ fn habituation_suppresses_repeated_similar_non_addressed_speech() {
             speaker_sim: None,
             media: None,
             turn_complete: None,
+            directed: None,
         },
     });
     assert_thought(&keyword_actions, 2, &Reason::Keyword);
@@ -104,6 +107,7 @@ fn novelty_adds_salience_on_prediction_error() {
             speaker_sim: None,
             media: None,
             turn_complete: None,
+            directed: None,
         },
     });
 
@@ -118,6 +122,7 @@ fn novelty_adds_salience_on_prediction_error() {
             speaker_sim: None,
             media: None,
             turn_complete: None,
+            directed: None,
         },
     });
     assert_thought(&actions, 1, &Reason::Speech);
@@ -138,6 +143,7 @@ fn a9_marginal_cue_fate_changes_with_novelty() {
         speaker_sim: None,
         media: None,
         turn_complete: None,
+        directed: None,
     };
 
     // 1. Initial quiet background sound sets running expectation (energy=0.05, vad=0.05, dur=100ms)
@@ -151,6 +157,7 @@ fn a9_marginal_cue_fate_changes_with_novelty() {
             speaker_sim: None,
             media: None,
             turn_complete: None,
+            directed: None,
         },
     });
 
@@ -215,6 +222,7 @@ fn a9_silence_tv_to_novel_speech_resets_habituation() {
                 speaker_sim: None,
                 media: None,
                 turn_complete: None,
+                directed: None,
             },
         });
     }
@@ -239,6 +247,7 @@ fn a9_silence_tv_to_novel_speech_resets_habituation() {
             speaker_sim: None,
             media: None,
             turn_complete: None,
+            directed: None,
         },
     });
 
@@ -269,6 +278,7 @@ fn a9_tunables_in_profile_govern_similarity_and_expectation() {
             speaker_sim: None,
             media: None,
             turn_complete: None,
+            directed: None,
         },
     });
 
@@ -285,6 +295,7 @@ fn a9_tunables_in_profile_govern_similarity_and_expectation() {
             speaker_sim: None,
             media: None,
             turn_complete: None,
+            directed: None,
         },
     });
     assert!(organism.habituation().abs() < f32::EPSILON);
@@ -339,6 +350,7 @@ fn slow_habituation_never_mutes_a_novel_cue_and_survives_it() {
             speaker_sim: None,
             media: None,
             turn_complete: None,
+            directed: None,
         },
     });
     assert!(

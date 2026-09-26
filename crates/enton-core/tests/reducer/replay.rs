@@ -51,6 +51,7 @@ fn a_cue_with_broken_measurements_replays_exactly_like_it_ran_live() {
             speaker_sim: Some(f32::NAN),
             media: Some(f32::NEG_INFINITY),
             turn_complete: Some(f32::NAN),
+            directed: Some(f32::INFINITY),
         },
     };
     let mut live = Organism::new(Profile::t1_ref()).unwrap();

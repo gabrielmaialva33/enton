@@ -79,14 +79,19 @@ pub enum Event {
 }
 
 impl Event {
-    /// The event with any speech cue in canonical form (see [`SpeechCue::canonical`]):
-    /// what the reducer decides on and what a durable log should store.
+    /// The event with any speech cue or body reading in canonical form (see
+    /// [`SpeechCue::canonical`] and [`BodySignals::canonical`]): what the reducer
+    /// decides on and what a durable log should store.
     #[must_use]
     pub fn canonical(self) -> Self {
         match self {
             Event::Speech { now, cue } => Event::Speech {
                 now,
                 cue: cue.canonical(),
+            },
+            Event::Body { now, signals } => Event::Body {
+                now,
+                signals: signals.canonical(),
             },
             other => other,
         }
@@ -118,6 +123,26 @@ pub struct BodySignals {
     pub cpu_load: f32,
 }
 
+impl BodySignals {
+    /// The readings safe to reduce and to serialize. A non-finite temperature or
+    /// battery becomes unknown (`None`) and a non-finite load becomes zero, which is
+    /// also what JSON reads back for them, so a replayed body decides exactly like
+    /// the live one. Battery and load are clamped to the unit interval.
+    #[must_use]
+    pub fn canonical(self) -> Self {
+        let unit = |value: f32| value.clamp(0.0, 1.0);
+        Self {
+            temperature_c: self.temperature_c.filter(|value| value.is_finite()),
+            battery: self.battery.filter(|value| value.is_finite()).map(unit),
+            cpu_load: if self.cpu_load.is_finite() {
+                unit(self.cpu_load)
+            } else {
+                0.0
+            },
+        }
+    }
+}
+
 impl SpeechCue {
     /// The cue with every measurement safe to reduce and to serialize. Non-finite
     /// energy or VAD become zero and non-finite likelihoods become unknown (`None`),
@@ -143,6 +168,7 @@ impl SpeechCue {
             speaker_sim: likelihood(self.speaker_sim),
             media: likelihood(self.media),
             turn_complete: likelihood(self.turn_complete),
+            directed: likelihood(self.directed),
             ..self
         }
     }
@@ -171,4 +197,9 @@ pub struct SpeechCue {
     /// segment (an end-of-turn model such as Smart Turn); `None` when none ran.
     #[serde(default)]
     pub turn_complete: Option<f32>,
+    /// Likelihood, from zero to one, that the speech is addressed to Enton rather
+    /// than to someone else in the room (a device-directedness detector); `None`
+    /// when no detector ran.
+    #[serde(default)]
+    pub directed: Option<f32>,
 }

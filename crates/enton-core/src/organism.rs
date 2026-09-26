@@ -36,20 +36,38 @@ struct PendingAttend {
 
 /// What stands against a cue continuing the owner's turn.
 struct Vetoes {
-    /// The tagger heard a loudspeaker.
-    media: bool,
+    /// What each independent sensor says on its own.
+    alone: Objections,
     /// Voice and source together rule out the owner speaking live.
     other_voice: bool,
-    /// The voice alone rules out the owner: an objection independent of the
-    /// tagger's, so closeness to an unfinished name excuses one sensor, never two.
-    voice_alone: bool,
+}
+
+/// The objections of sensors that err independently of one another, so closeness
+/// to an unfinished name may excuse one of them, never two.
+struct Objections {
+    /// The tagger heard a loudspeaker.
+    media: bool,
+    /// The voice alone rules out the owner.
+    voice: bool,
+    /// The directedness detector heard speech addressed to someone else.
+    undirected: bool,
+}
+
+impl Objections {
+    /// How many of the sensors object.
+    fn count(&self) -> usize {
+        [self.media, self.voice, self.undirected]
+            .into_iter()
+            .filter(|objects| *objects)
+            .count()
+    }
 }
 
 /// A continuation may start this much before the name's recorded end: endpoint jitter.
 const CONTINUATION_JITTER_MS: u64 = 50;
 
 /// The version of the brainstem reducer and snapshot schema.
-pub const REDUCER_VERSION: u32 = 9;
+pub const REDUCER_VERSION: u32 = 10;
 
 /// The physical playback / vocalization state of the organism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -274,6 +292,7 @@ impl Organism {
         match event {
             Event::Tick { now } => self.tick(*now),
             Event::Body { signals, .. } => {
+                let signals = signals.canonical();
                 self.torpor = signals
                     .temperature_c
                     .is_some_and(|value| value >= self.profile.body.fever_c)
@@ -598,7 +617,7 @@ impl Organism {
 
         // Overheard speech, outside any attention window: the TV makes a loudspeaker
         // likelier here too.
-        let media = self.window_vetoes(now, cue).media;
+        let media = self.window_vetoes(now, cue).alone.media;
         self.speech_unaddressed(now, media, norm_energy, norm_vad, norm_dur)
     }
 
@@ -648,13 +667,35 @@ impl Organism {
     }
 
     /// Whether a cue falls inside an attention window: the short one for any voice,
-    /// the long one only for the caller's verified voice.
+    /// the long one for the caller's verified voice or for speech clearly addressed
+    /// to Enton.
     fn is_in_attention_window(&self, now: Millis, cue: &SpeechCue) -> bool {
         self.attention_until.is_some_and(|until| now < until)
             || (self
                 .verified_attention_until
                 .is_some_and(|until| now < until)
-                && self.is_verified_speaker(cue))
+                && (self.is_verified_speaker(cue) || self.is_clearly_addressed(now, cue)))
+    }
+
+    /// What turns a cue inside an attention window away, in order: a loudspeaker,
+    /// another voice, then speech addressed to someone else. None of them extends the
+    /// window, and a pending "Enton?" keeps waiting for its own speaker. Closeness to
+    /// an unfinished name outweighs one independent sensor's objection, never two: a
+    /// cue that two of them reject is someone else, however close in time.
+    fn window_objection(&self, now: Millis, cue: &SpeechCue, norm_vad: f32) -> Option<Abstention> {
+        let vetoes = self.window_vetoes(now, cue);
+        if self.is_adjacent_continuation(now, cue, norm_vad) && vetoes.alone.count() <= 1 {
+            return None;
+        }
+        if vetoes.alone.media {
+            Some(Abstention::Media)
+        } else if vetoes.other_voice {
+            Some(Abstention::OtherSpeaker)
+        } else if vetoes.alone.undirected {
+            Some(Abstention::Undirected)
+        } else {
+            None
+        }
     }
 
     /// Speech inside an attention window: a continuation, a follow-up, or someone else.
@@ -666,29 +707,11 @@ impl Organism {
         norm_vad: f32,
         norm_dur: f32,
     ) -> Action {
-        // Closeness to an unfinished name outweighs one sensor's veto, never both: a cue
-        // that the media tagger and the speaker check both reject is someone else.
-        let Vetoes {
-            media,
-            other_voice,
-            voice_alone,
-        } = self.window_vetoes(now, cue);
-        let excused = self.is_adjacent_continuation(now, cue, norm_vad) && !(media && voice_alone);
-        if !excused && media {
-            // Reproduced media inside the window neither continues nor extends it.
+        if let Some(why) = self.window_objection(now, cue, norm_vad) {
             return Action::Abstain {
                 reason: Reason::FollowUp,
                 salience: self.calculate_base_salience(norm_energy, norm_vad, norm_dur),
-                why: Abstention::Media,
-            };
-        }
-        if !excused && other_voice {
-            // Someone else talking inside the window neither continues the turn nor
-            // extends the window; a pending "Enton?" keeps waiting for its speaker.
-            return Action::Abstain {
-                reason: Reason::FollowUp,
-                salience: self.calculate_base_salience(norm_energy, norm_vad, norm_dur),
-                why: Abstention::OtherSpeaker,
+                why,
             };
         }
         // Addressed speech is never habituated
@@ -867,6 +890,18 @@ impl Organism {
         self.evidence(cue).owner_live() >= self.profile.attention.verified_voice_llr
     }
 
+    /// Whether a directedness detector ran and heard speech clearly addressed to Enton,
+    /// in a voice that the window's own voice objection (stricter while the TV is on)
+    /// does not rule out: when the profile allows it, such a cue may use the longer
+    /// window like the owner's verified voice.
+    fn is_clearly_addressed(&self, now: Millis, cue: &SpeechCue) -> bool {
+        let attention = self.profile.attention;
+        attention.directed_extends_window
+            && cue.directed.is_some()
+            && self.evidence(cue).addressed_over_not >= attention.directed_window_llr
+            && !self.window_vetoes(now, cue).alone.voice
+    }
+
     /// Whether a keyword cue already carries a whole request. Its length says how
     /// likely that is (the name alone is short) and an end-of-turn model adds its
     /// evidence, except for a voice known to be someone else or reproduced media,
@@ -941,9 +976,10 @@ impl Organism {
         self.tv_heard_at = now;
     }
 
-    /// Whether a cue is reproduced media, and whether it is someone else's voice.
-    /// While the TV is on, both take `tv_caution_llr` less evidence, but only for a
-    /// sensor that ran: a cue without one is never turned away for the TV.
+    /// Whether a cue is reproduced media, whether it is someone else's voice, and
+    /// whether it was addressed to someone else. While the TV is on, the first two
+    /// take `tv_caution_llr` less evidence, but only for a sensor that ran: a cue
+    /// without one is never turned away for the TV.
     fn window_vetoes(&self, now: Millis, cue: &SpeechCue) -> Vetoes {
         let source = self.profile.source;
         let caution = if self.tv_presence_at(now) >= source.tv_on_level {
@@ -957,10 +993,14 @@ impl Organism {
             .owner_over_other
             .min(evidence.owner_over_reproduced);
         Vetoes {
-            media: cue.media.is_some()
-                && evidence.live_over_reproduced <= -(source.media_llr - caution),
+            alone: Objections {
+                media: cue.media.is_some()
+                    && evidence.live_over_reproduced <= -(source.media_llr - caution),
+                voice: cue.speaker_sim.is_some() && voice <= other_llr,
+                undirected: cue.directed.is_some()
+                    && evidence.addressed_over_not <= -self.profile.attention.undirected_llr,
+            },
             other_voice: cue.speaker_sim.is_some() && evidence.owner_live() <= other_llr,
-            voice_alone: cue.speaker_sim.is_some() && voice <= other_llr,
         }
     }
 
@@ -1011,8 +1051,16 @@ impl Organism {
         }
     }
 
+    /// Whether the thought counter has no fresh ID left. Only a corrupt snapshot gets
+    /// here (a thought per millisecond would take half a billion years); issuing a
+    /// repeated ID would break idempotency, so Enton stops thinking, as if broke,
+    /// without spending anything.
+    fn thoughts_exhausted(&self) -> bool {
+        self.next_thought == u64::MAX
+    }
+
     fn pay_and_think_obligation(&mut self, now: Millis, reason: Reason, salience: f32) -> Action {
-        if !self.obligation_budget.try_spend(self.prices.think) {
+        if self.thoughts_exhausted() || !self.obligation_budget.try_spend(self.prices.think) {
             return Action::Abstain {
                 reason,
                 salience,
@@ -1020,7 +1068,7 @@ impl Organism {
             };
         }
         let thought = ThoughtId(self.next_thought);
-        self.next_thought += 1;
+        self.next_thought = self.next_thought.saturating_add(1);
         self.ignition.fired(now);
         self.speaking_for_obligation = true;
         Action::Think {
@@ -1036,7 +1084,7 @@ impl Organism {
         reason: Reason,
         salience: f32,
     ) -> Action {
-        if !self.discretionary_budget.try_spend(self.prices.think) {
+        if self.thoughts_exhausted() || !self.discretionary_budget.try_spend(self.prices.think) {
             return Action::Abstain {
                 reason,
                 salience,
@@ -1044,7 +1092,7 @@ impl Organism {
             };
         }
         let thought = ThoughtId(self.next_thought);
-        self.next_thought += 1;
+        self.next_thought = self.next_thought.saturating_add(1);
         self.ignition.fired(now);
         self.speaking_for_obligation = false;
         Action::Think {
@@ -1135,5 +1183,32 @@ mod tests {
             Organism::new(invalid.clone()),
             Err(InvalidProfile { name: invalid.name })
         );
+
+        for broken in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let mut profile = Profile::t1_ref();
+            profile.attention.undirected_llr = broken;
+            assert!(profile.validate().is_err(), "undirected {broken}");
+            let mut profile = Profile::t1_ref();
+            profile.attention.directed_window_llr = broken;
+            assert!(profile.validate().is_err(), "directed window {broken}");
+        }
+    }
+
+    #[test]
+    fn a_profile_stored_before_directedness_reads_back_with_its_defaults() {
+        for shipped in [Profile::t1_ref(), Profile::desktop()] {
+            let mut stored = serde_json::to_value(&shipped).unwrap();
+            let fields = stored.as_object_mut().unwrap();
+            for key in [
+                "undirected_llr",
+                "directed_extends_window",
+                "directed_window_llr",
+            ] {
+                assert!(fields.remove(key).is_some(), "{key}");
+            }
+            fields["senses"].as_object_mut().unwrap().remove("directed");
+            let profile: Profile = serde_json::from_value(stored).unwrap();
+            assert_eq!(profile, shipped);
+        }
     }
 }

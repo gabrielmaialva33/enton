@@ -127,6 +127,7 @@ fn only_the_verified_voice_keeps_a_conversation_through_a_long_pause() {
             speaker_sim: None,
             media: None,
             turn_complete: None,
+            directed: None,
         },
     };
     assert!(!matches!(

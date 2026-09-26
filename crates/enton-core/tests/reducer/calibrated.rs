@@ -16,6 +16,7 @@ fn heard(now: u64, keyword: bool, duration_ms: u32, sim: f32, media: f32) -> Eve
             speaker_sim: Some(sim),
             media: Some(media),
             turn_complete: None,
+            directed: None,
         },
     }
 }
@@ -110,6 +111,7 @@ fn sensed(now: u64, keyword: bool, duration_ms: u32, vad: f32, sensors: (f32, f3
             speaker_sim: Some(sim),
             media: Some(media),
             turn_complete: Some(turn),
+            directed: None,
         },
     }
 }
@@ -159,4 +161,77 @@ fn only_speech_tells_enton_a_tv_is_on() {
         ));
     }
     assert!(organism.tv_presence() > 0.5, "{}", organism.tv_presence());
+}
+
+/// A line in the owner's voice as the shipped sensors hear it, with a directedness reading.
+fn addressed(now: u64, duration_ms: u32, sim: f32, media: f32, directed: f32) -> Event {
+    Event::Speech {
+        now: Millis(now),
+        cue: SpeechCue {
+            energy: 0.9,
+            duration_ms,
+            vad_confidence: 0.9,
+            keyword: false,
+            speaker_sim: Some(sim),
+            media: Some(media),
+            turn_complete: None,
+            directed: Some(directed),
+        },
+    }
+}
+
+#[test]
+fn an_aside_the_detector_hears_clearly_is_turned_away() {
+    // The owner's own voice, which one segment cannot tell from a follow-up: only
+    // the detector's reading (clearly addressed to someone else) turns it away.
+    let mut organism = in_conversation(Organism::new(Profile::t1_ref()).unwrap());
+    assert_abstention(
+        &organism.step(&addressed(3_500, 1_500, 0.55, 0.3, 0.1)),
+        Abstention::Undirected,
+    );
+    // An ambiguous reading leans away by little more than half a nat: still a follow-up.
+    let mut organism = in_conversation(Organism::new(Profile::t1_ref()).unwrap());
+    assert_thought(
+        &organism.step(&addressed(3_500, 1_500, 0.55, 0.3, 0.5)),
+        2,
+        &Reason::FollowUp,
+    );
+}
+
+#[test]
+fn a_command_shaped_aside_is_the_detector_s_blind_spot() {
+    // "Anota aí também o sabão em pó", said to someone else, scores as addressed to
+    // Enton: the detector's confident errors buy a thought like a follow-up would.
+    let mut organism = in_conversation(Organism::new(Profile::t1_ref()).unwrap());
+    assert_thought(
+        &organism.step(&addressed(3_500, 1_500, 0.55, 0.3, 0.95)),
+        2,
+        &Reason::FollowUp,
+    );
+}
+
+#[test]
+fn clearly_addressed_speech_keeps_the_long_window_when_the_voice_says_nothing() {
+    // The 3 s line at 0.5 that says nothing about the voice is overheard speech this
+    // late (see `only_positive_voice_evidence_keeps_the_long_window`); clearly
+    // addressed to Enton, it continues the conversation.
+    let mut organism = in_conversation(Organism::new(Profile::t1_ref()).unwrap());
+    assert_thought(
+        &organism.step(&addressed(10_000, 3_000, 0.5, 0.2, 0.9)),
+        2,
+        &Reason::FollowUp,
+    );
+    // A voice that rules the owner out gets no such benefit.
+    let mut organism = in_conversation(Organism::new(Profile::t1_ref()).unwrap());
+    let actions = organism.step(&addressed(10_000, 3_000, 0.2, 0.2, 0.9));
+    assert!(
+        !matches!(
+            actions.as_slice(),
+            [enton_core::Action::Think {
+                reason: Reason::FollowUp,
+                ..
+            }]
+        ),
+        "{actions:?}"
+    );
 }

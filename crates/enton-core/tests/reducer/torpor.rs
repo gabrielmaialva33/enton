@@ -69,3 +69,26 @@ fn a_ready_drive_records_torpor_without_consuming_ignition() {
         &Reason::Drive("curiosity".to_owned()),
     );
 }
+
+#[test]
+fn a_body_reading_that_is_not_a_number_is_unknown_live_and_in_replay() {
+    // A sensor that reads "inf" is a broken sensor, not a fever: live and replayed
+    // organisms must agree, and JSON can only carry it as unknown.
+    let events = [
+        body(1, Some(f32::INFINITY), Some(f32::NEG_INFINITY)),
+        speech(2, false),
+    ];
+    let mut live = Organism::new(Profile::t1_ref()).unwrap();
+    let mut replayed = live.clone();
+    let live_actions: Vec<_> = events.iter().map(|event| live.step(event)).collect();
+    let replayed_actions: Vec<_> = events
+        .iter()
+        .map(|event| {
+            let stored = serde_json::to_string(&event.clone().canonical()).unwrap();
+            replayed.step(&serde_json::from_str(&stored).unwrap())
+        })
+        .collect();
+    assert_eq!(live_actions, replayed_actions);
+    assert_eq!(live, replayed);
+    assert_thought(&live_actions[1], 1, &Reason::Speech);
+}

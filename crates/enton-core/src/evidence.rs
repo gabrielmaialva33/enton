@@ -25,6 +25,11 @@ pub const TURN_BANDS_MS: [u32; 2] = [1_000, 2_000];
 /// End-of-turn scores that split a band into four bins.
 pub const TURN_EDGES: [f32; 3] = [0.1, 0.5, 0.9];
 
+/// Directedness scores that split a detector's output into three bands: clearly
+/// addressed to someone else below the first, ambiguous up to the second, and
+/// clearly addressed to Enton from it on.
+pub const DIRECTED_EDGES: [f32; 2] = [0.3, 0.75];
+
 /// Narrowest spread a calibration may declare: tighter than any real sensor,
 /// wide enough that no ratio overflows or divides by zero.
 pub const MIN_SD: f32 = 0.01;
@@ -64,6 +69,17 @@ pub struct TurnModel {
     pub llr: [[f32; 4]; 3],
 }
 
+/// How a device-directedness detector separates speech addressed to Enton from
+/// speech addressed to someone else in the room. Like the end-of-turn model its
+/// errors are confident (a command-shaped aside to a person scores near one), so
+/// it is calibrated by bands rather than by a spread.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DirectedModel {
+    /// Log-likelihood ratio, addressed to Enton over addressed to someone else,
+    /// for each score band (split at [`DIRECTED_EDGES`]).
+    pub llr: [f32; 3],
+}
+
 /// Calibration of every sensor that may describe a speech cue.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Senses {
@@ -73,6 +89,9 @@ pub struct Senses {
     pub source: SourceModel,
     /// Finished turn versus a pause inside one.
     pub turn: TurnModel,
+    /// Speech addressed to Enton versus speech addressed to someone else.
+    #[serde(default)]
+    pub directed: DirectedModel,
     /// Largest weight, in nats, that any single ratio may carry.
     pub max_llr: f32,
 }
@@ -89,6 +108,9 @@ pub struct Evidence {
     pub live_over_reproduced: f32,
     /// A finished turn over a pause inside one.
     pub finished_over_unfinished: f32,
+    /// Speech addressed to Enton over speech addressed to someone else.
+    #[serde(default)]
+    pub addressed_over_not: f32,
 }
 
 impl Evidence {
@@ -114,6 +136,7 @@ impl Senses {
     ///   (about 30% of TV dialogue missed, 7 to 35% of live voices flagged).
     /// - Turn: Smart Turn v3.2 at about 250 ms of silence, from per-pause
     ///   predictions on real Portuguese turns.
+    /// - Directed: see [`DirectedModel::calibrated`].
     ///
     /// A device should replace the voice rows with what `owner_probe` measures
     /// on its own microphone.
@@ -138,6 +161,7 @@ impl Senses {
                     [-1.28, -0.61, -0.23, 0.67],
                 ],
             },
+            directed: DirectedModel::calibrated(),
             max_llr: 3.0,
         }
     }
@@ -172,6 +196,9 @@ impl Senses {
             finished_over_unfinished: cue
                 .turn_complete
                 .map_or(0.0, |score| self.capped(self.turn.llr_at(score, duration))),
+            addressed_over_not: cue
+                .directed
+                .map_or(0.0, |score| self.capped(self.directed.llr_at(score))),
         }
     }
 
@@ -198,6 +225,7 @@ impl Senses {
             && self.max_llr.is_finite()
             && self.max_llr > 0.0
             && self.turn.llr.iter().flatten().all(|llr| llr.is_finite())
+            && self.directed.llr.iter().all(|llr| llr.is_finite())
     }
 
     fn capped(&self, llr: f32) -> f32 {
@@ -209,6 +237,32 @@ impl Senses {
 }
 
 impl Default for Senses {
+    fn default() -> Self {
+        Self::calibrated()
+    }
+}
+
+impl DirectedModel {
+    /// A text-based device-directedness detector that reads the transcript with the
+    /// previous turn as context. Published follow-up detectors reach 8 to 14% equal
+    /// error rate; this is the conservative end, against the hardest alternative:
+    /// the owner, in the same voice, talking to someone else in the room. Per band,
+    /// addressed to Enton over such an aside: ln(0.05 / 0.70), ln(0.10 / 0.18) and
+    /// ln(0.85 / 0.12).
+    #[must_use]
+    pub const fn calibrated() -> Self {
+        Self {
+            llr: [-2.64, -0.59, 1.96],
+        }
+    }
+
+    fn llr_at(&self, score: f32) -> f32 {
+        let band = DIRECTED_EDGES.iter().filter(|edge| score >= **edge).count();
+        self.llr.get(band).copied().unwrap_or(0.0)
+    }
+}
+
+impl Default for DirectedModel {
     fn default() -> Self {
         Self::calibrated()
     }
@@ -268,6 +322,15 @@ mod tests {
             speaker_sim: sim,
             media,
             turn_complete: turn,
+            directed: None,
+        }
+    }
+
+    /// A cue that only a directedness detector described.
+    fn addressed(directed: Option<f32>) -> SpeechCue {
+        SpeechCue {
+            directed,
+            ..cue(1_500, None, None, None)
         }
     }
 
@@ -280,13 +343,78 @@ mod tests {
 
     #[test]
     fn a_non_finite_reading_is_a_sensor_that_did_not_run() {
-        let evidence = Senses::calibrated().read(&cue(
-            1_500,
-            Some(f32::NAN),
-            Some(f32::INFINITY),
-            Some(f32::NAN),
-        ));
+        let evidence = Senses::calibrated().read(&SpeechCue {
+            directed: Some(f32::NAN),
+            ..cue(1_500, Some(f32::NAN), Some(f32::INFINITY), Some(f32::NAN))
+        });
         assert_eq!(evidence, Evidence::default());
+    }
+
+    #[test]
+    fn directedness_bands_split_at_their_edges() {
+        let senses = Senses::calibrated();
+        let weigh = |score| senses.read(&addressed(Some(score))).addressed_over_not;
+        let [undirected, ambiguous, directed] = senses.directed.llr;
+        for (score, expected) in [
+            (0.0, undirected),
+            (0.299, undirected),
+            (0.3, ambiguous),
+            (0.749, ambiguous),
+            (0.75, directed),
+            (1.0, directed),
+        ] {
+            assert_eq!(weigh(score).to_bits(), expected.to_bits(), "{score}");
+        }
+        // Out of range readings are clamped into the unit interval first.
+        assert_eq!(weigh(7.0).to_bits(), directed.to_bits());
+        assert_eq!(weigh(-1.0).to_bits(), undirected.to_bits());
+        // No detector, no evidence, whatever the other sensors say.
+        assert_eq!(
+            senses.read(&addressed(None)).addressed_over_not.to_bits(),
+            0
+        );
+    }
+
+    #[test]
+    fn only_a_clearly_addressed_reading_favors_enton() {
+        let senses = Senses::calibrated();
+        let weigh = |score| senses.read(&addressed(Some(score))).addressed_over_not;
+        assert!(weigh(0.1) < -2.0, "an aside-like score is strong evidence");
+        assert!(
+            (-1.0..0.0).contains(&weigh(0.5)),
+            "an ambiguous score leans away"
+        );
+        assert!(weigh(0.9) > 1.5);
+    }
+
+    #[test]
+    fn the_same_directedness_reading_always_weighs_the_same() {
+        // A table lookup and a clamp: these exact bits reproduce on every platform.
+        let senses = Senses::calibrated();
+        let bits = [0.1, 0.5, 0.9].map(|score| {
+            senses
+                .read(&addressed(Some(score)))
+                .addressed_over_not
+                .to_bits()
+        });
+        assert_eq!(bits, [0xc028_f5c3, 0xbf17_0a3d, 0x3ffa_e148]);
+    }
+
+    #[test]
+    fn a_calibration_stored_without_directedness_reads_back_with_the_shipped_model() {
+        let mut stored = serde_json::to_value(Senses::calibrated()).unwrap();
+        stored.as_object_mut().unwrap().remove("directed");
+        let senses: Senses = serde_json::from_value(stored).unwrap();
+        assert_eq!(senses, Senses::calibrated());
+    }
+
+    #[test]
+    fn a_directedness_ratio_is_capped_too() {
+        let mut senses = Senses::calibrated();
+        senses.directed.llr = [-9.0, 0.0, 9.0];
+        let weigh = |score| senses.read(&addressed(Some(score))).addressed_over_not;
+        assert_eq!(weigh(0.0).to_bits(), (-senses.max_llr).to_bits());
+        assert_eq!(weigh(1.0).to_bits(), senses.max_llr.to_bits());
     }
 
     #[test]
@@ -385,6 +513,9 @@ mod tests {
         assert!(!senses.is_valid());
         let mut senses = Senses::calibrated();
         senses.turn.llr[2][0] = f32::NAN;
+        assert!(!senses.is_valid());
+        let mut senses = Senses::calibrated();
+        senses.directed.llr[1] = f32::INFINITY;
         assert!(!senses.is_valid());
         // A spread so narrow that 2 sd^2 underflows would divide zero by zero.
         let mut senses = Senses::calibrated();

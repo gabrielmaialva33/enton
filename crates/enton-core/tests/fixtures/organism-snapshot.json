@@ -19,6 +19,9 @@
     "verified_attention_ms": 10000,
     "whole_request_llr_per_s": 3.0,
     "continuation_gap_ms": 1000,
+    "undirected_llr": 1.5,
+    "directed_extends_window": true,
+    "directed_window_llr": 1.5,
     "salience_vad_weight": 0.6,
     "salience_energy_weight": 0.25,
     "salience_duration_weight": 0.15,
@@ -96,6 +99,13 @@
             -0.23,
             0.67
           ]
+        ]
+      },
+      "directed": {
+        "llr": [
+          -2.64,
+          -0.59,
+          1.96
         ]
       },
       "max_llr": 3.0

@@ -23,7 +23,7 @@ pub use action::{Abstention, Action, Reason, ThoughtId};
 pub use drive::{Drive, DriveTable};
 pub use energy::{Budget, PriceTable};
 pub use event::{BodySignals, Event, Millis, SpeechCue, UtteranceId};
-pub use evidence::{Evidence, Senses, SourceModel, TurnModel, VoiceModel};
+pub use evidence::{DirectedModel, Evidence, Senses, SourceModel, TurnModel, VoiceModel};
 pub use ignition::Ignition;
 pub use organism::{Organism, PlaybackStatus, REDUCER_VERSION, contains_keyword_word};
 pub use profile::{

@@ -143,6 +143,24 @@ pub struct AttentionPolicy {
     /// stronger evidence than a single segment's voice or media score.
     #[serde(default = "default_continuation_gap_ms")]
     pub continuation_gap_ms: u32,
+    /// Evidence that speech is addressed to someone else, in nats, at or beyond which
+    /// a cue inside an attention window is not for Enton (the owner talking to someone
+    /// in the room, or others talking to each other): it neither continues a turn nor
+    /// extends the window. Cues without a directedness detector pass. Against the
+    /// shipped calibration only the clearly undirected band reaches 1.5 nats: an
+    /// ambiguous reading, which one follow-up in ten gets, does not.
+    #[serde(default = "default_undirected_llr")]
+    pub undirected_llr: f32,
+    /// Whether speech clearly addressed to Enton may use the longer window too, like
+    /// the owner's verified voice, as long as its voice does not rule the owner out.
+    /// Off, directedness only ever turns cues away.
+    #[serde(default = "default_directed_extends_window")]
+    pub directed_extends_window: bool,
+    /// Evidence that speech is addressed to Enton, in nats, at or above which a cue
+    /// counts as clearly addressed for `directed_extends_window`. Against the shipped
+    /// calibration, 1.5 nats takes the clearly addressed band and nothing else.
+    #[serde(default = "default_directed_window_llr")]
+    pub directed_window_llr: f32,
 }
 
 /// Weights that turn a speech cue into salience, plus the novelty bonus.
@@ -229,6 +247,18 @@ fn default_whole_request_llr_per_s() -> f32 {
 
 fn default_continuation_gap_ms() -> u32 {
     1_000
+}
+
+fn default_undirected_llr() -> f32 {
+    1.5
+}
+
+fn default_directed_extends_window() -> bool {
+    true
+}
+
+fn default_directed_window_llr() -> f32 {
+    1.5
 }
 
 fn default_verified_barge_in_margin() -> f32 {
@@ -331,6 +361,9 @@ impl Profile {
                 verified_attention_ms: 10_000,
                 whole_request_llr_per_s: default_whole_request_llr_per_s(),
                 continuation_gap_ms: 1_000,
+                undirected_llr: default_undirected_llr(),
+                directed_extends_window: default_directed_extends_window(),
+                directed_window_llr: default_directed_window_llr(),
             },
             salience: SaliencePolicy {
                 salience_vad_weight: 0.60,
@@ -399,6 +432,9 @@ impl Profile {
                 verified_attention_ms: 10_000,
                 whole_request_llr_per_s: default_whole_request_llr_per_s(),
                 continuation_gap_ms: 1_000,
+                undirected_llr: default_undirected_llr(),
+                directed_extends_window: default_directed_extends_window(),
+                directed_window_llr: default_directed_window_llr(),
             },
             salience: SaliencePolicy {
                 salience_vad_weight: 0.60,
@@ -512,9 +548,14 @@ impl AttentionPolicy {
         self.attention_ms > 0
             && self.keyword_only_ms > 0
             && (0.0..=1.0).contains(&self.follow_up_min_vad)
-            && [self.verified_voice_llr, self.other_voice_llr]
-                .iter()
-                .all(|llr| llr.is_finite() && *llr > 0.0)
+            && [
+                self.verified_voice_llr,
+                self.other_voice_llr,
+                self.undirected_llr,
+                self.directed_window_llr,
+            ]
+            .iter()
+            .all(|llr| llr.is_finite() && *llr > 0.0)
             && self.verified_attention_ms >= self.attention_ms
             && self.whole_request_llr_per_s.is_finite()
             && self.whole_request_llr_per_s > 0.0

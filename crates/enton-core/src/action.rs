@@ -43,6 +43,8 @@ pub enum Abstention {
     OtherSpeaker,
     /// The cue sounded like reproduced media (TV, radio, music), not a live voice.
     Media,
+    /// Inside an attention window, the speech was addressed to someone else.
+    Undirected,
 }
 
 /// A brainstem decision.

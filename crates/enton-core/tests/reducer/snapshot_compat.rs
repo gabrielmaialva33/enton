@@ -10,7 +10,7 @@ use enton_core::{
 /// Reducer version that wrote the fixture. After bumping `REDUCER_VERSION`, regenerate it
 /// with `cargo test -p enton-core --test reducer -- --ignored regenerate_the_snapshot_fixture`
 /// and review the diff: it shows exactly how the organism's state changed.
-const FIXTURE_REDUCER_VERSION: u32 = 9;
+const FIXTURE_REDUCER_VERSION: u32 = 10;
 
 /// State after `run_tape`, as the soul would store it.
 const FIXTURE: &str = include_str!("../fixtures/organism-snapshot.json");
@@ -19,7 +19,8 @@ const FIXTURE: &str = include_str!("../fixtures/organism-snapshot.json");
 /// object name means the organism itself.
 const REMOVED: &[(&str, &str)] = &[];
 
-/// A cue with all three sensors reporting: `(speaker_sim, media, turn_complete)`.
+/// A cue with the speaker, media and end-of-turn sensors reporting:
+/// `(speaker_sim, media, turn_complete)`.
 fn cue(
     energy: f32,
     vad: f32,
@@ -36,6 +37,15 @@ fn cue(
         speaker_sim: Some(speaker_sim),
         media: Some(media),
         turn_complete: Some(turn_complete),
+        directed: None,
+    }
+}
+
+/// The same cue with a directedness detector's reading as well.
+fn addressed(cue: SpeechCue, directed: f32) -> SpeechCue {
+    SpeechCue {
+        directed: Some(directed),
+        ..cue
     }
 }
 
@@ -72,7 +82,15 @@ fn run_tape(mut organism: Organism) -> Organism {
             now: Millis(3_000),
             utterance: UtteranceId(1),
         },
-        speech(3_600, cue(0.9, 0.9, 1_200, false, (0.85, 0.1, 0.9))),
+        // An aside inside the window, then the follow-up, both read by a directedness detector.
+        speech(
+            3_200,
+            addressed(cue(0.9, 0.9, 500, false, (0.85, 0.1, 0.9)), 0.1),
+        ),
+        speech(
+            3_600,
+            addressed(cue(0.9, 0.9, 1_200, false, (0.85, 0.1, 0.9)), 0.9),
+        ),
         Event::Tick {
             now: Millis(60_000),
         },
@@ -129,7 +147,7 @@ fn a_stored_snapshot_restores_to_the_same_state() {
     // Restored mid-request, it finishes the caller's request exactly like the live one.
     let rest = Event::Speech {
         now: Millis(3_601_200),
-        cue: cue(0.9, 0.9, 600, false, (0.9, 0.1, 0.9)),
+        cue: addressed(cue(0.9, 0.9, 600, false, (0.9, 0.1, 0.9)), 0.9),
     };
     let (mut live, mut resumed) = (organism.clone(), restored);
     let finished = live.step(&rest);

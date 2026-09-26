@@ -12,8 +12,8 @@
 [![Rust](https://img.shields.io/badge/Rust_2024-000000?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-dea584?style=for-the-badge&logo=rust&logoColor=white)](./Cargo.toml)
 [![unsafe](https://img.shields.io/badge/unsafe-forbidden-991b1b?style=for-the-badge)](./Cargo.toml)
-[![Binary](https://img.shields.io/badge/core_binary-4.7_MiB-15803d?style=for-the-badge)](#build-profiles)
-[![Tests](https://img.shields.io/badge/tests-115_passing-00C853?style=for-the-badge)](./crates)
+[![Binary](https://img.shields.io/badge/core_binary-7.0_MiB-15803d?style=for-the-badge)](#build-profiles)
+[![Tests](https://img.shields.io/badge/tests-156_passing-00C853?style=for-the-badge)](./crates)
 [![License](https://img.shields.io/badge/license-MIT-dc2626?style=for-the-badge)](./LICENSE)
 
 ---
@@ -82,10 +82,10 @@ flowchart LR
     CTX -->|CortexReply| Brainstem
     Brainstem -->|Speak| VOI
     VOI -->|Playback events| Brainstem
-    Brainstem -.->|events + decisions| SOUL
+    Brainstem -->|events + decisions| SOUL
 ```
 
-<sub>Dotted edges: the adapter is implemented and tested, but not yet wired into the `enton` binary.</sub>
+<sub>Dotted edge: the microphone adapter is implemented and tested, but not yet wired into the `enton` binary.</sub>
 
 | Property | Value |
 |:---------|:------|
@@ -93,8 +93,8 @@ flowchart LR
 | **Runtime** | tokio `current_thread`: one event loop, bounded channels |
 | **Crates** | 4: core, adapters, binary, E1 harness |
 | **Source** | 13,049 lines + 4,474 lines of tests and examples |
-| **Tests** | 115 passing with default features, 201 with all features |
-| **Lean binary** | 4.7 MiB, no shared libraries |
+| **Tests** | 156 passing with default features, 222 with all features |
+| **Lean binary** | 7.0 MiB (5.3 MiB on aarch64), no shared libraries |
 | **Cortex** | Any OpenAI-compatible server, local Ollama by default |
 
 ---
@@ -125,6 +125,9 @@ Abstain { reason: Speech, salience: 0.976, why: Cooldown }
 continuation into a single thought. The later remark, not addressed to it, lands inside the
 10 s cooldown, so it **abstains** and says why. Type `quit` to exit.
 
+Everything it perceives and decides is written to its **soul** before it acts, so the next run
+resumes exactly where this one stopped, and a thought interrupted by a crash is never repeated.
+
 <details>
 <summary><strong>Prerequisites</strong></summary>
 
@@ -145,6 +148,8 @@ continuation into a single thought. The later remark, not addressed to it, lands
 | `--profile t1-ref\|desktop` | `t1-ref` | Hardware profile: thresholds, budgets, torpor limits |
 | `--cortex-url <URL>` | `http://127.0.0.1:11434/v1` | OpenAI-compatible base URL |
 | `--model <MODEL>` | `qwen3.8:27b-gato` | Model identifier sent to the cortex |
+| `--soul <PATH>` | `~/.local/share/enton/soul-<profile>.sqlite` | Durable event log the organism resumes from |
+| `--no-soul` | off | Run without recording anything |
 | `--voice` | off | Speak replies out loud (needs the `voice` feature) |
 | `--speaker <ID>` | `42` (`pf_dora`) | Kokoro speaker ID |
 
@@ -300,7 +305,7 @@ Boundaries are crossed only through the core's public API.
 | **Drives** | Homeostatic pressures that grow with elapsed time; pressure is the weighted sum of squared levels |
 | **Ignition** | EMA-smoothed drive pressure with hysteresis and a shared thought cooldown |
 | **Budget** | Two accounts: **obligation** (addressed turns, follow-ups) and **discretionary** (drives, overheard speech), so being addressed never competes with idle curiosity |
-| **Habituation & novelty** | A running expectation of recent cues; repetition suppresses salience, prediction error resets it |
+| **Habituation & novelty** | A running expectation of recent cues. Repetition suppresses salience on two timescales: a fast component that a surprise resets, and a slow one that outlasts quiet gaps (a TV that pauses is still a TV) and only ever mutes familiar cues |
 | **Self-echo model** | Adaptive estimate of its own voice at the microphone, barge-in margins, a consecutive barge-in ratchet and a playback watchdog |
 | **Torpor** | Fever or critical battery blocks discretionary thought; being called by name still gets an answer |
 
@@ -318,9 +323,10 @@ Boundaries are crossed only through the core's public API.
 
 > [!TIP]
 > **Privacy by construction.** Raw audio lives only in a 30 s RAM ring and is never written to
-> disk. The soul stores reduced cues and decisions, never raw media. The keyword matcher accepts
-> only the whole token *Enton*, never *então* or *Benton*. Voiceprints are written with mode
-> `0600` and refused anywhere inside the repository.
+> disk. The soul stores reduced cues and decisions (including Enton's own replies), never raw
+> audio or what was said to it. The keyword matcher accepts only the whole token *Enton*, never
+> *então* or *Benton*. Voiceprints are written with mode `0600` and refused anywhere inside the
+> repository.
 
 ---
 
@@ -350,6 +356,7 @@ combined pressure is still below both profiles' thresholds. Enton is quiet by de
 | Drive EMA α | 0.1 | 0.2 |
 | Attention window | 5 s | 5 s |
 | Habituation half-life | 30 s | 15 s |
+| Slow habituation half-life | 20 min | 10 min |
 | Playback watchdog | 15 s | 20 s |
 | TTS threads | 2 | 8 |
 
@@ -367,21 +374,30 @@ models, audio and budget. The thesis is refuted if Enton fails any criterion.
 - **E1b:** 10 commands buried in 50 minutes of noise (TV, another person, motor, ventilation, its own echo).
 
 ```bash
-cargo run --release -p enton-e1 -- --seed 42
-cargo run --release -p enton-e1 -- --seeds 0..=9 --json
+cargo run --release -p enton-e1 -- --seed 42               # one seed, full report
+cargo run --release -p enton-e1 -- --seeds 0..=31 --summary # pooled over 32 seeds
 ```
 
-**Current status** (synthetic proxy, benchmark 2.2.1, seed 42, measured 2026-09-26):
+**Current status** (synthetic proxy, benchmark 2.2.1, calibration seeds 0 to 31, measured
+2026-09-26). One seed is an anecdote, so the table pools 32:
 
-| Criterion (RFC 0001 §7) | Target | Result | Status |
-|:------------------------|:------:|:-------|:------:|
-| Fewer cortex calls than the simple controller | ≥ 50 % | 41.85 % (264 vs 454) | ❌ |
-| Relevant requests served (E1a) | ≥ 99 / 100 | 31 / 100 | ❌ |
-| Commands served (E1b) | 10 / 10 | 10 / 10 | ✅ |
-| Cortex calls during 50 min of noise (E1b) | 0 | 11 (simple controller: 181) | ❌ |
-| Self-ignitions | 0 | needs physical measurement | pending |
-| Added p95 latency | ≤ 100 ms | needs physical measurement | pending |
-| Core RSS over 24 h | stable | needs physical measurement | pending |
+| Criterion (RFC 0001 §7) | Target | Pooled result | Seeds passing | Status |
+|:------------------------|:------:|:--------------|:-------------:|:------:|
+| Fewer cortex calls than the simple controller | ≥ 50 % | 42.8 % (8076 vs 14126) | 0 / 32 | ❌ |
+| Relevant requests served (E1a) | ≥ 99 / 100 | 973 / 3200 | 0 / 32 | ❌ |
+| Commands served (E1b) | 10 / 10 | 320 / 320 | 32 / 32 | ✅ |
+| Cortex calls during 50 min of noise (E1b) | 0 | 49 (1.5 per seed, at most 3) | 0 / 32 | ❌ |
+| Self-ignitions | 0 | needs physical measurement | | pending |
+| Added p95 latency | ≤ 100 ms | needs physical measurement | | pending |
+| Core RSS over 24 h | stable | needs physical measurement | | pending |
+
+The summary also reports a 95% Clopper-Pearson upper bound on the request miss rate: a
+"99 / 100" claim is only worth making once that bound, not a single seed, is below 1%.
+
+Every run also watches the reducer at each step, in the spirit of TigerBeetle's VOPR: one
+decision per speech cue, thought IDs in order, time never running backward, budgets and
+habituation in bounds, and a snapshot round trip every 1000 steps that must keep stepping in
+lockstep with the live organism. A violation stops the run.
 
 **Overall: FAIL.** That is the point of E1: the thesis gets published with its refutation
 attempt attached. Calibration uses seeds 0 to 999; seeds from 1000 up are a held-out set reserved
@@ -398,8 +414,8 @@ for the freeze owner.
 | **Senses** | YOLO, Whisper, CLAP, InsightFace, FER | Body signals, VAD and keyword before any transcription |
 | **Memory** | Qdrant episodes | Durable, replayable event log |
 | **Voice** | Kokoro in Python | Kokoro via sherpa-onnx, with barge-in |
-| **Proof** | 136 unit tests | 115 tests plus a refutation experiment |
-| **Footprint** | CUDA + PyTorch | 4.7 MiB binary, no native runtime in the lean build |
+| **Proof** | 136 unit tests | 156 tests plus a refutation experiment |
+| **Footprint** | CUDA + PyTorch | 7.0 MiB binary, no native runtime in the lean build |
 
 Vision is deliberately out of scope for milestone 1.
 
@@ -407,13 +423,13 @@ Vision is deliberately out of scope for milestone 1.
 
 ## Build Profiles
 
-The RFC budget for the core binary is **under 20 MB**. Measured on 2026-09-25 (release, stripped):
+The RFC budget for the core binary is **under 20 MB**. Measured on 2026-09-26 (release, stripped, x86_64):
 
 | Profile | Command | Executable | Shared libraries |
 |:--------|:--------|:----------:|:-----------------|
-| **T1** (lean, default) | `cargo build --release -p enton` | 4.7 MiB | none |
-| **Desktop** (static) | `cargo build --release -p enton --features audio,voice` | 33.0 MiB | none (ONNX Runtime linked in) |
-| **Desktop** (shared) | `cargo build --release -p enton --features audio,voice,shared-runtime` | 4.9 MiB | `libsherpa-onnx-c-api.so` 4.9 MiB, `libonnxruntime.so` 25.8 MiB |
+| **T1** (lean, default) | `cargo build --release -p enton` | 7.0 MiB | none |
+| **Desktop** (static) | `cargo build --release -p enton --features audio,voice` | 35.3 MiB | none (ONNX Runtime linked in) |
+| **Desktop** (shared) | `cargo build --release -p enton --features audio,voice,shared-runtime` | 7.2 MiB | `libsherpa-onnx-c-api.so` 4.9 MiB, `libonnxruntime.so` 25.8 MiB |
 
 With `shared-runtime`, both libraries must be on the library path (`LD_LIBRARY_PATH` or a system directory).
 
@@ -461,7 +477,7 @@ Milestone 1 tracks, as named in RFC 0001:
 | Voice | done | Kokoro pt-BR, sentence streaming, barge-in |
 | Cortex | done | OpenAI-compatible, streaming, idempotent |
 | P5 · Perception by surprise | next | Capture, VAD and keyword adapter done; wiring into the binary next |
-| P4 · Soul | next | Durable log, snapshots and replay done; wiring into the binary next |
+| P4 · Soul | done | Write-ahead event log in the binary, snapshots, crash recovery |
 | D2 · Counterfactuals | done | Abstentions with reasons, E1 harness, offline evaluation |
 | E1 | in progress | Synthetic proxy currently fails (see above) |
 | Owner voice ID | measuring | CAM++ speaker verification probe |

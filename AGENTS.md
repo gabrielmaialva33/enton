@@ -107,13 +107,15 @@ The core binary size is measured to ensure it fits the RFC 0001 §4 budget (< 20
 
 | Profile            | Command                                                                | Executable | Shared libraries                                                |
 |--------------------|------------------------------------------------------------------------|------------|-----------------------------------------------------------------|
-| T1 (lean, default) | `cargo build --release -p enton`                                       | 4.7 MiB    | none                                                            |
-| Desktop (static)   | `cargo build --release -p enton --features audio,voice`                | 33.0 MiB   | none (ONNX Runtime linked in)                                   |
-| Desktop (shared)   | `cargo build --release -p enton --features audio,voice,shared-runtime` | 4.9 MiB    | `libsherpa-onnx-c-api.so` 4.9 MiB, `libonnxruntime.so` 25.8 MiB |
+| T1 (lean, default) | `cargo build --release -p enton`                                       | 7.0 MiB    | none                                                            |
+| Desktop (static)   | `cargo build --release -p enton --features audio,voice`                | 35.3 MiB   | none (ONNX Runtime linked in)                                   |
+| Desktop (shared)   | `cargo build --release -p enton --features audio,voice,shared-runtime` | 7.2 MiB    | `libsherpa-onnx-c-api.so` 4.9 MiB, `libonnxruntime.so` 25.8 MiB |
 
-Measured 2026-09-25 (release, stripped). The default build is the lean T1 one; the
-desktop needs the `audio,voice` features. Only the shared desktop build and the lean
-build meet the RFC §4 core budget (< 20 MB with native runtimes outside the binary).
+Measured 2026-09-26 (release, stripped, x86_64; the lean aarch64-musl build is
+5.3 MiB). The default build is the lean T1 one, and it includes the soul (bundled
+SQLite); the desktop needs the `audio,voice` features. Only the shared desktop build
+and the lean build meet the RFC §4 core budget (< 20 MB with native runtimes outside
+the binary).
 
 Note: When using the `shared-runtime` feature, the `libsherpa-onnx-c-api.so` and `libonnxruntime.so` shared libraries
 must be accessible in the library path (e.g. `LD_LIBRARY_PATH` or a system directory).

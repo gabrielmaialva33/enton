@@ -27,6 +27,7 @@ fn heard(
             media: Some(media),
             turn_complete: Some(turn_complete),
             directed,
+            direction: None,
         },
     }
 }
@@ -49,6 +50,7 @@ fn only_directed(now: u64, duration_ms: u32, directed: Option<f32>) -> Event {
             media: None,
             turn_complete: None,
             directed,
+            direction: None,
         },
     }
 }

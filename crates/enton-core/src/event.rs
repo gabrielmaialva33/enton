@@ -143,11 +143,37 @@ impl BodySignals {
     }
 }
 
+/// Shortest and longest vector a direction reading may be: an estimator reports a unit
+/// vector, so one far from unit length is a broken reading, not a direction.
+const DIRECTION_LENGTH: core::ops::RangeInclusive<f32> = 0.5..=1.5;
+
+/// How far from one a reading's length may be for it to count as a unit vector already.
+/// Normalizing leaves a length within a few units in the last place of one, far inside
+/// this slack, so a canonical reading canonicalizes to itself.
+const UNIT_SLACK: f32 = 1e-5;
+
+/// `[x, y]` scaled to unit length, or `None` when it is not a direction at all: not
+/// finite, or too far from unit length. IEEE 754 square root and division are correctly
+/// rounded, so every platform computes the same bits.
+fn unit_direction([x, y]: [f32; 2]) -> Option<[f32; 2]> {
+    let length = (x * x + y * y).sqrt();
+    if !DIRECTION_LENGTH.contains(&length) {
+        return None;
+    }
+    if (length - 1.0).abs() <= UNIT_SLACK {
+        Some([x, y])
+    } else {
+        Some([x / length, y / length])
+    }
+}
+
 impl SpeechCue {
     /// The cue with every measurement safe to reduce and to serialize. Non-finite
     /// energy or VAD become zero and non-finite likelihoods become unknown (`None`),
     /// which is also what JSON reads back for them, so a replayed cue decides exactly
-    /// like the live one. Finite values are clamped to the unit interval.
+    /// like the live one. Finite values are clamped to the unit interval. A direction
+    /// becomes unknown unless both components are finite and its length lies within
+    /// 0.5 and 1.5; then it is scaled to unit length.
     #[must_use]
     pub fn canonical(self) -> Self {
         let level = |value: f32| {
@@ -169,6 +195,7 @@ impl SpeechCue {
             media: likelihood(self.media),
             turn_complete: likelihood(self.turn_complete),
             directed: likelihood(self.directed),
+            direction: self.direction.and_then(unit_direction),
             ..self
         }
     }
@@ -202,4 +229,97 @@ pub struct SpeechCue {
     /// when no detector ran.
     #[serde(default)]
     pub directed: Option<f32>,
+    /// Direction of arrival that a microphone array estimated for the segment, as the
+    /// unit vector `[cos, sin]` of its azimuth in the array's own frame; `None` when no
+    /// array ran. Omitted from JSON when absent, so a cue without the sensor is stored
+    /// exactly as it was before the sensor existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<[f32; 2]>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pointing(direction: [f32; 2]) -> Option<[f32; 2]> {
+        SpeechCue {
+            direction: Some(direction),
+            ..SpeechCue::default()
+        }
+        .canonical()
+        .direction
+    }
+
+    #[test]
+    fn a_direction_is_scaled_to_unit_length() {
+        assert_eq!(pointing([1.2, 0.0]), Some([1.0, 0.0]));
+        assert_eq!(pointing([0.0, -0.6]), Some([0.0, -1.0]));
+        // Length 1.25, exact in binary: each component is the nearest float to 0.6 and 0.8.
+        assert_eq!(pointing([0.75, 1.0]), Some([0.6, 0.8]));
+        // A reading already of unit length keeps its bits.
+        let unit = [0.6_f32, 0.8];
+        assert_eq!(
+            pointing(unit).map(|v| v.map(f32::to_bits)),
+            Some(unit.map(f32::to_bits))
+        );
+    }
+
+    #[test]
+    fn a_broken_direction_is_no_direction() {
+        for broken in [
+            [f32::NAN, 1.0],
+            [1.0, f32::INFINITY],
+            [f32::NEG_INFINITY, 0.0],
+            [0.0, 0.0],
+            [0.3, 0.3],
+            [1.2, 1.2],
+            [f32::MAX, 0.0],
+            [-3.0, 0.0],
+        ] {
+            assert_eq!(pointing(broken), None, "{broken:?}");
+        }
+        // The length limits are inclusive.
+        assert_eq!(pointing([0.5, 0.0]), Some([1.0, 0.0]));
+        assert_eq!(pointing([0.0, 1.5]), Some([0.0, 1.0]));
+    }
+
+    #[test]
+    fn canonical_directions_canonicalize_to_themselves() {
+        // Directions every few degrees around the circle, at lengths across the whole
+        // accepted range: normalizing twice must give the same bits as once.
+        for step in 0..720_u16 {
+            let angle = f32::from(step) * core::f32::consts::PI / 360.0;
+            for length in [0.51_f32, 0.73, 0.999_9, 1.0, 1.000_2, 1.31, 1.49] {
+                let once = pointing([length * angle.cos(), length * angle.sin()]).unwrap();
+                let twice = pointing(once).unwrap();
+                assert_eq!(
+                    once.map(f32::to_bits),
+                    twice.map(f32::to_bits),
+                    "{angle} {length}"
+                );
+                let norm = (once[0] * once[0] + once[1] * once[1]).sqrt();
+                assert!((norm - 1.0).abs() <= UNIT_SLACK, "{norm}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_cue_without_a_direction_serializes_as_before_the_sensor_existed() {
+        let cue = SpeechCue {
+            energy: 0.5,
+            duration_ms: 900,
+            vad_confidence: 0.8,
+            ..SpeechCue::default()
+        };
+        let json = serde_json::to_string(&cue).unwrap();
+        assert!(!json.contains("direction"), "{json}");
+        assert_eq!(serde_json::from_str::<SpeechCue>(&json).unwrap(), cue);
+        let pointed = SpeechCue {
+            direction: Some([0.6, 0.8]),
+            ..cue
+        };
+        let json = serde_json::to_string(&pointed).unwrap();
+        assert!(json.contains(r#""direction":[0.6,0.8]"#), "{json}");
+        assert_eq!(serde_json::from_str::<SpeechCue>(&json).unwrap(), pointed);
+    }
 }

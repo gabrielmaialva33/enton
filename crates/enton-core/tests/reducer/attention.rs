@@ -20,6 +20,7 @@ fn keyword_only_turn_attends_and_merges_continuation() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_eq!(
@@ -48,6 +49,7 @@ fn keyword_only_turn_attends_and_merges_continuation() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
 
@@ -83,6 +85,7 @@ fn keyword_only_turn_thinks_on_timeout_when_no_continuation_arrives() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_eq!(
@@ -136,6 +139,7 @@ fn attention_window_follow_up_bypasses_cooldown_and_pays_normal_energy() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_thought(&actions1, 1, &Reason::Keyword);
@@ -153,6 +157,7 @@ fn attention_window_follow_up_bypasses_cooldown_and_pays_normal_energy() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     // Bypasses cooldown! Becomes Reason::FollowUp
@@ -173,6 +178,7 @@ fn attention_window_follow_up_bypasses_cooldown_and_pays_normal_energy() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_abstention(&actions3, Abstention::OutOfEnergy);
@@ -215,6 +221,7 @@ fn a8_slow_reply_anchors_attention_independent_of_tick_interleaving() {
         media: None,
         turn_complete: None,
         directed: None,
+        direction: None,
     };
     let follow_up = org_with_tick.step(&Event::Speech {
         now: Millis(7_000),
@@ -320,6 +327,7 @@ fn dual_mode_attention_anchoring() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     text_org.step(&Event::CortexReply {
@@ -341,6 +349,7 @@ fn dual_mode_attention_anchoring() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     voice_org.step(&Event::CortexReply {

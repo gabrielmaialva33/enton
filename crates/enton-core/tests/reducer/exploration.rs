@@ -34,6 +34,7 @@ fn said(now: u64, keyword: bool, readings: (Option<f32>, Option<f32>, Option<f32
             media,
             turn_complete: None,
             directed,
+            direction: None,
         },
     }
 }

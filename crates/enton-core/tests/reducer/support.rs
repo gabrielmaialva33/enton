@@ -1,6 +1,6 @@
 use enton_core::{
-    Abstention, Action, BodySignals, DirectedModel, Event, Millis, Profile, Reason, Senses,
-    SourceModel, SpeechCue, ThoughtId, TurnModel, VoiceModel,
+    Abstention, Action, BodySignals, DirectedModel, DirectionModel, Event, Millis, Profile, Reason,
+    Senses, SourceModel, SpeechCue, ThoughtId, TurnModel, VoiceModel,
 };
 
 pub(crate) fn speech(now: u64, keyword: bool) -> Event {
@@ -15,6 +15,7 @@ pub(crate) fn speech(now: u64, keyword: bool) -> Event {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     }
 }
@@ -42,6 +43,7 @@ pub(crate) fn voice(now: u64, keyword: bool, duration_ms: u32, speaker_sim: f32)
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     }
 }
@@ -58,6 +60,7 @@ pub(crate) fn tv_cue(now: u64) -> Event {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     }
 }
@@ -84,6 +87,12 @@ pub(crate) fn lab_profile() -> Profile {
         },
         directed: DirectedModel {
             llr: [-4.0, 0.0, 4.0],
+        },
+        // As concentrated as the shipped array, with a clean floor and ceiling.
+        direction: DirectionModel {
+            kappa: 15.0,
+            max_llr: 4.0,
+            min_llr: -4.0,
         },
         max_llr: 6.0,
     };

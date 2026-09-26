@@ -49,6 +49,7 @@ fn weak_speech_records_below_threshold() {
                 media: None,
                 turn_complete: None,
                 directed: None,
+                direction: None,
             },
         }),
         Abstention::BelowThreshold,
@@ -108,6 +109,7 @@ fn speech_salience_uses_the_specified_weights_and_caps_duration() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     let [Action::Think { salience, .. }] = actions.as_slice() else {
@@ -150,6 +152,7 @@ fn salience_short_clear_direct_speech_passes_and_low_vad_never_passes() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     let [
@@ -182,6 +185,7 @@ fn salience_short_clear_direct_speech_passes_and_low_vad_never_passes() {
                         media: None,
                         turn_complete: None,
                         directed: None,
+                        direction: None,
                     },
                 });
                 assert!(

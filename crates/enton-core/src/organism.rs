@@ -1,8 +1,10 @@
 //! The deterministic brainstem reducer.
 
+use core::cmp::Ordering;
+
 use serde::{Deserialize, Serialize};
 
-use crate::profile::{DRAW_SCALE, InvalidProfile, Profile};
+use crate::profile::{DRAW_SCALE, InvalidProfile, Profile, TvCautionConfinement};
 use crate::{
     Abstention, Action, Budget, DriveTable, Event, Evidence, Ignition, Millis, PriceTable, Reason,
     SpeechCue, ThoughtId, UtteranceId,
@@ -38,12 +40,29 @@ struct PendingAttend {
 struct Vetoes {
     /// What each independent sensor says on its own.
     alone: Objections,
-    /// Voice and source together rule out the owner speaking live.
+    /// Voice, source and direction together rule out the owner speaking live.
     other_voice: bool,
 }
 
+/// Where the TV caution applies to one cue, in nats.
+struct Cautions {
+    /// To each sensor's own objection and to another person's voice.
+    sensors: f32,
+    /// To the loudspeaker alternative: voice, tagger and direction together.
+    loudspeaker: f32,
+    /// Whether the cue's direction of arrival is weighed at all.
+    direction: bool,
+    /// Whether the caution weighs on the loudspeaker alternative alone.
+    confined: bool,
+}
+
 /// The objections of sensors that err independently of one another, so closeness
-/// to an unfinished name may excuse one of them, never two.
+/// to an unfinished name may excuse one of them, never two. Each sensor raises at
+/// most one: the voice objects on the voice alone and the tagger on its reading alone,
+/// even though both, with the direction, also weigh in on the loudspeaker alternative.
+// One independent flag per sensor, which is what the rule counts: the flags are not the
+// states of one machine, the case this pedantic lint guards against.
+#[allow(clippy::struct_excessive_bools)]
 struct Objections {
     /// The tagger heard a loudspeaker.
     media: bool,
@@ -51,23 +70,42 @@ struct Objections {
     voice: bool,
     /// The directedness detector heard speech addressed to someone else.
     undirected: bool,
+    /// The direction of arrival alone points at the TV.
+    direction: bool,
 }
 
 impl Objections {
     /// How many of the sensors object.
     fn count(&self) -> usize {
-        [self.media, self.voice, self.undirected]
+        [self.media, self.voice, self.undirected, self.direction]
             .into_iter()
             .filter(|objects| *objects)
             .count()
     }
 }
 
+/// Where overheard TV lines came from: the sum of their direction readings, each
+/// discounted by its age, as of `at`. Only lines that the voice and the tagger mark as
+/// the TV teach it, so the estimate never leans on itself.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+struct TvDirection {
+    /// Sum of the lines' unit vectors, weighted as of `at`.
+    sum: [f32; 2],
+    /// Sum of the lines' weights as of `at`: how many lines, discounted by age.
+    lines: f32,
+    /// When the last line was added.
+    at: Millis,
+}
+
+/// Mean resultant length below which the lines name no direction: readings that
+/// scatter this much come from a TV that moved, or from voices mistaken for a TV.
+const TV_DIRECTION_AGREEMENT: f32 = 0.5;
+
 /// A continuation may start this much before the name's recorded end: endpoint jitter.
 const CONTINUATION_JITTER_MS: u64 = 50;
 
 /// The version of the brainstem reducer and snapshot schema.
-pub const REDUCER_VERSION: u32 = 11;
+pub const REDUCER_VERSION: u32 = 12;
 
 /// Which account pays for a thought.
 #[derive(Debug, Clone, Copy)]
@@ -153,6 +191,9 @@ pub struct Organism {
     tv_presence: f32,
     #[serde(default)]
     tv_heard_at: Millis,
+    /// Where the TV's lines have come from, for weighing each cue's direction of arrival.
+    #[serde(default)]
+    tv_direction: TvDirection,
     /// State of the exploration generator (`SplitMix64`), seeded from the profile and
     /// advanced once per coin flip, so a snapshot resumes the same sequence of draws.
     #[serde(default)]
@@ -201,6 +242,7 @@ impl Organism {
             speaking_for_obligation: false,
             tv_presence: 0.0,
             tv_heard_at: Millis(0),
+            tv_direction: TvDirection::default(),
             explore_state,
         })
     }
@@ -354,6 +396,22 @@ impl Organism {
     #[must_use]
     pub fn tv_presence_as_of(&self, now: Millis) -> f32 {
         self.tv_presence_at(now)
+    }
+
+    /// The TV's learned direction at `now`, a unit vector in the microphone array's
+    /// frame: `None` until enough recent TV lines agree on one. Read-only, for audits
+    /// such as `enton why`.
+    #[must_use]
+    pub fn tv_direction_as_of(&self, now: Millis) -> Option<[f32; 2]> {
+        self.tv_direction_at(now)
+    }
+
+    /// What the calibrated sensors say about `cue` at `now`, its direction weighed
+    /// against the TV's direction learned so far: the evidence a cue at that instant
+    /// is judged on. Read-only, for audits such as `enton why`.
+    #[must_use]
+    pub fn evidence_as_of(&self, now: Millis, cue: &SpeechCue) -> Evidence {
+        self.evidence_at(now, cue)
     }
 
     /// Consume a recorded event and return decisions without executing effects.
@@ -557,7 +615,7 @@ impl Organism {
         // enough, and a voice allowed to interrupt. Only loudness says anything about the
         // echo path, so only a cue that failed it may train the echo model.
         let (loud_enough, speech_like, voice_allowed) = if cue.keyword {
-            let loud = if self.self_speech_has_keyword || self.is_unverified_voice(cue) {
+            let loud = if self.self_speech_has_keyword || self.is_unverified_voice(now, cue) {
                 // Predicted keyword in self-speech, or a voice that verification did not
                 // confirm as the owner's (while Enton talks, its own echo is the likeliest
                 // voice): requires full double-talk margin
@@ -571,7 +629,7 @@ impl Organism {
         } else {
             // Non-keyword speech cue: double-talk margin (smaller for the caller's verified
             // voice), minimal follow-up VAD, and the addressed speaker's voice
-            let margin = if self.is_verified_speaker(cue) {
+            let margin = if self.is_verified_speaker(now, cue) {
                 echo.verified_barge_in_margin
             } else {
                 echo.echo_barge_in_margin
@@ -579,7 +637,7 @@ impl Organism {
             (
                 norm_energy > self.echo_energy_expectation + margin,
                 norm_vad >= self.profile.attention.follow_up_min_vad,
-                !self.is_unverified_voice(cue),
+                !self.is_unverified_voice(now, cue),
             )
         };
         let is_barge_in = loud_enough && speech_like && voice_allowed;
@@ -679,10 +737,29 @@ impl Organism {
         self.consecutive_barge_ins = 0;
         // Outside Enton's own playback, a loudspeaker voice is someone else's: the TV.
         // Only speech says so; a click or a hum carries no voice to judge.
-        if !cue.keyword && norm_vad >= self.profile.attention.follow_up_min_vad {
-            self.track_tv(now, cue);
+        let tv_line = if !cue.keyword && norm_vad >= self.profile.attention.follow_up_min_vad {
+            self.track_tv(now, cue)
+        } else {
+            None
+        };
+        let action = self.speech_heard(now, cue, norm_energy, norm_vad, norm_dur);
+        // A cue is judged against where the TV was heard before it; only then does a TV
+        // line teach its own direction.
+        if let Some(direction) = tv_line {
+            self.learn_tv_direction(now, direction);
         }
+        action
+    }
 
+    /// Speech outside Enton's own playback: its name, a cue in a window, or overheard.
+    fn speech_heard(
+        &mut self,
+        now: Millis,
+        cue: &SpeechCue,
+        norm_energy: f32,
+        norm_vad: f32,
+        norm_dur: f32,
+    ) -> Action {
         if cue.keyword {
             return self.speech_addressed(now, cue, norm_energy, norm_vad, norm_dur);
         }
@@ -720,7 +797,8 @@ impl Organism {
         if policy.explore_probability <= 0.0 || !in_longer_window || cue.speaker_sim.is_none() {
             return None;
         }
-        let shortfall = self.profile.attention.verified_voice_llr - self.evidence(cue).owner_live();
+        let shortfall =
+            self.profile.attention.verified_voice_llr - self.evidence_at(now, cue).owner_live();
         let depth = if self.window_objection(now, cue, norm_vad).is_some() {
             shortfall.max(self.objection_depth(now, cue, norm_vad))
         } else {
@@ -766,8 +844,8 @@ impl Organism {
     ) -> Action {
         let base_salience = self.calculate_base_salience(norm_energy, norm_vad, norm_dur) + 1.0;
         if self.pending_attend.is_some()
-            && self.is_known_other_speaker(cue)
-            && !self.is_whole_request(cue)
+            && self.is_known_other_speaker(now, cue)
+            && !self.is_whole_request(now, cue)
         {
             // Someone else saying the name does not take over a caller's unfinished turn.
             return Action::Abstain {
@@ -778,14 +856,16 @@ impl Organism {
             };
         }
         // Addressed speech is never habituated
-        if !self.is_whole_request(cue) {
+        if !self.is_whole_request(now, cue) {
             let until = Millis(now.0.saturating_add(self.profile.attention.attention_ms));
             self.open_attention(now);
             self.pending_attend = Some(PendingAttend {
                 until,
                 salience: base_salience,
                 name_ended_at: now,
-                name_finished: cue.turn_complete.map(|_| self.whole_request_log_odds(cue)),
+                name_finished: cue
+                    .turn_complete
+                    .map(|_| self.whole_request_log_odds(now, cue)),
             });
             self.conversation_thought = None;
             return Action::Attend { until };
@@ -809,7 +889,7 @@ impl Organism {
             || (self
                 .verified_attention_until
                 .is_some_and(|until| now < until)
-                && (self.is_verified_speaker(cue) || self.is_clearly_addressed(now, cue)))
+                && (self.is_verified_speaker(now, cue) || self.is_clearly_addressed(now, cue)))
     }
 
     /// What turns a cue inside an attention window away, in order: a loudspeaker,
@@ -1097,9 +1177,38 @@ impl Organism {
             Some(Millis(from.0.saturating_add(policy.verified_attention_ms)));
     }
 
-    /// What the calibrated sensors say about a cue.
+    /// What the calibrated sensors say about a cue, apart from its direction, which
+    /// only [`Self::evidence_at`] weighs: for the ratios that do not involve it.
     fn evidence(&self, cue: &SpeechCue) -> Evidence {
         self.profile.senses.read(cue)
+    }
+
+    /// What the calibrated sensors say about a cue at `now`, its direction of arrival
+    /// weighed against the TV's direction learned so far.
+    fn evidence_at(&self, now: Millis, cue: &SpeechCue) -> Evidence {
+        self.profile
+            .senses
+            .read_with_tv(cue, self.tv_direction_weighed(now))
+    }
+
+    /// The TV direction that a cue's direction is weighed against at `now`: only while the
+    /// TV is on, because with it off nothing plays from there and a voice from its
+    /// direction is someone sitting in line with it; and never while Enton's own playback
+    /// (or its hangover) fills the room, because the loudest source at the array is then
+    /// the device's own loudspeaker and a reading says little about who talks over it.
+    fn tv_direction_weighed(&self, now: Millis) -> Option<[f32; 2]> {
+        let tv_on = self.tv_presence_at(now) >= self.profile.source.tv_on_level;
+        if tv_on && !self.is_in_echo_period(now) {
+            self.tv_direction_at(now)
+        } else {
+            None
+        }
+    }
+
+    /// Whether a cue's direction of arrival is weighed at `now`: an array read it and
+    /// Enton knows where the TV is (see [`Self::tv_direction_weighed`]).
+    fn direction_speaks(&self, now: Millis, cue: &SpeechCue) -> bool {
+        cue.canonical().direction.is_some() && self.tv_direction_weighed(now).is_some()
     }
 
     /// End-of-turn evidence, finished over unfinished, when an end-of-turn model ran.
@@ -1109,8 +1218,8 @@ impl Organism {
     }
 
     /// Whether the evidence verifies the owner speaking live (not merely unknown).
-    fn is_verified_speaker(&self, cue: &SpeechCue) -> bool {
-        self.evidence(cue).owner_live() >= self.profile.attention.verified_voice_llr
+    fn is_verified_speaker(&self, now: Millis, cue: &SpeechCue) -> bool {
+        self.evidence_at(now, cue).owner_live() >= self.profile.attention.verified_voice_llr
     }
 
     /// Whether a directedness detector ran and heard speech clearly addressed to Enton,
@@ -1132,17 +1241,17 @@ impl Organism {
     /// dropped mid-sentence by another person waits instead of buying a thought.
     /// Without the model, a cue shorter than `keyword_only_ms` is the name alone
     /// ("Enton?") and Enton waits.
-    fn is_whole_request(&self, cue: &SpeechCue) -> bool {
-        self.whole_request_log_odds(cue) >= 0.0
+    fn is_whole_request(&self, now: Millis, cue: &SpeechCue) -> bool {
+        self.whole_request_log_odds(now, cue) >= 0.0
     }
 
     /// Log-odds, in nats, that a keyword cue holds a whole request: its length,
     /// plus the end-of-turn evidence when the voice is the owner's to judge.
-    fn whole_request_log_odds(&self, cue: &SpeechCue) -> f32 {
+    fn whole_request_log_odds(&self, now: Millis, cue: &SpeechCue) -> f32 {
         let attention = self.profile.attention;
         let beyond_name_s = (cue.duration_ms as f32 - attention.keyword_only_ms as f32) / 1_000.0;
         let length = attention.whole_request_llr_per_s * beyond_name_s;
-        let turn = if self.is_known_other_speaker(cue) || self.is_media(cue) {
+        let turn = if self.is_known_other_speaker(now, cue) || self.is_media(cue) {
             0.0
         } else {
             self.evidence(cue).finished_over_unfinished
@@ -1172,8 +1281,8 @@ impl Organism {
     /// Whether verification ran and did not confirm the owner. While Enton talks its
     /// own echo is the likeliest voice, so interrupting it takes positive evidence;
     /// without verification, loudness alone decides, as it always did.
-    fn is_unverified_voice(&self, cue: &SpeechCue) -> bool {
-        cue.speaker_sim.is_some() && !self.is_verified_speaker(cue)
+    fn is_unverified_voice(&self, now: Millis, cue: &SpeechCue) -> bool {
+        cue.speaker_sim.is_some() && !self.is_verified_speaker(now, cue)
     }
 
     /// The TV belief at `now`, decayed since the last line that fed it.
@@ -1186,17 +1295,64 @@ impl Organism {
     }
 
     /// Feed the TV belief with an overheard line: a voice that sounds like a
-    /// loudspeaker rather than the owner moves it toward certainty.
-    fn track_tv(&mut self, now: Millis, cue: &SpeechCue) {
+    /// loudspeaker rather than the owner, or comes from where the TV is, moves it toward
+    /// certainty. Returns the line's direction when the voice and the tagger alone mark
+    /// it as the TV: the lines that may teach where the TV is, since an estimate that
+    /// learned from its own verdicts would confirm a wrong start forever.
+    fn track_tv(&mut self, now: Millis, cue: &SpeechCue) -> Option<[f32; 2]> {
         let source = self.profile.source;
-        let evidence = self.evidence(cue);
-        let loudspeaker = evidence.owner_over_reproduced + evidence.live_over_reproduced;
+        let evidence = self.evidence_at(now, cue);
+        let loudspeaker = evidence.owner_over_loudspeaker();
         let mut presence = self.tv_presence_at(now);
         if loudspeaker <= -source.tv_line_llr {
             presence += source.tv_line_weight * (1.0 - presence);
         }
         self.tv_presence = presence.clamp(0.0, 1.0);
         self.tv_heard_at = now;
+        let voice_and_tagger = evidence.owner_over_reproduced + evidence.live_over_reproduced;
+        cue.canonical()
+            .direction
+            .filter(|_| voice_and_tagger <= -source.tv_line_llr)
+    }
+
+    /// Add a TV line's direction to what Enton knows of where the TV is.
+    fn learn_tv_direction(&mut self, now: Millis, direction: [f32; 2]) {
+        let half_life = self.profile.source.tv_direction_half_life_ms;
+        let learned = &mut self.tv_direction;
+        let kept = decay(1.0, now.since(learned.at), half_life);
+        let [x, y] = learned.sum;
+        let [line_x, line_y] = direction;
+        learned.sum = [x * kept + line_x, y * kept + line_y];
+        learned.lines = learned.lines * kept + 1.0;
+        // A line from a clock that ran backward counts as heard at the latest time.
+        learned.at = learned.at.max(now);
+    }
+
+    /// The TV's direction at `now`, a unit vector, once enough recent lines taught it
+    /// and they agree on one.
+    fn tv_direction_at(&self, now: Millis) -> Option<[f32; 2]> {
+        let source = self.profile.source;
+        let learned = self.tv_direction;
+        let kept = decay(1.0, now.since(learned.at), source.tv_direction_half_life_ms);
+        // Fewer lines than the bar, or a count that is not a number: nothing is known.
+        let lines = learned.lines * kept;
+        if lines
+            .partial_cmp(&source.tv_direction_min_lines)
+            .is_none_or(Ordering::is_lt)
+        {
+            return None;
+        }
+        // Age scales the sum and the count alike, so neither the direction nor the
+        // agreement between the lines depends on it.
+        let [x, y] = learned.sum;
+        let length = (x * x + y * y).sqrt();
+        if length
+            .partial_cmp(&(TV_DIRECTION_AGREEMENT * learned.lines))
+            .is_none_or(Ordering::is_lt)
+        {
+            return None;
+        }
+        Some([x / length, y / length])
     }
 
     /// How many nats less evidence a loudspeaker or another voice needs to be turned
@@ -1211,12 +1367,34 @@ impl Organism {
     }
 
     /// How far past its threshold the tagger's objection to an overheard cue is, in
-    /// nats, when the tagger objects at all.
+    /// nats, when the tagger objects at all. Overheard speech is weighed as it always
+    /// was: with the whole TV caution, whatever the direction says.
     fn media_objection(&self, now: Millis, cue: &SpeechCue) -> Option<f32> {
-        self.window_vetoes(now, cue).alone.media.then(|| {
-            let limit = -(self.profile.source.media_llr - self.tv_caution(now));
-            limit - self.evidence(cue).live_over_reproduced
-        })
+        let limit = -(self.profile.source.media_llr - self.tv_caution(now));
+        let live_over_reproduced = self.evidence(cue).live_over_reproduced;
+        (cue.media.is_some() && live_over_reproduced <= limit)
+            .then_some(limit - live_over_reproduced)
+    }
+
+    /// The TV caution at `now` split by where it applies to `cue`: to each sensor on its
+    /// own and to another person's voice, and to the loudspeaker alternative. They are
+    /// the same unless the cue's direction speaks and the profile confines the caution
+    /// to the loudspeaker alternative (see [`TvCautionConfinement`]).
+    fn cautions(&self, now: Millis, cue: &SpeechCue) -> Cautions {
+        let caution = self.tv_caution(now);
+        let direction = self.direction_speaks(now, cue);
+        let confined = direction
+            && match self.profile.source.tv_caution_confinement {
+                TvCautionConfinement::Never => false,
+                TvCautionConfinement::WithDirectedness => cue.directed.is_some(),
+                TvCautionConfinement::Always => true,
+            };
+        Cautions {
+            sensors: if confined { 0.0 } else { caution },
+            loudspeaker: caution,
+            direction,
+            confined,
+        }
     }
 
     /// The smallest loosening, in nats, of every evidence threshold at once that would let
@@ -1225,14 +1403,12 @@ impl Organism {
     /// only all but one independent sensor lifted (see [`Self::window_objection`]).
     fn objection_depth(&self, now: Millis, cue: &SpeechCue, norm_vad: f32) -> f32 {
         let attention = self.profile.attention;
-        let caution = self.tv_caution(now);
-        let evidence = self.evidence(cue);
-        let other_llr = -(attention.other_voice_llr - caution);
+        let cautions = self.cautions(now, cue);
+        let evidence = self.evidence_at(now, cue);
+        let other_llr = -(attention.other_voice_llr - cautions.sensors);
+        let media_limit = self.profile.source.media_llr - cautions.sensors;
         let ran = |sensor: Option<f32>, depth: f32| sensor.map_or(f32::NEG_INFINITY, |_| depth);
-        let media = ran(
-            cue.media,
-            -(self.profile.source.media_llr - caution) - evidence.live_over_reproduced,
-        );
+        let media = ran(cue.media, -media_limit - evidence.live_over_reproduced);
         let voice = ran(
             cue.speaker_sim,
             other_llr
@@ -1240,41 +1416,71 @@ impl Organism {
                     .owner_over_other
                     .min(evidence.owner_over_reproduced),
         );
-        let other = ran(cue.speaker_sim, other_llr - evidence.owner_live());
+        let other = if cautions.confined {
+            let loudspeaker_llr = -(attention.other_voice_llr - cautions.loudspeaker);
+            ran(cue.speaker_sim, other_llr - evidence.owner_over_other)
+                .max(loudspeaker_llr - evidence.owner_over_loudspeaker())
+        } else {
+            ran(cue.speaker_sim, other_llr - evidence.owner_live())
+        };
         let undirected = ran(
             cue.directed,
             -attention.undirected_llr - evidence.addressed_over_not,
         );
+        let direction = if cautions.direction {
+            evidence.from_tv_direction - media_limit
+        } else {
+            f32::NEG_INFINITY
+        };
         let every = media.max(other).max(undirected);
         if !self.is_adjacent_continuation(now, cue, norm_vad) {
             return every;
         }
-        // Lifting all but the deepest of the independent sensors: the second deepest.
-        let second = media.min(voice).max(media.max(voice).min(undirected));
+        // Lifting all but the deepest of the independent sensors: the second deepest of
+        // the four, which is the second deepest of the first three unless the direction
+        // lies between that and the deepest of them.
+        let second_of_three = media.min(voice).max(media.max(voice).min(undirected));
+        let deepest_of_three = media.max(voice).max(undirected);
+        let second = second_of_three.max(deepest_of_three.min(direction));
         every.min(second)
     }
 
-    /// Whether a cue is reproduced media, whether it is someone else's voice, and
-    /// whether it was addressed to someone else. While the TV is on, the first two
-    /// take `tv_caution_llr` less evidence, but only for a sensor that ran: a cue
-    /// without one is never turned away for the TV.
+    /// Whether a cue is reproduced media, whether it is someone else's voice, whether it
+    /// was addressed to someone else, and whether its direction alone points at the TV.
+    /// While the TV is on, the voice, the tagger and the direction take `tv_caution_llr`
+    /// less evidence, but only for a sensor that ran: a cue without one is never turned
+    /// away for the TV. The direction never turns a cue away on its own, because the owner
+    /// sometimes sits in line with the TV; it weighs in on the loudspeaker alternative of
+    /// another voice and counts as one independent objection.
     fn window_vetoes(&self, now: Millis, cue: &SpeechCue) -> Vetoes {
         let source = self.profile.source;
-        let caution = self.tv_caution(now);
-        let evidence = self.evidence(cue);
-        let other_llr = -(self.profile.attention.other_voice_llr - caution);
+        let attention = self.profile.attention;
+        let cautions = self.cautions(now, cue);
+        let evidence = self.evidence_at(now, cue);
+        let other_llr = -(attention.other_voice_llr - cautions.sensors);
+        let media_limit = source.media_llr - cautions.sensors;
         let voice = evidence
             .owner_over_other
             .min(evidence.owner_over_reproduced);
+        let other_voice = if cautions.confined {
+            // The caution weighs on the loudspeaker alternative only, where voice, tagger
+            // and direction speak together; another person's voice is judged as with the
+            // TV off.
+            let loudspeaker_llr = -(attention.other_voice_llr - cautions.loudspeaker);
+            (cue.speaker_sim.is_some() && evidence.owner_over_other <= other_llr)
+                || evidence.owner_over_loudspeaker() <= loudspeaker_llr
+        } else {
+            cue.speaker_sim.is_some() && evidence.owner_live() <= other_llr
+        };
         Vetoes {
             alone: Objections {
-                media: cue.media.is_some()
-                    && evidence.live_over_reproduced <= -(source.media_llr - caution),
+                media: cue.media.is_some() && evidence.live_over_reproduced <= -media_limit,
                 voice: cue.speaker_sim.is_some() && voice <= other_llr,
                 undirected: cue.directed.is_some()
-                    && evidence.addressed_over_not <= -self.profile.attention.undirected_llr,
+                    && evidence.addressed_over_not <= -attention.undirected_llr,
+                direction: cautions.direction && evidence.from_tv_direction >= media_limit,
             },
-            other_voice: cue.speaker_sim.is_some() && evidence.owner_live() <= other_llr,
+            other_voice,
         }
     }
 
@@ -1284,8 +1490,8 @@ impl Organism {
     }
 
     /// Whether the evidence says the cue is not the owner speaking live.
-    fn is_known_other_speaker(&self, cue: &SpeechCue) -> bool {
-        self.evidence(cue).owner_live() <= -self.profile.attention.other_voice_llr
+    fn is_known_other_speaker(&self, now: Millis, cue: &SpeechCue) -> bool {
+        self.evidence_at(now, cue).owner_live() <= -self.profile.attention.other_voice_llr
     }
 
     fn calculate_base_salience(&self, norm_energy: f32, norm_vad: f32, norm_dur: f32) -> f32 {

@@ -18,6 +18,7 @@ fn heard(now: u64, keyword: bool, speaker_sim: f32, media: f32) -> Event {
             media: Some(media),
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     }
 }

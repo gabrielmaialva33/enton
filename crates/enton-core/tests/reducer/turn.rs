@@ -17,6 +17,7 @@ fn called(duration_ms: u32, turn_complete: Option<f32>) -> Event {
             media: Some(0.1),
             turn_complete,
             directed: None,
+            direction: None,
         },
     }
 }
@@ -64,6 +65,7 @@ fn another_voice_saying_the_name_does_not_get_the_shortcut() {
             media: Some(0.1),
             turn_complete: Some(0.9),
             directed: None,
+            direction: None,
         },
     };
     assert!(attends(&organism.step(&passing)));
@@ -81,6 +83,7 @@ fn cue_at(now: u64, keyword: bool, duration_ms: u32, sim: f32, media: f32, compl
             media: Some(media),
             turn_complete: Some(complete),
             directed: None,
+            direction: None,
         },
     }
 }

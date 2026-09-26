@@ -27,6 +27,7 @@ fn self_echo_during_playback_is_suppressed() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
 
@@ -50,6 +51,7 @@ fn self_echo_during_hangover_is_suppressed() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_thought(&init_actions, 1, &Reason::Keyword);
@@ -75,6 +77,7 @@ fn self_echo_during_hangover_is_suppressed() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
 
@@ -92,6 +95,7 @@ fn self_echo_during_hangover_is_suppressed() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_thought(&actions_after, 2, &Reason::FollowUp);
@@ -129,6 +133,7 @@ fn predicted_keyword_requires_full_barge_in_margin() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
 
@@ -163,6 +168,7 @@ fn unpredicted_keyword_rejects_sub_echo_false_positives() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
 
@@ -197,6 +203,7 @@ fn unpredicted_keyword_above_echo_triggers_barge_in() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
 
@@ -233,6 +240,7 @@ fn loud_speech_barge_in_triggers_follow_up() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
 
@@ -267,6 +275,7 @@ fn consecutive_barge_in_ratchet_breaks_underestimated_echo_loop() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
 
@@ -291,6 +300,7 @@ fn consecutive_barge_in_ratchet_breaks_underestimated_echo_loop() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_thought(&actions1, 2, &Reason::FollowUp);
@@ -316,6 +326,7 @@ fn consecutive_barge_in_ratchet_breaks_underestimated_echo_loop() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_thought(&actions2, 3, &Reason::FollowUp);
@@ -342,6 +353,7 @@ fn consecutive_barge_in_ratchet_breaks_underestimated_echo_loop() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_abstention(&actions3, Abstention::SelfEcho);
@@ -364,6 +376,7 @@ fn closed_loop_feedback_immunity_pure_core() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_thought(&actions1, 1, &Reason::Keyword);
@@ -390,6 +403,7 @@ fn closed_loop_feedback_immunity_pure_core() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_abstention(&e1, Abstention::SelfEcho);
@@ -405,6 +419,7 @@ fn closed_loop_feedback_immunity_pure_core() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_abstention(&e2, Abstention::SelfEcho);
@@ -425,6 +440,7 @@ fn closed_loop_feedback_immunity_pure_core() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_abstention(&e3, Abstention::SelfEcho);
@@ -440,6 +456,7 @@ fn closed_loop_feedback_immunity_pure_core() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_thought(&actions2, 2, &Reason::FollowUp);
@@ -466,6 +483,7 @@ fn closed_loop_feedback_immunity_pure_core() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_abstention(&e4, Abstention::SelfEcho);
@@ -495,6 +513,7 @@ fn closed_loop_feedback_immunity_pure_core() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_thought(&next_thought_actions, 3, &Reason::Keyword);
@@ -534,6 +553,7 @@ fn playback_watchdog_terminates_stuck_playback_to_prevent_deafness() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_thought(&actions, 1, &Reason::Keyword);
@@ -563,6 +583,7 @@ fn non_finite_cues_during_playback_do_not_corrupt_echo_expectation_and_subsequen
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_abstention(&actions_nan, Abstention::SelfEcho);
@@ -580,6 +601,7 @@ fn non_finite_cues_during_playback_do_not_corrupt_echo_expectation_and_subsequen
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_abstention(&actions_inf, Abstention::SelfEcho);
@@ -597,6 +619,7 @@ fn non_finite_cues_during_playback_do_not_corrupt_echo_expectation_and_subsequen
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_abstention(&actions_neg_inf, Abstention::SelfEcho);
@@ -614,6 +637,7 @@ fn non_finite_cues_during_playback_do_not_corrupt_echo_expectation_and_subsequen
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_thought(&actions_barge_in, 1, &Reason::Keyword);
@@ -643,6 +667,7 @@ fn residual_echo_after_barge_in_is_self_echo_and_does_not_open_follow_up() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_thought(&actions_barge_in, 1, &Reason::Keyword);
@@ -668,6 +693,7 @@ fn residual_echo_after_barge_in_is_self_echo_and_does_not_open_follow_up() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     // Must be classified as SelfEcho abstention, NOT trigger a FollowUp thought!
@@ -688,6 +714,7 @@ fn residual_echo_after_barge_in_is_self_echo_and_does_not_open_follow_up() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     });
     assert_thought(&actions_follow_up, 2, &Reason::FollowUp);
@@ -764,6 +791,7 @@ fn an_unfinished_name_over_playback_cuts_it_and_waits_for_the_rest() {
             media: Some(0.1),
             turn_complete: Some(0.2),
             directed: None,
+            direction: None,
         },
     });
     assert!(

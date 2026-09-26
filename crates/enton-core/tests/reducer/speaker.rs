@@ -128,6 +128,7 @@ fn only_the_verified_voice_keeps_a_conversation_through_a_long_pause() {
             media: None,
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     };
     assert!(!matches!(

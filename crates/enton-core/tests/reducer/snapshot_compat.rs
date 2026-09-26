@@ -10,7 +10,7 @@ use enton_core::{
 /// Reducer version that wrote the fixture. After bumping `REDUCER_VERSION`, regenerate it
 /// with `cargo test -p enton-core --test reducer -- --ignored regenerate_the_snapshot_fixture`
 /// and review the diff: it shows exactly how the organism's state changed.
-const FIXTURE_REDUCER_VERSION: u32 = 11;
+const FIXTURE_REDUCER_VERSION: u32 = 12;
 
 /// State after `run_tape`, as the soul would store it.
 const FIXTURE: &str = include_str!("../fixtures/organism-snapshot.json");
@@ -38,6 +38,7 @@ fn cue(
         media: Some(media),
         turn_complete: Some(turn_complete),
         directed: None,
+        direction: None,
     }
 }
 
@@ -50,8 +51,9 @@ fn addressed(cue: SpeechCue, directed: f32) -> SpeechCue {
 }
 
 /// A tape that leaves almost every piece of organism state non-trivial: a
-/// conversation, echo adaptation, a habituated TV, an hour of drives and a
-/// pending "Enton?" still waiting for its continuation.
+/// conversation, echo adaptation, a habituated TV whose direction the array
+/// read, an hour of drives and a pending "Enton?" still waiting for its
+/// continuation.
 fn run_tape(mut organism: Organism) -> Organism {
     let speech = |now: u64, cue: SpeechCue| Event::Speech {
         now: Millis(now),
@@ -98,7 +100,10 @@ fn run_tape(mut organism: Organism) -> Organism {
     for i in 0..10 {
         events.push(speech(
             70_000 + i * 4_000,
-            cue(0.8, 0.9, 1_500, false, (0.2, 0.9, 0.5)),
+            SpeechCue {
+                direction: Some([0.6, 0.8]),
+                ..cue(0.8, 0.9, 1_500, false, (0.2, 0.9, 0.5))
+            },
         ));
     }
     events.push(Event::Tick {

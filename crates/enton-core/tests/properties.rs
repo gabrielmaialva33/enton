@@ -16,8 +16,8 @@ use std::ops::RangeInclusive;
 
 use enton_core::evidence::MIN_SD;
 use enton_core::{
-    Action, BodySignals, Budget, DirectedModel, Event, Evidence, Millis, Organism, Profile, Reason,
-    Senses, SourceModel, SpeechCue, ThoughtId, TurnModel, UtteranceId, VoiceModel,
+    Action, BodySignals, Budget, DirectedModel, DirectionModel, Event, Evidence, Millis, Organism,
+    Profile, Reason, Senses, SourceModel, SpeechCue, ThoughtId, TurnModel, UtteranceId, VoiceModel,
 };
 use proptest::prelude::*;
 use proptest::sample::Index;
@@ -110,6 +110,26 @@ fn speech_cue(
     }
 }
 
+/// The unit vector at `angle` radians.
+fn unit(angle: f32) -> [f32; 2] {
+    let (sin, cos) = angle.sin_cos();
+    [cos, sin]
+}
+
+/// A direction of arrival: mostly a unit vector, clustered around one bearing often
+/// enough for a TV direction to be learned, sometimes of the wrong length or not a
+/// number at all.
+fn direction() -> impl Strategy<Value = [f32; 2]> {
+    use std::f32::consts::PI;
+    prop_oneof![
+        6 => (-0.3_f32..=0.3).prop_map(|off| unit(0.5 + off)),
+        6 => (-PI..=PI).prop_map(unit),
+        2 => ((-PI..=PI), 0.4_f32..=1.6).prop_map(|(angle, length)| unit(angle).map(|x| x * length)),
+        2 => (broken_float(), reading()).prop_map(|(x, y)| [x, y]),
+        1 => (reading(), reading()).prop_map(|(x, y)| [x, y]),
+    ]
+}
+
 fn cue() -> impl Strategy<Value = SpeechCue> {
     (
         reading(),
@@ -122,10 +142,14 @@ fn cue() -> impl Strategy<Value = SpeechCue> {
             prop::option::of(reading()),
             prop::option::of(reading()),
         ),
+        prop::option::weighted(0.6, direction()),
     )
-        .prop_map(|(energy, duration_ms, vad, keyword, readings)| {
-            speech_cue(energy, duration_ms, vad, keyword, readings)
-        })
+        .prop_map(
+            |(energy, duration_ms, vad, keyword, readings, direction)| SpeechCue {
+                direction,
+                ..speech_cue(energy, duration_ms, vad, keyword, readings)
+            },
+        )
 }
 
 /// A body measurement in `range`, or, when `broken` is set, sometimes any float.
@@ -493,6 +517,13 @@ fn check_actions(event: &Event, actions: &[Action]) -> Result<(), TestCaseError>
 }
 
 fn check_levels(organism: &Organism) -> Result<(), TestCaseError> {
+    if let Some([x, y]) = organism.tv_direction_as_of(organism.last_seen()) {
+        let length = (x * x + y * y).sqrt();
+        prop_assert!(
+            (length - 1.0).abs() <= 1e-5,
+            "a learned TV direction is a unit vector: {x}, {y}"
+        );
+    }
     for (name, level) in [
         ("habituation", organism.habituation()),
         ("slow habituation", organism.slow_habituation()),
@@ -532,6 +563,16 @@ fn starved() -> Profile {
     profile.budgets.think_cost = 1.5;
     profile.budgets.obligation_budget_per_hour = 4.0;
     profile.budgets.discretionary_budget_per_hour = 2.0;
+    profile
+}
+
+/// `base` trusting a TV direction after a single line, so random tapes weigh directions
+/// often, and confining the TV caution to the loudspeaker alternative when they do.
+fn pointed(base: Profile) -> Profile {
+    let mut profile = base;
+    profile.source.tv_direction_min_lines = 1.0;
+    profile.source.tv_direction_half_life_ms = 60_000;
+    profile.source.tv_caution_confinement = enton_core::TvCautionConfinement::Always;
     profile
 }
 
@@ -597,6 +638,21 @@ fn run_with_snapshot(profile: Profile, tape: &Tape, cut: Index) -> Result<(), Te
     Ok(())
 }
 
+/// Every decision `profile` takes on `tape`.
+fn decisions(profile: Profile, tape: &Tape) -> Result<Vec<Vec<Action>>, TestCaseError> {
+    let mut organism = Organism::new(profile).map_err(fail)?;
+    let mut world = World::default();
+    Ok(tape
+        .iter()
+        .map(|(clock, stimulus)| {
+            let event = world.event(*clock, stimulus);
+            let actions = organism.step(&event);
+            world.observe(&actions);
+            actions
+        })
+        .collect())
+}
+
 /// The soul stores `event.canonical()` as JSON (RFC P4): an organism fed the
 /// stored events must decide exactly like the live one fed the raw events.
 fn replay_from_json(profile: Profile, tape: &Tape) -> Result<(), TestCaseError> {
@@ -636,6 +692,8 @@ proptest! {
         run_with_snapshot(starved(), &tape, cut)?;
         run_with_snapshot(exploring(Profile::t1_ref()), &tape, cut)?;
         run_with_snapshot(exploring(starved()), &tape, cut)?;
+        run_with_snapshot(pointed(Profile::t1_ref()), &tape, cut)?;
+        run_with_snapshot(exploring(pointed(Profile::t1_ref())), &tape, cut)?;
     }
 
     /// Canonical events read back from JSON decide exactly like the live ones, coin
@@ -646,6 +704,37 @@ proptest! {
         replay_from_json(Profile::t1_ref(), &tape)?;
         replay_from_json(Profile::desktop(), &tape)?;
         replay_from_json(exploring(Profile::t1_ref()), &tape)?;
+        replay_from_json(exploring(pointed(Profile::t1_ref())), &tape)?;
+    }
+
+    /// A cue without a direction reading is decided the same whatever the profile says
+    /// about directions, and directions that never add up to a trusted TV direction
+    /// change no decision: the sensor is inert until Enton knows where the TV is.
+    #[test]
+    fn directions_are_inert_until_the_tv_direction_is_trusted(tape in tape(true)) {
+        let without: Tape = tape
+            .iter()
+            .map(|(clock, stimulus)| {
+                let stimulus = match stimulus {
+                    Stimulus::Speech(cue) => Stimulus::Speech(SpeechCue {
+                        direction: None,
+                        ..*cue
+                    }),
+                    other => other.clone(),
+                };
+                (*clock, stimulus)
+            })
+            .collect();
+        let mut never = Profile::t1_ref();
+        never.source.tv_direction_min_lines = f32::MAX;
+        let reference = decisions(Profile::t1_ref(), &without)?;
+        prop_assert_eq!(&decisions(pointed(Profile::t1_ref()), &without)?, &reference);
+        prop_assert_eq!(&decisions(never.clone(), &without)?, &reference);
+        prop_assert_eq!(
+            &decisions(exploring(pointed(Profile::t1_ref())), &without)?,
+            &decisions(exploring(Profile::t1_ref()), &without)?
+        );
+        prop_assert_eq!(&decisions(never, &tape)?, &reference);
     }
 
     /// Bug: `Event::canonical` canonicalizes speech cues only, so a body signal
@@ -669,7 +758,7 @@ proptest! {
 // Evidence and canonical cues
 // ---------------------------------------------------------------------------
 
-fn llrs(evidence: &Evidence) -> [(&'static str, f32); 5] {
+fn llrs(evidence: &Evidence) -> [(&'static str, f32); 6] {
     [
         ("owner over other", evidence.owner_over_other),
         ("owner over reproduced", evidence.owner_over_reproduced),
@@ -679,26 +768,28 @@ fn llrs(evidence: &Evidence) -> [(&'static str, f32); 5] {
             evidence.finished_over_unfinished,
         ),
         ("addressed over not", evidence.addressed_over_not),
+        ("from TV direction", evidence.from_tv_direction),
     ]
 }
 
-/// Each ratio is finite and within the cap. `owner_live` adds two capped ratios
-/// against the loudspeaker (the cap bounds "any single ratio"), so it may reach
-/// twice the cap below zero, but never above one cap.
-fn check_evidence(senses: &Senses, cue: &SpeechCue) -> Result<(), TestCaseError> {
-    let evidence = senses.read(cue);
+/// Each ratio is finite and within the cap, whether or not a TV direction is known.
+/// `owner_live` adds three capped ratios against the loudspeaker (the cap bounds "any
+/// single ratio"), so it may reach three caps below zero, but never above one cap.
+fn check_evidence(senses: &Senses, cue: &SpeechCue, tv: [f32; 2]) -> Result<(), TestCaseError> {
     let cap = senses.max_llr;
-    for (name, llr) in llrs(&evidence) {
+    for evidence in [senses.read(cue), senses.read_with_tv(cue, Some(tv))] {
+        for (name, llr) in llrs(&evidence) {
+            prop_assert!(
+                llr.is_finite() && llr.abs() <= cap,
+                "{name} = {llr} is not within the cap {cap} for {cue:?}"
+            );
+        }
+        let owner_live = evidence.owner_live();
         prop_assert!(
-            llr.is_finite() && llr.abs() <= cap,
-            "{name} = {llr} is not within the cap {cap} for {cue:?}"
+            owner_live.is_finite() && (-3.0 * cap..=cap).contains(&owner_live),
+            "owner live = {owner_live} is not within [-3 cap, cap] for {cue:?}"
         );
     }
-    let owner_live = evidence.owner_live();
-    prop_assert!(
-        owner_live.is_finite() && (-2.0 * cap..=cap).contains(&owner_live),
-        "owner live = {owner_live} is not within [-2 cap, cap] for {cue:?}"
-    );
     Ok(())
 }
 
@@ -733,16 +824,29 @@ fn senses() -> impl Strategy<Value = Senses> {
     let turn = [row(), row(), row()].prop_map(|llr| TurnModel { llr });
     let directed = [-1e30_f32..=1e30, -1e30_f32..=1e30, -1e30_f32..=1e30]
         .prop_map(|llr| DirectedModel { llr });
+    let direction = (f32::MIN_POSITIVE..=1e3, -1e30_f32..=1e30, 0.0_f32..=1e30)
+        .prop_filter("the ceiling lies above the floor", |(_, _, span)| {
+            *span > 0.0
+        })
+        .prop_map(|(kappa, min_llr, span)| DirectionModel {
+            kappa,
+            max_llr: min_llr + span,
+            min_llr,
+        })
+        .prop_filter("a finite ceiling above the floor", |model| {
+            model.max_llr.is_finite() && model.max_llr > model.min_llr
+        });
     let max_llr = prop_oneof![f32::MIN_POSITIVE..=10.0, Just(f32::MAX)];
-    (voice, source, turn, directed, max_llr).prop_map(|(voice, source, turn, directed, max_llr)| {
-        Senses {
+    (voice, source, turn, directed, direction, max_llr).prop_map(
+        |(voice, source, turn, directed, direction, max_llr)| Senses {
             voice,
             source,
             turn,
             directed,
+            direction,
             max_llr,
-        }
-    })
+        },
+    )
 }
 
 proptest! {
@@ -750,21 +854,27 @@ proptest! {
 
     /// Every ratio the shipped calibration reads from any cue is finite and capped.
     #[test]
-    fn calibrated_evidence_is_finite_and_capped(cue in cue()) {
-        check_evidence(&Senses::calibrated(), &cue)?;
+    fn calibrated_evidence_is_finite_and_capped(cue in cue(), tv in -3.2_f32..=3.2) {
+        check_evidence(&Senses::calibrated(), &cue, unit(tv))?;
     }
 
     /// The same holds for any calibration that passes validation.
     #[test]
-    fn any_valid_calibration_reads_finite_capped_evidence(senses in senses(), cue in cue()) {
+    fn any_valid_calibration_reads_finite_capped_evidence(
+        senses in senses(),
+        cue in cue(),
+        tv in -3.2_f32..=3.2,
+    ) {
         prop_assert!(senses.is_valid(), "the generator builds valid calibrations");
-        check_evidence(&senses, &cue)?;
+        check_evidence(&senses, &cue, unit(tv))?;
     }
 
     /// A sensor that did not run, or read something that is not a number, says nothing.
     #[test]
-    fn a_sensor_that_did_not_run_says_nothing(cue in cue()) {
-        let evidence = Senses::calibrated().read(&cue);
+    fn a_sensor_that_did_not_run_says_nothing(cue in cue(), tv in -3.2_f32..=3.2) {
+        // Without a TV direction the array says nothing either, whatever it read.
+        prop_assert!(Senses::calibrated().read(&cue).from_tv_direction == 0.0);
+        let evidence = Senses::calibrated().read_with_tv(&cue, Some(unit(tv)));
         let ran = |reading: Option<f32>| reading.is_some_and(f32::is_finite);
         if !ran(cue.speaker_sim) {
             prop_assert!(evidence.owner_over_other == 0.0 && evidence.owner_over_reproduced == 0.0);
@@ -778,7 +888,35 @@ proptest! {
         if !ran(cue.directed) {
             prop_assert!(evidence.addressed_over_not == 0.0);
         }
-        prop_assert_eq!(evidence, Senses::calibrated().read(&cue.canonical()));
+        if cue.canonical().direction.is_none() {
+            prop_assert!(evidence.from_tv_direction == 0.0);
+        }
+        prop_assert_eq!(
+            evidence,
+            Senses::calibrated().read_with_tv(&cue.canonical(), Some(unit(tv)))
+        );
+    }
+
+    /// The farther a reading lies from the TV's direction, the less it says for the TV.
+    #[test]
+    fn the_direction_ratio_never_rises_away_from_the_tv(
+        tv in -3.2_f32..=3.2,
+        near in 0.0_f32..=3.2,
+        far in 0.0_f32..=3.2,
+    ) {
+        let (near, far) = if near <= far { (near, far) } else { (far, near) };
+        let senses = Senses::calibrated();
+        let weigh = |off: f32| {
+            let cue = SpeechCue {
+                direction: Some(unit(tv + off)),
+                ..SpeechCue::default()
+            };
+            senses.read_with_tv(&cue, Some(unit(tv))).from_tv_direction
+        };
+        // Rounding in sin and cos may move a reading by a few units in the last place.
+        prop_assert!(weigh(near) + 1e-4 >= weigh(far), "{} < {}", weigh(near), weigh(far));
+        let model = senses.direction;
+        prop_assert!((model.min_llr..=model.max_llr).contains(&weigh(far)));
     }
 
     /// In the shipped calibration the owner scores above other voices and
@@ -826,6 +964,16 @@ proptest! {
             if let Some(raw) = raw.filter(|raw| unit(*raw)) {
                 prop_assert_eq!(canonical.map(f32::to_bits), Some(raw.to_bits()));
             }
+        }
+        // A direction is kept exactly when it is finite with a length within 0.5 and 1.5,
+        // and then it has unit length.
+        let length = |[x, y]: [f32; 2]| (x * x + y * y).sqrt();
+        prop_assert_eq!(
+            once.direction.is_some(),
+            cue.direction.is_some_and(|raw| (0.5..=1.5).contains(&length(raw)))
+        );
+        if let Some(direction) = once.direction {
+            prop_assert!((length(direction) - 1.0).abs() <= 1e-5, "{direction:?}");
         }
     }
 

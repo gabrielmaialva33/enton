@@ -4,6 +4,7 @@ mod attention;
 mod budgets;
 mod calibrated;
 mod directed;
+mod direction;
 mod exploration;
 mod habituation;
 mod ignition;

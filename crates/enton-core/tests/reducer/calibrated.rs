@@ -17,6 +17,7 @@ fn heard(now: u64, keyword: bool, duration_ms: u32, sim: f32, media: f32) -> Eve
             media: Some(media),
             turn_complete: None,
             directed: None,
+            direction: None,
         },
     }
 }
@@ -112,6 +113,7 @@ fn sensed(now: u64, keyword: bool, duration_ms: u32, vad: f32, sensors: (f32, f3
             media: Some(media),
             turn_complete: Some(turn),
             directed: None,
+            direction: None,
         },
     }
 }
@@ -176,6 +178,7 @@ fn addressed(now: u64, duration_ms: u32, sim: f32, media: f32, directed: f32) ->
             media: Some(media),
             turn_complete: None,
             directed: Some(directed),
+            direction: None,
         },
     }
 }
@@ -233,5 +236,104 @@ fn clearly_addressed_speech_keeps_the_long_window_when_the_voice_says_nothing() 
             }]
         ),
         "{actions:?}"
+    );
+}
+
+/// The same event with a microphone array's reading, if any.
+fn pointed(event: Event, direction: Option<[f32; 2]>) -> Event {
+    match event {
+        Event::Speech { now, cue } => Event::Speech {
+            now,
+            cue: SpeechCue { direction, ..cue },
+        },
+        other => other,
+    }
+}
+
+/// Where the TV stands, as the array sees it, and a place across the room from it.
+const TV: [f32; 2] = [0.6, 0.8];
+const ACROSS: [f32; 2] = [0.8, -0.6];
+
+/// Twenty-four TV lines, four seconds apart from 1 s, from the TV's direction: voice and
+/// tagger mark each as the TV (about 2.7 nats), so they teach the shipped profile, which
+/// wants twenty recent lines, where the TV stands.
+fn after_a_show(mut organism: Organism) -> Organism {
+    for n in 0..24 {
+        if n == 18 {
+            assert_eq!(organism.tv_direction_as_of(Millis(72_000)), None);
+        }
+        organism.step(&pointed(
+            heard(1_000 + n * 4_000, false, 1_500, 0.3, 0.7),
+            Some(TV),
+        ));
+    }
+    organism
+}
+
+#[test]
+fn the_shipped_array_learns_where_the_tv_is_and_weighs_readings_against_it() {
+    let organism = after_a_show(Organism::new(Profile::t1_ref()).unwrap());
+    let learned = organism.tv_direction_as_of(Millis(93_000)).unwrap();
+    assert!((learned[0] - TV[0]).abs() < 1e-5 && (learned[1] - TV[1]).abs() < 1e-5);
+    let weigh = |direction| {
+        let Event::Speech { cue, .. } = pointed(heard(0, false, 1_500, 0.5, 0.4), Some(direction))
+        else {
+            unreachable!()
+        };
+        organism
+            .evidence_as_of(Millis(94_000), &cue)
+            .from_tv_direction
+    };
+    let model = organism.profile().senses.direction;
+    assert_eq!(weigh(TV).to_bits(), model.max_llr.to_bits());
+    assert_eq!(weigh(ACROSS).to_bits(), model.min_llr.to_bits());
+}
+
+/// The owner across the room with the TV on, as the shipped sensors hear them on average
+/// (0.47 and 0.38 on a 1.5 s line): after calling Enton at 95 s and a reply at 96 s.
+fn owner_follow_up(organism: Organism, direction: Option<[f32; 2]>) -> Vec<enton_core::Action> {
+    let mut organism = after_a_show(organism);
+    assert_thought(
+        &organism.step(&heard(95_000, true, 1_500, 0.55, 0.3)),
+        1,
+        &Reason::Keyword,
+    );
+    organism.step(&Event::CortexReply {
+        now: Millis(96_000),
+        thought: ThoughtId(1),
+        text: "Oi!".into(),
+    });
+    organism.step(&pointed(heard(97_000, false, 1_500, 0.47, 0.38), direction))
+}
+
+#[test]
+fn the_shipped_profile_lets_the_direction_add_evidence_but_never_loosen_a_bar() {
+    // With the TV on, the tagger's reading alone turns the owner away, wherever they sit.
+    for direction in [None, Some(ACROSS), Some(TV)] {
+        assert_abstention(
+            &owner_follow_up(Organism::new(Profile::t1_ref()).unwrap(), direction),
+            Abstention::Media,
+        );
+    }
+}
+
+#[test]
+fn confined_the_owner_away_from_the_tv_is_heard_with_the_tv_on() {
+    let mut confined = Profile::t1_ref();
+    confined.source.direction_confines_tv_caution = true;
+    assert_thought(
+        &owner_follow_up(Organism::new(confined.clone()).unwrap(), Some(ACROSS)),
+        2,
+        &Reason::FollowUp,
+    );
+    // In line with the TV, the direction is over two nats for a loudspeaker.
+    assert_abstention(
+        &owner_follow_up(Organism::new(confined.clone()).unwrap(), Some(TV)),
+        Abstention::OtherSpeaker,
+    );
+    // Without the array, the whole caution applies, as it always did.
+    assert_abstention(
+        &owner_follow_up(Organism::new(confined).unwrap(), None),
+        Abstention::Media,
     );
 }

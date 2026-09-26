@@ -74,6 +74,45 @@ pub struct SourcePolicy {
     /// TV on, most voices in a window are the TV's.
     #[serde(default = "default_tv_caution_llr")]
     pub tv_caution_llr: f32,
+    /// Half-life, in milliseconds, of the overheard TV lines that teach Enton where the
+    /// TV is: long enough to outlive a pause between shows, short enough to follow a TV
+    /// (or a device) that was moved. A cue's direction is weighed only while the TV is on
+    /// and never during Enton's own playback.
+    #[serde(default = "default_tv_direction_half_life_ms")]
+    pub tv_direction_half_life_ms: u64,
+    /// How many TV lines, each discounted by its age, must have taught the TV's
+    /// direction before a cue's direction of arrival is weighed against it. Ten minutes
+    /// and twenty lines were chosen with E1's calibration seeds; between three and twenty
+    /// lines and ten to sixty minutes, E1 moves by a few requests in 3200.
+    #[serde(default = "default_tv_direction_min_lines")]
+    pub tv_direction_min_lines: f32,
+    /// When, for a cue whose direction was weighed against the TV's, the TV caution
+    /// applies to the loudspeaker alternative alone (voice, tagger and direction
+    /// together) rather than to every sensor on its own and to another person's voice.
+    #[serde(default)]
+    pub tv_caution_confinement: TvCautionConfinement,
+}
+
+/// When a direction of arrival confines the TV caution to the loudspeaker alternative.
+///
+/// Without a direction, voice and tagger cannot tell the owner from the TV well
+/// enough, so the caution raises every bar, including the one against another
+/// person's voice. A direction gives the TV a sensor of its own, but says nothing
+/// about another person: that is the directedness detector's job. Chosen with E1's
+/// calibration seeds: with the array alone, confining lets other people in and costs
+/// more calls than E1's floor allows; with a directedness detector as well, it serves
+/// about a third more of the owner's turns with the TV on within the floor.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TvCautionConfinement {
+    /// Never: the direction only adds evidence and never loosens a bar.
+    Never,
+    /// When a directedness detector also judged the cue, since it answers for other
+    /// people.
+    #[default]
+    WithDirectedness,
+    /// Whenever the direction speaks.
+    Always,
 }
 
 /// Logged exploration: how often, and how close to a threshold, a cue that an evidence
@@ -341,6 +380,14 @@ fn default_tv_caution_llr() -> f32 {
     2.0
 }
 
+fn default_tv_direction_half_life_ms() -> u64 {
+    600_000
+}
+
+fn default_tv_direction_min_lines() -> f32 {
+    20.0
+}
+
 fn default_similarity_cutoff() -> f32 {
     0.4
 }
@@ -449,6 +496,9 @@ impl Profile {
                 tv_half_life_ms: default_tv_half_life_ms(),
                 tv_on_level: default_tv_on_level(),
                 tv_caution_llr: default_tv_caution_llr(),
+                tv_direction_half_life_ms: default_tv_direction_half_life_ms(),
+                tv_direction_min_lines: default_tv_direction_min_lines(),
+                tv_caution_confinement: TvCautionConfinement::default(),
             },
             exploration: ExplorationPolicy::default(),
             senses: Senses::calibrated(),
@@ -521,6 +571,9 @@ impl Profile {
                 tv_half_life_ms: default_tv_half_life_ms(),
                 tv_on_level: default_tv_on_level(),
                 tv_caution_llr: default_tv_caution_llr(),
+                tv_direction_half_life_ms: default_tv_direction_half_life_ms(),
+                tv_direction_min_lines: default_tv_direction_min_lines(),
+                tv_caution_confinement: TvCautionConfinement::default(),
             },
             exploration: ExplorationPolicy::default(),
             senses: Senses::calibrated(),
@@ -565,6 +618,9 @@ impl SourcePolicy {
             && self.tv_on_level < 1.0
             && self.tv_caution_llr.is_finite()
             && self.tv_caution_llr >= 0.0
+            && self.tv_direction_half_life_ms > 0
+            && self.tv_direction_min_lines.is_finite()
+            && self.tv_direction_min_lines > 0.0
     }
 }
 

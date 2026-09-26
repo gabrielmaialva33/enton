@@ -47,6 +47,9 @@
     "tv_half_life_ms": 30000,
     "tv_on_level": 0.5,
     "tv_caution_llr": 2.0,
+    "tv_direction_half_life_ms": 600000,
+    "tv_direction_min_lines": 20.0,
+    "direction_confines_tv_caution": false,
     "explore_probability": 0.0,
     "explore_margin_nats": 1.0,
     "explore_seed": 0,
@@ -110,6 +113,11 @@
           -0.59,
           1.96
         ]
+      },
+      "direction": {
+        "kappa": 15.0,
+        "max_llr": 2.12,
+        "min_llr": -1.9
       },
       "max_llr": 3.0
     }
@@ -181,5 +189,13 @@
   "speaking_for_obligation": true,
   "tv_presence": 0.8199052,
   "tv_heard_at": 106000,
+  "tv_direction": {
+    "sum": [
+      5.87704,
+      7.8360543
+    ],
+    "lines": 9.795067,
+    "at": 106000
+  },
   "explore_state": 0
 }

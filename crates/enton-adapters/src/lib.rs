@@ -11,6 +11,8 @@ pub mod cortex;
 pub mod soul;
 #[cfg(feature = "voice")]
 pub mod voice;
+#[cfg(feature = "voice-id")]
+pub mod voice_id;
 
 pub use body::{BodyError, read_body_signals, read_body_signals_from};
 pub use clock::MonotonicClock;

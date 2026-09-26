@@ -15,7 +15,7 @@ soul = ["dep:rusqlite", "dep:serde_json"]
 cortex = ["dep:tokio", "dep:reqwest", "dep:serde_json"]
 audio = ["dep:cpal", "dep:sherpa-onnx"]
 voice = ["dep:cpal", "dep:sherpa-onnx"]
-voice-id = ["dep:sherpa-onnx"]
+voice-id = ["dep:sherpa-onnx", "dep:sha2"]
 # The shared-runtime feature uses sherpa-onnx's shared library. 
 # The .so/.dylib must be accessible via LD_LIBRARY_PATH (or in a standard system library dir).
 shared-runtime = ["sherpa-onnx?/shared"]
@@ -30,6 +30,7 @@ tokio = { workspace = true, features = ["rt", "macros", "sync", "time"], optiona
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"], optional = true }
 cpal = { version = "0.18", optional = true }
 sherpa-onnx = { version = "1.13", optional = true, default-features = false }
+sha2 = { version = "0.11.0", optional = true }
 
 [lints]
 workspace = true

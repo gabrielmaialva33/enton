@@ -1,0 +1,23 @@
+[package]
+name = "enton-e1"
+description = "Experiment E1 harness: synthetic cue tapes, the simple-controller baseline and the pass/fail report."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+enton-core.workspace = true
+serde.workspace = true
+serde_json = "1"
+thiserror.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "e1-sim"
+path = "src/main.rs"

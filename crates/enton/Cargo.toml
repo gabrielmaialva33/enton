@@ -1,0 +1,23 @@
+[package]
+name = "enton"
+description = "Enton digital organism binary and terminal driver."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+audio = ["enton-adapters/audio"]
+voice = ["enton-adapters/voice"]
+shared-runtime = ["enton-adapters/shared-runtime"]
+
+[dependencies]
+enton-adapters = { workspace = true, features = ["cortex"] }
+enton-core.workspace = true
+tokio = { version = "1", features = ["rt", "macros", "sync", "time", "io-util", "io-std"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,216 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="title desc">
+  <title id="title">Enton</title>
+  <desc id="desc">Enton, Son of Anton: a faceted skull split red and green, with a heartbeat in its forehead, circuit nerves and glowing eyes.</desc>
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="70%">
+      <stop offset="0" stop-color="#1c1010"/>
+      <stop offset="0.6" stop-color="#0b0b0c"/>
+      <stop offset="1" stop-color="#050506"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#dc2626"/>
+      <stop offset="0.5" stop-color="#3f0d0d"/>
+      <stop offset="1" stop-color="#16a34a"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ef4444"/>
+      <stop offset="0.55" stop-color="#dc2626"/>
+      <stop offset="1" stop-color="#7f1d1d"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22c55e"/>
+      <stop offset="0.55" stop-color="#16a34a"/>
+      <stop offset="1" stop-color="#14532d"/>
+    </linearGradient>
+    <radialGradient id="eye" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#fff1f1"/>
+      <stop offset="0.25" stop-color="#ff4d4d"/>
+      <stop offset="0.7" stop-color="#dc2626" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#dc2626" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M24 0 H0 V24" fill="none" stroke="#ffffff" stroke-width="0.6" opacity="0.05"/>
+      <circle cx="0" cy="0" r="1.2" fill="#ffffff" opacity="0.08"/>
+    </pattern>
+    <radialGradient id="aura-red" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#dc2626" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#dc2626" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="aura-green" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#16a34a" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#16a34a" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity="0.7"/>
+    </filter>
+    <!-- Left half of the skull; the right half is its mirror image. -->
+    <path id="half" d="M256 66 L186 74 L136 102 L108 150 L98 210 L106 256 L124 290 L142 312 L146 352 L160 392 L188 424 L220 440 L256 445 Z"/>
+    <!-- Facets that catch light or fall into shadow, drawn over each half. -->
+    <g id="facets">
+      <path d="M256 66 L186 74 L150 118 L256 124 Z" fill="#fff" opacity="0.10"/>
+      <path d="M136 102 L108 150 L150 170 L150 118 Z" fill="#000" opacity="0.18"/>
+      <path d="M108 150 L98 210 L128 214 L150 170 Z" fill="#000" opacity="0.30"/>
+      <path d="M98 210 L106 256 L124 290 L136 262 L128 214 Z" fill="#000" opacity="0.22"/>
+      <path d="M124 290 L142 312 L178 300 L136 262 Z" fill="#fff" opacity="0.06"/>
+      <path d="M142 312 L146 352 L172 344 L178 300 Z" fill="#000" opacity="0.20"/>
+      <path d="M146 352 L160 392 L188 424 L180 380 L172 344 Z" fill="#000" opacity="0.28"/>
+      <path d="M188 424 L220 440 L256 445 L256 400 L180 380 Z" fill="#000" opacity="0.12"/>
+      <!-- Cheek hollow under the eye, and the hinge of the jaw -->
+      <path d="M140 270 L188 290 L204 336 L166 346 L142 316 Z" fill="#000" opacity="0.38"/>
+      <path d="M142 316 L166 346 L150 362 Z" fill="#000" opacity="0.25"/>
+      <path d="M148 360 L170 348" stroke="#0a0a0a" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+    </g>
+    <!-- Circuit nerves of the left half, mirrored for the right. -->
+    <g id="nerves">
+      <path d="M204 104 H182 L164 122 V150"/>
+      <path d="M204 156 H188 L170 174"/>
+      <path d="M150 170 L126 170 L114 182"/>
+      <path d="M186 288 V306 L166 326 V342"/>
+      <path d="M236 318 L222 332 H206"/>
+      <path d="M204 398 V414 L218 428 H238"/>
+      <path d="M148 356 L164 372 H180"/>
+    </g>
+    <g id="pads">
+      <circle cx="164" cy="150" r="4.5"/>
+      <circle cx="170" cy="174" r="4.5"/>
+      <circle cx="114" cy="182" r="4.5"/>
+      <circle cx="166" cy="342" r="4.5"/>
+      <circle cx="206" cy="332" r="4.5"/>
+      <circle cx="238" cy="428" r="4.5"/>
+      <circle cx="180" cy="372" r="4.5"/>
+    </g>
+    <style>
+      .spark path { fill: none; stroke-width: 3; stroke-linecap: round; stroke-dasharray: 7 93; animation: nerve 3.2s linear infinite; }
+      .spark path:nth-child(2) { animation-duration: 2.6s; animation-delay: -0.8s; }
+      .spark path:nth-child(3) { animation-duration: 3.8s; animation-delay: -1.9s; }
+      .spark path:nth-child(4) { animation-duration: 2.9s; animation-delay: -0.4s; }
+      .spark path:nth-child(5) { animation-duration: 3.5s; animation-delay: -2.4s; }
+      .spark path:nth-child(6) { animation-duration: 2.4s; animation-delay: -1.2s; }
+      .spark path:nth-child(7) { animation-duration: 4.1s; animation-delay: -3.0s; }
+      @keyframes nerve { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+      .iris { animation: breathe 3.6s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+      @keyframes breathe { 0%, 100% { opacity: 0.85; transform: scale(0.92); } 50% { opacity: 1; transform: scale(1.08); } }
+      .pulse { stroke-dasharray: 120 120; animation: beat 2.4s linear infinite; }
+      @keyframes beat { from { stroke-dashoffset: 240; } to { stroke-dashoffset: 0; } }
+      .led { animation: blink 2.2s steps(1) infinite; }
+      .led.b { animation-duration: 3.1s; animation-delay: -1.1s; }
+      .led.c { animation-duration: 1.7s; animation-delay: -0.6s; }
+      @keyframes blink { 0%, 70% { opacity: 1; } 71%, 100% { opacity: 0.25; } }
+      @media (prefers-reduced-motion: reduce) {
+        .spark path, .iris, .pulse, .led { animation: none; }
+      }
+    </style>
+  </defs>
+
+  <!-- Tile -->
+  <rect x="8" y="8" width="496" height="496" rx="104" fill="url(#bg)"/>
+  <rect x="8" y="8" width="496" height="496" rx="104" fill="url(#grid)"/>
+  <rect x="8" y="8" width="496" height="496" rx="104" fill="none" stroke="url(#rim)" stroke-width="4" opacity="0.9"/>
+  <ellipse cx="190" cy="250" rx="190" ry="210" fill="url(#aura-red)"/>
+  <ellipse cx="322" cy="250" rx="190" ry="210" fill="url(#aura-green)"/>
+
+  <g filter="url(#shadow)">
+    <!-- Skull halves -->
+    <use href="#half" fill="url(#red)"/>
+    <use href="#half" fill="url(#green)" transform="translate(512 0) scale(-1 1)"/>
+    <use href="#facets"/>
+    <use href="#facets" transform="translate(512 0) scale(-1 1)"/>
+    <!-- The seam between the two halves -->
+    <path d="M256 66 V445" stroke="#0a0a0a" stroke-width="2" opacity="0.6"/>
+  </g>
+
+  <!-- Nerves: green on the red half, pale green on the green half -->
+  <g fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <use href="#nerves" stroke="#4ade80"/>
+    <use href="#nerves" stroke="#bbf7d0" opacity="0.85" transform="translate(512 0) scale(-1 1)"/>
+  </g>
+  <g fill="#0b0b0c" stroke-width="3">
+    <use href="#pads" stroke="#4ade80"/>
+    <use href="#pads" stroke="#bbf7d0" transform="translate(512 0) scale(-1 1)"/>
+  </g>
+  <!-- Signals running along the nerves -->
+  <g class="spark" stroke="#f0fdf4" filter="url(#glow)">
+    <path pathLength="100" d="M204 104 H182 L164 122 V150"/>
+    <path pathLength="100" d="M204 156 H188 L170 174"/>
+    <path pathLength="100" d="M150 170 L126 170 L114 182"/>
+    <path pathLength="100" d="M186 288 V306 L166 326 V342"/>
+    <path pathLength="100" d="M236 318 L222 332 H206"/>
+    <path pathLength="100" d="M204 398 V414 L218 428 H238"/>
+    <path pathLength="100" d="M148 356 L164 372 H180"/>
+  </g>
+  <g class="spark" stroke="#fef2f2" filter="url(#glow)" transform="translate(512 0) scale(-1 1)">
+    <path pathLength="100" d="M204 104 H182 L164 122 V150"/>
+    <path pathLength="100" d="M204 156 H188 L170 174"/>
+    <path pathLength="100" d="M150 170 L126 170 L114 182"/>
+    <path pathLength="100" d="M186 288 V306 L166 326 V342"/>
+    <path pathLength="100" d="M236 318 L222 332 H206"/>
+    <path pathLength="100" d="M204 398 V414 L218 428 H238"/>
+    <path pathLength="100" d="M148 356 L164 372 H180"/>
+  </g>
+
+  <!-- Cortex: a rack of thought in the forehead, with a heartbeat in the middle -->
+  <g>
+    <rect x="204" y="88" width="104" height="82" rx="8" fill="#0b0b0c" stroke="#0a0a0a" stroke-width="2"/>
+    <g stroke-width="2">
+      <rect x="212" y="95" width="44" height="18" rx="3" fill="#7f1d1d" stroke="#ef4444"/>
+      <rect x="256" y="95" width="44" height="18" rx="3" fill="#14532d" stroke="#22c55e"/>
+      <rect x="212" y="120" width="88" height="24" rx="3" fill="#0f0f10" stroke="#3f3f46"/>
+      <rect x="212" y="151" width="44" height="12" rx="3" fill="#7f1d1d" stroke="#ef4444"/>
+      <rect x="256" y="151" width="44" height="12" rx="3" fill="#14532d" stroke="#22c55e"/>
+    </g>
+    <circle class="led" cx="222" cy="104" r="3.5" fill="#fca5a5"/>
+    <circle class="led b" cx="290" cy="104" r="3.5" fill="#86efac"/>
+    <circle class="led c" cx="222" cy="157" r="2.5" fill="#fca5a5"/>
+    <circle class="led" cx="290" cy="157" r="2.5" fill="#86efac"/>
+    <polyline points="216,132 236,132 242,124 248,140 254,116 260,146 266,132 296,132" fill="none" stroke="#3f3f46" stroke-width="2" stroke-linejoin="round"/>
+    <polyline class="pulse" pathLength="240" points="216,132 236,132 242,124 248,140 254,116 260,146 266,132 296,132" fill="none" stroke="#fef2f2" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" filter="url(#glow)"/>
+  </g>
+
+  <!-- Brows and eye sockets, angled down toward the center -->
+  <g fill="#0a0a0a">
+    <path d="M122 206 L182 180 L246 196 L242 212 L182 198 L128 222 Z" fill="#450a0a"/>
+    <path d="M390 206 L330 180 L266 196 L270 212 L330 198 L384 222 Z" fill="#052e16"/>
+    <path d="M130 228 L182 206 L238 216 L242 242 L228 274 L186 286 L146 272 L128 250 Z"/>
+    <path d="M382 228 L330 206 L274 216 L270 242 L284 274 L326 286 L366 272 L384 250 Z"/>
+  </g>
+  <!-- Eyes -->
+  <g>
+    <circle cx="190" cy="246" r="34" fill="url(#eye)" opacity="0.55"/>
+    <circle cx="322" cy="246" r="34" fill="url(#eye)" opacity="0.55"/>
+    <rect class="iris" x="178" y="234" width="24" height="24" rx="4" fill="#ff3b3b" filter="url(#glow)"/>
+    <rect class="iris" x="310" y="234" width="24" height="24" rx="4" fill="#ff3b3b" filter="url(#glow)"/>
+    <rect x="185" y="241" width="10" height="10" rx="2" fill="#fff1f1"/>
+    <rect x="317" y="241" width="10" height="10" rx="2" fill="#fff1f1"/>
+  </g>
+
+  <!-- Nasal cavity -->
+  <path d="M256 290 L238 322 L246 336 L256 326 L266 336 L274 322 Z" fill="#0a0a0a"/>
+
+  <!-- Mouth and teeth, in a grin: red on the left, green on the right -->
+  <rect x="168" y="342" width="176" height="56" rx="10" fill="#0a0a0a"/>
+  <g stroke="#0a0a0a" stroke-width="2">
+    <rect x="178" y="352" width="16" height="16" rx="2" fill="#ef4444"/>
+    <rect x="198" y="349" width="16" height="19" rx="2" fill="#ef4444"/>
+    <rect x="218" y="347" width="16" height="21" rx="2" fill="#dc2626"/>
+    <rect x="238" y="346" width="16" height="22" rx="2" fill="#dc2626"/>
+    <rect x="258" y="346" width="16" height="22" rx="2" fill="#16a34a"/>
+    <rect x="278" y="347" width="16" height="21" rx="2" fill="#16a34a"/>
+    <rect x="298" y="349" width="16" height="19" rx="2" fill="#22c55e"/>
+    <rect x="318" y="352" width="16" height="16" rx="2" fill="#22c55e"/>
+    <rect x="178" y="372" width="16" height="13" rx="2" fill="#b91c1c"/>
+    <rect x="198" y="372" width="16" height="16" rx="2" fill="#dc2626"/>
+    <rect x="218" y="372" width="16" height="18" rx="2" fill="#dc2626"/>
+    <rect x="238" y="372" width="16" height="19" rx="2" fill="#b91c1c"/>
+    <rect x="258" y="372" width="16" height="19" rx="2" fill="#15803d"/>
+    <rect x="278" y="372" width="16" height="18" rx="2" fill="#16a34a"/>
+    <rect x="298" y="372" width="16" height="16" rx="2" fill="#16a34a"/>
+    <rect x="318" y="372" width="16" height="13" rx="2" fill="#15803d"/>
+  </g>
+</svg>

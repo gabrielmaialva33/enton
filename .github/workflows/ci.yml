@@ -53,6 +53,26 @@ jobs:
       - name: Clippy (all features)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      # cpal needs ALSA headers for the audio/voice features.
+      - name: Install ALSA headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check (default features)
+        run: cargo check --workspace --all-targets
+
+      - name: Check (all features)
+        run: cargo check --workspace --all-targets --all-features
+
   test:
     name: Test
     runs-on: ubuntu-latest

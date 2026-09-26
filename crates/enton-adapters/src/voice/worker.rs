@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
@@ -11,10 +12,10 @@ use enton_core::UtteranceId;
 use enton_core::ports::PortError;
 use sherpa_onnx::{
     GenerationConfig, LinearResampler, OfflineTts, OfflineTtsConfig, OfflineTtsKokoroModelConfig,
-    OfflineTtsModelConfig,
+    OfflineTtsModelConfig, OfflineTtsVitsModelConfig,
 };
 
-use super::config::{VoiceConfig, VoiceError};
+use super::config::{KokoroVoice, PiperVoice, VoiceConfig, VoiceEngine, VoiceError};
 use super::events::{EventHub, PlaybackEvent, emit_event};
 use super::playback::{PlaybackQueueState, QueuedSentence};
 
@@ -60,6 +61,8 @@ impl SynthesizerBackend {
                 if native_rate == target_sample_rate || target_sample_rate == 0 {
                     Ok(samples.to_vec())
                 } else {
+                    // The output device runs at another rate (see `choose_output_config`):
+                    // convert with sherpa-onnx's windowed-sinc resampler.
                     let in_rate = i32::try_from(native_rate).unwrap_or(24_000);
                     let out_rate = i32::try_from(target_sample_rate).unwrap_or(48_000);
                     let resampler = LinearResampler::create(in_rate, out_rate).ok_or(
@@ -219,56 +222,56 @@ pub(super) struct SynthesisJob {
     pub(super) text: String,
 }
 
-pub(super) fn create_offline_tts(config: &VoiceConfig) -> Result<OfflineTts, VoiceError> {
-    let kokoro_config = OfflineTtsKokoroModelConfig {
-        model: Some(
-            config
-                .model_path
-                .to_str()
-                .ok_or(VoiceError::InvalidPath("model_path"))?
-                .to_string(),
-        ),
-        voices: Some(
-            config
-                .voices_path
-                .to_str()
-                .ok_or(VoiceError::InvalidPath("voices_path"))?
-                .to_string(),
-        ),
-        tokens: Some(
-            config
-                .tokens_path
-                .to_str()
-                .ok_or(VoiceError::InvalidPath("tokens_path"))?
-                .to_string(),
-        ),
-        data_dir: Some(
-            config
-                .data_dir
-                .to_str()
-                .ok_or(VoiceError::InvalidPath("data_dir"))?
-                .to_string(),
-        ),
-        dict_dir: config
+fn path_string(path: &Path, name: &'static str) -> Result<String, VoiceError> {
+    path.to_str()
+        .map(ToOwned::to_owned)
+        .ok_or(VoiceError::InvalidPath(name))
+}
+
+fn kokoro_model_config(kokoro: &KokoroVoice) -> Result<OfflineTtsKokoroModelConfig, VoiceError> {
+    Ok(OfflineTtsKokoroModelConfig {
+        model: Some(path_string(&kokoro.model_path, "model_path")?),
+        voices: Some(path_string(&kokoro.voices_path, "voices_path")?),
+        tokens: Some(path_string(&kokoro.tokens_path, "tokens_path")?),
+        data_dir: Some(path_string(&kokoro.data_dir, "data_dir")?),
+        dict_dir: kokoro
             .dict_dir
             .as_ref()
             .and_then(|p| p.to_str().map(ToString::to_string)),
-        lexicon: config
+        lexicon: kokoro
             .lexicon_path
             .as_ref()
             .and_then(|p| p.to_str().map(ToString::to_string)),
-        lang: Some(config.lang.clone()),
+        lang: Some(kokoro.lang.clone()),
         length_scale: 1.0,
+    })
+}
+
+/// Piper voices are VITS models. The default noise and length scales (0.667,
+/// 0.8, 1.0) are the inference settings the Piper model card ships with.
+fn piper_model_config(piper: &PiperVoice) -> Result<OfflineTtsVitsModelConfig, VoiceError> {
+    Ok(OfflineTtsVitsModelConfig {
+        model: Some(path_string(&piper.model_path, "model_path")?),
+        tokens: Some(path_string(&piper.tokens_path, "tokens_path")?),
+        data_dir: Some(path_string(&piper.data_dir, "data_dir")?),
+        ..OfflineTtsVitsModelConfig::default()
+    })
+}
+
+pub(super) fn create_offline_tts(config: &VoiceConfig) -> Result<OfflineTts, VoiceError> {
+    let mut model = OfflineTtsModelConfig {
+        num_threads: config.num_threads,
+        debug: false,
+        provider: Some("cpu".to_string()),
+        ..OfflineTtsModelConfig::default()
     };
+    match &config.engine {
+        VoiceEngine::Kokoro(kokoro) => model.kokoro = kokoro_model_config(kokoro)?,
+        VoiceEngine::Piper(piper) => model.vits = piper_model_config(piper)?,
+    }
 
     let tts_config = OfflineTtsConfig {
-        model: OfflineTtsModelConfig {
-            kokoro: kokoro_config,
-            num_threads: config.num_threads,
-            debug: false,
-            provider: Some("cpu".to_string()),
-            ..OfflineTtsModelConfig::default()
-        },
+        model,
         rule_fsts: None,
         max_num_sentences: 1,
         rule_fars: None,
@@ -276,6 +279,15 @@ pub(super) fn create_offline_tts(config: &VoiceConfig) -> Result<OfflineTts, Voi
     };
 
     OfflineTts::create(&tts_config).ok_or(VoiceError::Initialization)
+}
+
+/// The rate the synthesizer produces, in hertz: 24 kHz for Kokoro, 22.05 kHz for
+/// Piper `pt_BR` faber-medium. A model that reports none failed to initialize.
+pub(super) fn native_sample_rate(tts: &OfflineTts) -> Result<u32, VoiceError> {
+    u32::try_from(tts.sample_rate())
+        .ok()
+        .filter(|rate| *rate > 0)
+        .ok_or(VoiceError::Initialization)
 }
 
 pub(super) struct SynthesisWorkerParams {
@@ -444,6 +456,7 @@ pub(super) fn spawn_mock_worker(
 
 #[cfg(test)]
 mod tests {
+    use super::super::config::VoiceModel;
     use super::*;
 
     fn wait_for<F: Future>(future: F) -> F::Output {
@@ -472,13 +485,14 @@ mod tests {
     #[test]
     fn test_official_kokoro_model_if_present() {
         let config = VoiceConfig::default();
-        if !config.model_path.is_file() {
+        if config.validate().is_err() {
             return;
         }
         let tts = create_offline_tts(&config).expect("create_offline_tts should succeed");
+        assert_eq!(native_sample_rate(&tts).unwrap(), 24_000);
         let gen_config = GenerationConfig {
             speed: 1.0,
-            sid: config.speaker_id,
+            sid: config.engine.speaker_id(),
             silence_scale: 0.2,
             ..GenerationConfig::default()
         };
@@ -491,6 +505,31 @@ mod tests {
         let audio = audio.unwrap();
         assert!(!audio.samples().is_empty());
         assert_eq!(audio.sample_rate(), 24_000);
+    }
+
+    #[test]
+    fn test_official_piper_model_if_present() {
+        let config = VoiceConfig::for_profile_with_model("t1-ref", VoiceModel::Piper);
+        if config.validate().is_err() {
+            return;
+        }
+        let tts = create_offline_tts(&config).expect("create_offline_tts should succeed");
+        assert_eq!(native_sample_rate(&tts).unwrap(), 22_050);
+        assert_eq!(tts.num_speakers(), 1);
+        let gen_config = GenerationConfig {
+            sid: config.engine.speaker_id(),
+            silence_scale: 0.2,
+            ..GenerationConfig::default()
+        };
+        let audio = tts
+            .generate_with_config(
+                "Olá Gabriel! Eu sou o Enton.",
+                &gen_config,
+                None::<fn(&[f32], f32) -> bool>,
+            )
+            .expect("generation should succeed");
+        assert!(!audio.samples().is_empty());
+        assert_eq!(audio.sample_rate(), 22_050);
     }
 
     #[test]

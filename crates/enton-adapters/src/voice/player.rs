@@ -6,8 +6,6 @@ use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use cpal::SampleFormat;
-use cpal::traits::StreamTrait;
 use enton_core::UtteranceId;
 use enton_core::ports::{PortError, TextToSpeech};
 
@@ -15,10 +13,11 @@ use super::config::{VoiceConfig, VoiceError};
 use super::events::{
     EventHub, PlaybackEvent, PlaybackEventStats, UtteranceStageTimings, emit_event,
 };
-use super::playback::{PlaybackQueueState, build_cpal_stream, open_output_device};
+use super::playback::{PlaybackQueueState, open_output_device, start_output_stream};
 use super::worker::{
     PortJob, SynthesisJob, SynthesisWorkerParams, SynthesizerBackend, create_offline_tts,
-    spawn_mock_worker, spawn_port_worker, spawn_synthesis_worker, synthesis_response,
+    native_sample_rate, spawn_mock_worker, spawn_port_worker, spawn_synthesis_worker,
+    synthesis_response,
 };
 
 /// Voice synthesizer and audio player.
@@ -37,6 +36,7 @@ pub struct VoicePlayer {
     _worker_handle: Option<JoinHandle<()>>,
     _stream: Option<cpal::Stream>,
     pub(super) stopped: Arc<AtomicBool>,
+    native_sample_rate: u32,
     device_sample_rate: u32,
 }
 
@@ -46,6 +46,7 @@ impl fmt::Debug for VoicePlayer {
             .field("config", &self.config)
             .field("next_id", &self.next_id.load(Ordering::Relaxed))
             .field("generation", &self.generation.load(Ordering::Relaxed))
+            .field("native_sample_rate", &self.native_sample_rate)
             .field("device_sample_rate", &self.device_sample_rate)
             .finish_non_exhaustive()
     }
@@ -54,15 +55,17 @@ impl fmt::Debug for VoicePlayer {
 impl VoicePlayer {
     /// Creates and starts a new voice player with the supplied configuration and default audio device.
     ///
+    /// The output stream runs at the synthesizer's native rate when the device
+    /// takes it; otherwise at the device's default rate, with each sentence
+    /// resampled before playback (see [`VoicePlayer::is_resampling`]).
+    ///
     /// # Errors
     /// Returns [`VoiceError`] if model files are missing, invalid, or no CPAL output device is found.
     pub fn new(config: VoiceConfig) -> Result<Self, VoiceError> {
         config.validate()?;
         let tts = create_offline_tts(&config)?;
-
-        let (device, supported_config) = open_output_device(config.device_id.as_deref())?;
-        let sample_rate = supported_config.sample_rate();
-        let channels = usize::from(supported_config.channels());
+        let native_rate = native_sample_rate(&tts)?;
+        let output = open_output_device(config.device_id.as_deref(), native_rate)?;
 
         let subscribers = Arc::new(EventHub::new());
         let last_error = Arc::new(Mutex::new(None));
@@ -76,40 +79,24 @@ impl VoicePlayer {
             timings: VecDeque::with_capacity(64),
         }));
 
-        let stream = match supported_config.sample_format() {
-            SampleFormat::F32 => build_cpal_stream::<f32>(
-                &device,
-                &supported_config,
-                channels,
-                Arc::clone(&queue_state),
-                Arc::clone(&subscribers),
-                Arc::clone(&last_error),
-            )?,
-            SampleFormat::I16 => build_cpal_stream::<i16>(
-                &device,
-                &supported_config,
-                channels,
-                Arc::clone(&queue_state),
-                Arc::clone(&subscribers),
-                Arc::clone(&last_error),
-            )?,
-            SampleFormat::U16 => build_cpal_stream::<u16>(
-                &device,
-                &supported_config,
-                channels,
-                Arc::clone(&queue_state),
-                Arc::clone(&subscribers),
-                Arc::clone(&last_error),
-            )?,
-            other => {
-                return Err(VoiceError::SampleFormat(other));
-            }
+        let start = |stream_config| {
+            start_output_stream(
+                &output.device,
+                stream_config,
+                &queue_state,
+                &subscribers,
+                &last_error,
+            )
         };
-
-        stream.play().map_err(|source| VoiceError::Device {
-            operation: "failed to start cpal playback stream",
-            source,
-        })?;
+        let (stream, sample_rate) = match start(&output.preferred) {
+            Ok(stream) => (stream, output.preferred.sample_rate()),
+            // A device can list a native-rate config and then refuse it; its
+            // default config still plays, through the resampler.
+            Err(_) if output.preferred != output.default => {
+                (start(&output.default)?, output.default.sample_rate())
+            }
+            Err(error) => return Err(error),
+        };
 
         let synthesizer = Arc::new(SynthesizerBackend::Offline(Mutex::new(tts)));
         let (job_tx, job_rx) = sync_channel::<SynthesisJob>(config.queue_capacity);
@@ -125,7 +112,7 @@ impl VoicePlayer {
             stopped: Arc::clone(&stopped),
             device_sample_rate: sample_rate,
             speed: config.speed,
-            speaker_id: config.speaker_id,
+            speaker_id: config.engine.speaker_id(),
             queue_capacity: config.queue_capacity,
         };
 
@@ -135,7 +122,7 @@ impl VoicePlayer {
             Arc::clone(&stopped),
             config.queue_capacity,
             config.speed,
-            config.speaker_id,
+            config.engine.speaker_id(),
         );
 
         Ok(Self {
@@ -150,6 +137,7 @@ impl VoicePlayer {
             _worker_handle: Some(worker_handle),
             _stream: Some(stream),
             stopped,
+            native_sample_rate: native_rate,
             device_sample_rate: sample_rate,
         })
     }
@@ -198,6 +186,7 @@ impl VoicePlayer {
             _worker_handle: Some(worker_handle),
             _stream: None,
             stopped,
+            native_sample_rate: 24_000,
             device_sample_rate: 24_000,
         }
     }
@@ -357,6 +346,20 @@ impl VoicePlayer {
     #[must_use]
     pub fn device_sample_rate(&self) -> u32 {
         self.device_sample_rate
+    }
+
+    /// Returns the synthesizer's native sample rate in hertz (24 kHz for Kokoro,
+    /// 22.05 kHz for Piper `pt_BR` faber-medium).
+    #[must_use]
+    pub fn native_sample_rate(&self) -> u32 {
+        self.native_sample_rate
+    }
+
+    /// Returns `true` when the device did not take the native rate, so each
+    /// sentence is resampled to [`VoicePlayer::device_sample_rate`] before playback.
+    #[must_use]
+    pub fn is_resampling(&self) -> bool {
+        self.native_sample_rate != self.device_sample_rate
     }
 }
 
@@ -720,7 +723,7 @@ mod tests {
     #[test]
     fn test_real_voice_player_lifecycle() {
         let config = VoiceConfig::default();
-        if !config.model_path.is_file() {
+        if config.validate().is_err() {
             return;
         }
         let Ok(player) = VoicePlayer::new(config) else {

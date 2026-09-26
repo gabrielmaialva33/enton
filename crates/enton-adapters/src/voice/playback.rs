@@ -1,8 +1,10 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use cpal::traits::{DeviceTrait, HostTrait};
-use cpal::{FromSample, SizedSample};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{
+    FromSample, SampleFormat, SizedSample, SupportedStreamConfig, SupportedStreamConfigRange,
+};
 use enton_core::UtteranceId;
 
 use super::config::VoiceError;
@@ -26,9 +28,21 @@ pub(super) struct PlaybackQueueState {
     pub(super) timings: VecDeque<UtteranceStageTimings>,
 }
 
+/// An output device with the config to open it with and the one to fall back to.
+pub(super) struct OutputChoice {
+    pub(super) device: cpal::Device,
+    /// A config at the synthesizer's native rate when the device takes one, else
+    /// the default config.
+    pub(super) preferred: SupportedStreamConfig,
+    /// The device's default output config, played through the resampler.
+    pub(super) default: SupportedStreamConfig,
+}
+
+/// Open an output device for audio synthesized at `native_rate` hertz.
 pub(super) fn open_output_device(
     device_id: Option<&str>,
-) -> Result<(cpal::Device, cpal::SupportedStreamConfig), VoiceError> {
+    native_rate: u32,
+) -> Result<OutputChoice, VoiceError> {
     let host = cpal::default_host();
     let device = match device_id {
         Some(target_id) => host
@@ -44,23 +58,107 @@ pub(super) fn open_output_device(
             .ok_or(VoiceError::NoOutputDevice(None))?,
     };
 
-    let supported_config = device
+    let default = device
         .default_output_config()
         .map_err(|source| VoiceError::Device {
             operation: "failed to query default output config",
             source,
         })?;
+    let preferred = match device.supported_output_configs() {
+        Ok(ranges) => choose_output_config(default, ranges, native_rate),
+        // A backend that cannot list its configs still plays its default one.
+        Err(_) => default,
+    };
 
-    Ok((device, supported_config))
+    Ok(OutputChoice {
+        device,
+        preferred,
+        default,
+    })
 }
 
-pub(super) fn build_cpal_stream<T>(
+/// Whether the output callback can write this sample format.
+pub(super) fn is_playable(format: SampleFormat) -> bool {
+    matches!(
+        format,
+        SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
+    )
+}
+
+/// Pick the output config for audio synthesized at `native_rate` hertz.
+///
+/// Prefers a supported range that contains the native rate, so samples reach the
+/// device as synthesized and are resampled at most once, by the sound server
+/// (`PipeWire` and Pulse accept any rate), instead of twice. Among such ranges it
+/// keeps the default config's channel count and sample format when it can, then
+/// follows cpal's default heuristics; only formats the player writes (f32, i16,
+/// u16) qualify. Returns `default` when no range contains the native rate: the
+/// synthesis worker then resamples to the default rate.
+pub(super) fn choose_output_config(
+    default: SupportedStreamConfig,
+    supported: impl IntoIterator<Item = SupportedStreamConfigRange>,
+    native_rate: u32,
+) -> SupportedStreamConfig {
+    if default.sample_rate() == native_rate {
+        return default;
+    }
+    let likeness = |range: &SupportedStreamConfigRange| {
+        (
+            range.channels() == default.channels(),
+            range.sample_format() == default.sample_format(),
+        )
+    };
+    supported
+        .into_iter()
+        .filter(|range| range.contains_rate(native_rate) && is_playable(range.sample_format()))
+        .max_by(|a, b| {
+            likeness(a)
+                .cmp(&likeness(b))
+                .then_with(|| a.cmp_default_heuristics(b))
+        })
+        .and_then(|range| range.try_with_sample_rate(native_rate))
+        .unwrap_or(default)
+}
+
+/// Build an output stream for `config` in its sample format and start it.
+pub(super) fn start_output_stream(
     device: &cpal::Device,
-    config: &cpal::SupportedStreamConfig,
+    config: &SupportedStreamConfig,
+    queue_state: &Arc<Mutex<PlaybackQueueState>>,
+    subscribers: &Arc<EventHub>,
+    last_error: &Arc<Mutex<Option<VoiceError>>>,
+) -> Result<cpal::Stream, VoiceError> {
+    let channels = usize::from(config.channels());
+    let shared = (
+        Arc::clone(queue_state),
+        Arc::clone(subscribers),
+        Arc::clone(last_error),
+    );
+    let stream = match config.sample_format() {
+        SampleFormat::F32 => build_cpal_stream::<f32>(device, config, channels, shared)?,
+        SampleFormat::I16 => build_cpal_stream::<i16>(device, config, channels, shared)?,
+        SampleFormat::U16 => build_cpal_stream::<u16>(device, config, channels, shared)?,
+        other => return Err(VoiceError::SampleFormat(other)),
+    };
+    stream.play().map_err(|source| VoiceError::Device {
+        operation: "failed to start cpal playback stream",
+        source,
+    })?;
+    Ok(stream)
+}
+
+/// The playback queue, event hub and error slot an output stream shares.
+type StreamShared = (
+    Arc<Mutex<PlaybackQueueState>>,
+    Arc<EventHub>,
+    Arc<Mutex<Option<VoiceError>>>,
+);
+
+fn build_cpal_stream<T>(
+    device: &cpal::Device,
+    config: &SupportedStreamConfig,
     channels: usize,
-    queue_state: Arc<Mutex<PlaybackQueueState>>,
-    subscribers: Arc<EventHub>,
-    last_error: Arc<Mutex<Option<VoiceError>>>,
+    (queue_state, subscribers, last_error): StreamShared,
 ) -> Result<cpal::Stream, VoiceError>
 where
     T: SizedSample + FromSample<f32>,
@@ -300,5 +398,94 @@ mod tests {
             receiver.recv_timeout(Duration::from_secs(2)).unwrap(),
             PlaybackEvent::Finished { id: UtteranceId(1) }
         );
+    }
+
+    fn range(
+        channels: u16,
+        min: u32,
+        max: u32,
+        format: SampleFormat,
+    ) -> SupportedStreamConfigRange {
+        SupportedStreamConfigRange::new(
+            channels,
+            min,
+            max,
+            cpal::SupportedBufferSize::Unknown,
+            format,
+        )
+    }
+
+    fn stereo_f32_at(rate: u32) -> SupportedStreamConfig {
+        SupportedStreamConfig::new(
+            2,
+            rate,
+            cpal::SupportedBufferSize::Unknown,
+            SampleFormat::F32,
+        )
+    }
+
+    #[test]
+    fn output_config_uses_the_native_rate_inside_a_supported_range() {
+        let chosen = choose_output_config(
+            stereo_f32_at(48_000),
+            [range(2, 1_000, 384_000, SampleFormat::F32)],
+            22_050,
+        );
+        assert_eq!(chosen, stereo_f32_at(22_050));
+    }
+
+    #[test]
+    fn output_config_keeps_the_default_when_no_range_has_the_native_rate() {
+        let default = stereo_f32_at(48_000);
+        let ranges = [
+            range(2, 44_100, 48_000, SampleFormat::F32),
+            range(2, 88_200, 192_000, SampleFormat::I16),
+        ];
+        assert_eq!(choose_output_config(default, ranges, 24_000), default);
+        assert_eq!(choose_output_config(default, [], 24_000), default);
+        // A range that only an unwritable format offers does not count.
+        let unplayable = [range(2, 8_000, 192_000, SampleFormat::I32)];
+        assert_eq!(choose_output_config(default, unplayable, 24_000), default);
+    }
+
+    #[test]
+    fn output_config_prefers_the_default_layout_among_several_ranges() {
+        let default = stereo_f32_at(48_000);
+        let mut ranges = vec![
+            range(2, 44_100, 48_000, SampleFormat::F32),
+            range(2, 8_000, 192_000, SampleFormat::I32),
+            range(6, 8_000, 192_000, SampleFormat::F32),
+            range(2, 8_000, 96_000, SampleFormat::I16),
+            range(2, 16_000, 24_000, SampleFormat::F32),
+            range(1, 8_000, 48_000, SampleFormat::F32),
+        ];
+        assert_eq!(
+            choose_output_config(default, ranges.clone(), 24_000),
+            stereo_f32_at(24_000)
+        );
+        ranges.reverse();
+        assert_eq!(
+            choose_output_config(default, ranges.clone(), 24_000),
+            stereo_f32_at(24_000)
+        );
+        // Without a stereo f32 range at 24 kHz, stereo in another format wins over
+        // six or one channels in f32.
+        ranges.retain(|r| !(r.channels() == 2 && r.sample_format() == SampleFormat::F32));
+        let chosen = choose_output_config(default, ranges, 24_000);
+        assert_eq!(
+            (
+                chosen.channels(),
+                chosen.sample_rate(),
+                chosen.sample_format()
+            ),
+            (2, 24_000, SampleFormat::I16)
+        );
+    }
+
+    #[test]
+    fn output_config_at_the_native_rate_already_needs_no_search() {
+        let default = stereo_f32_at(24_000);
+        let ranges = [range(1, 8_000, 48_000, SampleFormat::I16)];
+        assert_eq!(choose_output_config(default, ranges, 24_000), default);
     }
 }

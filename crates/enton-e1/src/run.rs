@@ -7,6 +7,7 @@ use crate::{
 use crate::{
     baseline::Baseline,
     economy::Account,
+    invariants::Watch,
     report::{NoiseBreakdown, NoiseReason, NoiseStimulus},
     scoring::Scorer,
 };
@@ -173,26 +174,35 @@ pub fn run_tape(tape: &Tape) -> Result<ExperimentRun, Error> {
 }
 
 enum Machine {
-    Core(Box<Organism>),
+    Core(Box<Organism>, Box<Watch>),
     Simple(Baseline),
 }
 impl Machine {
-    fn new(controller: Controller, profile: &Profile) -> Self {
+    fn new(controller: Controller, profile: &Profile) -> Result<Self, Error> {
         match controller {
-            Controller::Organism => Self::Core(Box::new(Organism::new(profile.clone()))),
-            Controller::Simple => Self::Simple(Baseline::new(false)),
-            Controller::FixedWindow => Self::Simple(Baseline::new(true)),
+            Controller::Organism => {
+                let org =
+                    Organism::new(profile.clone()).map_err(|e| Error::Invalid(e.to_string()))?;
+                Ok(Self::Core(Box::new(org), Box::default()))
+            }
+            Controller::Simple => Ok(Self::Simple(Baseline::new(false))),
+            Controller::FixedWindow => Ok(Self::Simple(Baseline::new(true))),
         }
     }
-    fn step(&mut self, event: &Event, can_pay: bool) -> Vec<Action> {
+    /// Step the controller; the organism is checked against its invariants.
+    fn step(&mut self, event: &Event, can_pay: bool) -> Result<Vec<Action>, Error> {
         match self {
-            Self::Core(o) => o.step(event),
-            Self::Simple(b) => b.step(event, can_pay),
+            Self::Core(organism, watch) => {
+                let actions = organism.step(event);
+                watch.after_step(organism, event, &actions)?;
+                Ok(actions)
+            }
+            Self::Simple(b) => Ok(b.step(event, can_pay)),
         }
     }
     fn attending(&self) -> bool {
         match self {
-            Self::Core(o) => o.is_attending(),
+            Self::Core(o, _) => o.is_attending(),
             Self::Simple(_) => false,
         }
     }
@@ -328,7 +338,7 @@ impl<'a> Execution<'a> {
         economy: Economy,
         tape: &'a Tape,
         horizon: Millis,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let mut segment_sources = BTreeMap::new();
         for r in tape.records() {
             if let Annotation::Speech {
@@ -338,8 +348,8 @@ impl<'a> Execution<'a> {
                 segment_sources.insert(segment, source);
             }
         }
-        Self {
-            machine: Machine::new(controller, profile),
+        Ok(Self {
+            machine: Machine::new(controller, profile)?,
             scorer: Scorer::new(tape),
             account: Account::new(economy),
             feedback: Feedback::new(horizon),
@@ -347,7 +357,7 @@ impl<'a> Execution<'a> {
             economy,
             tape,
             segment_sources,
-        }
+        })
     }
 
     fn resolve_stimulus(&self, trigger: Trigger, record: &Record) -> NoiseStimulus {
@@ -379,7 +389,7 @@ impl<'a> Execution<'a> {
         self.account.advance(now);
         self.feedback.observe_barge_in(record, &mut self.result);
         // Only Event crosses the policy boundary. No labels, segment IDs or turns.
-        let actions = self.machine.step(&record.event, self.account.can_pay());
+        let actions = self.machine.step(&record.event, self.account.can_pay())?;
         let attending = self.machine.attending();
         for action in actions {
             match action {
@@ -476,7 +486,7 @@ fn run_controller(
         annotation: Annotation::Clock,
     });
     let mut events = tape.records().iter().cloned().chain(drain).peekable();
-    let mut execution = Execution::new(controller, profile, economy, tape, horizon);
+    let mut execution = Execution::new(controller, profile, economy, tape, horizon)?;
     let mut processed = 0;
     loop {
         let endogenous = match (events.peek(), execution.feedback.pending.first_key_value()) {
@@ -609,7 +619,8 @@ mod tests {
         let tape = fixture(true);
         let profile = Profile::t1_ref();
         let economy = Economy::from_profile(&profile).unwrap();
-        let mut e = Execution::new(Controller::Simple, &profile, economy, &tape, Millis(15_000));
+        let mut e =
+            Execution::new(Controller::Simple, &profile, economy, &tape, Millis(15_000)).unwrap();
         let record = tape.records().first().unwrap();
         e.paid_thought(record, ThoughtId(1), Reason::Keyword, false)
             .unwrap();
@@ -684,7 +695,7 @@ mod tests {
         assert!(fixed.step(&events[4], true).is_empty());
 
         // Verify organism tracks playback state on these events
-        let mut organism = Organism::new(Profile::t1_ref());
+        let mut organism = Organism::new(Profile::t1_ref()).unwrap();
         assert!(!organism.is_speaking());
         organism.step(&events[0]);
         assert!(organism.is_speaking());

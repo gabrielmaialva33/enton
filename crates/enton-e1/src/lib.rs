@@ -2,6 +2,7 @@
 
 pub mod baseline;
 mod economy;
+mod invariants;
 pub mod report;
 pub mod run;
 mod scoring;
@@ -9,7 +10,10 @@ pub mod synth;
 pub mod tape;
 
 pub use economy::Economy;
-pub use report::{Criterion, NoiseBreakdown, NoiseReason, NoiseStimulus, Report, Status};
+pub use report::{
+    Criterion, CriterionSummary, NoiseBreakdown, NoiseReason, NoiseStimulus, Report, Status,
+    Summary, clopper_pearson_upper_bound,
+};
 pub use run::{Controller, ControllerResult, ExperimentRun, run_tape};
 pub use synth::{SplitMix64, e1a, e1b};
 pub use tape::{
@@ -25,6 +29,9 @@ pub enum Error {
     /// An annotation, timestamp, population or configuration is inconsistent.
     #[error("invalid benchmark input: {0}")]
     Invalid(String),
+    /// The organism broke one of its reducer invariants: a bug, never bad luck.
+    #[error("organism invariant violated: {0}")]
+    Invariant(String),
     /// An explicit resource bound was exceeded.
     #[error("benchmark limit exceeded: {0}")]
     Limit(&'static str),

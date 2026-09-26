@@ -402,9 +402,384 @@ impl fmt::Display for Report {
     }
 }
 
+/// One-sided 95% Clopper-Pearson exact upper bound for $k$ misses out of $n$ trials.
+///
+/// Computes the exact Clopper-Pearson upper bound by finding $p \in [0, 1]$
+/// such that $P(X \le k \mid n, p) = 0.05$.
+///
+/// Bounded bisection search over the binomial CDF computed using incremental log terms.
+#[must_use]
+pub fn clopper_pearson_upper_bound(k: u64, n: u64) -> f64 {
+    if n == 0 || k >= n {
+        return 1.0;
+    }
+    let target = 0.05;
+    let mut low = 0.0f64;
+    let mut high = 1.0f64;
+    let Ok(k_usize) = usize::try_from(k) else {
+        return 1.0;
+    };
+    let mut buffer = Vec::with_capacity(k_usize.saturating_add(1));
+
+    for _ in 0..100 {
+        let mid = low.midpoint(high);
+        let cdf = binomial_cdf(k, n, mid, &mut buffer);
+        if cdf > target {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    low.midpoint(high)
+}
+
+fn binomial_cdf(k: u64, n: u64, p: f64, buffer: &mut Vec<f64>) -> f64 {
+    if k >= n {
+        return 1.0;
+    }
+    if p <= 0.0 {
+        return 1.0;
+    }
+    if p >= 1.0 {
+        return 0.0;
+    }
+    buffer.clear();
+    let Ok(k_usize) = usize::try_from(k) else {
+        return 1.0;
+    };
+    let ln_p = p.ln();
+    let ln_1_minus_p = (1.0 - p).ln();
+    let log_ratio = ln_p - ln_1_minus_p;
+
+    let mut current_log = (n as f64) * ln_1_minus_p;
+    buffer.push(current_log);
+    let mut max_log = current_log;
+
+    for i in 1..=k_usize {
+        let i_f64 = i as f64;
+        let n_minus_i_plus_1 = (n.saturating_sub(i as u64).saturating_add(1)) as f64;
+        current_log += n_minus_i_plus_1.ln() - i_f64.ln() + log_ratio;
+        buffer.push(current_log);
+        if current_log > max_log {
+            max_log = current_log;
+        }
+    }
+
+    let sum: f64 = buffer.iter().map(|&lt| (lt - max_log).exp()).sum();
+    (max_log.exp() * sum).clamp(0.0, 1.0)
+}
+
+/// Pass, fail, and not-evaluated counts for one criterion across multiple seeds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CriterionSummary {
+    /// Criterion threshold name.
+    pub name: &'static str,
+    /// Number of seeds passing this criterion.
+    pub pass: usize,
+    /// Number of seeds failing this criterion.
+    pub fail: usize,
+    /// Number of seeds where this criterion was not evaluated.
+    pub not_evaluated: usize,
+}
+
+/// Aggregate multi-seed summary for experiment E1.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Summary {
+    /// Benchmark protocol version.
+    pub version: &'static str,
+    /// Evaluated seeds in order.
+    pub seeds: Vec<u64>,
+    /// Criteria pass/fail/not-evaluated counts across seeds.
+    pub criteria: Vec<CriterionSummary>,
+    /// E1a organism pooled served requests.
+    pub e1a_served_requests: u64,
+    /// E1a organism pooled total requests.
+    pub e1a_total_requests: u64,
+    /// E1a organism pooled served turns.
+    pub e1a_served_turns: u64,
+    /// E1a organism pooled total turns.
+    pub e1a_total_turns: u64,
+    /// One-sided 95% Clopper-Pearson exact upper bound on the E1a request miss rate.
+    pub e1a_request_miss_rate_upper_bound: f64,
+    /// E1b organism pooled served requests.
+    pub e1b_served_requests: u64,
+    /// E1b organism pooled total requests.
+    pub e1b_total_requests: u64,
+    /// E1b organism total calls in noise intervals.
+    pub e1b_calls_in_noise_total: u64,
+    /// E1b organism mean calls in noise intervals per seed.
+    pub e1b_calls_in_noise_mean: f64,
+    /// E1b organism maximum calls in noise intervals across seeds.
+    pub e1b_calls_in_noise_max: u64,
+    /// Pooled paid calls by organism across E1a and E1b.
+    pub pooled_organism_paid_calls: u64,
+    /// Pooled paid calls by simple baseline across E1a and E1b.
+    pub pooled_simple_paid_calls: u64,
+    /// Pooled paid call reduction percentage of organism relative to simple.
+    pub pooled_reduction_percentage: f64,
+    /// Total synthetic self-ignitions for E1a organism.
+    pub e1a_synthetic_self_ignitions: u64,
+}
+
+impl Summary {
+    /// Build an aggregate summary over multiple reports.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Invalid`] if `reports` is empty.
+    pub fn from_reports(reports: &[Report]) -> Result<Self, Error> {
+        let first = reports
+            .first()
+            .ok_or_else(|| Error::Invalid("empty reports for summary".into()))?;
+
+        let seeds: Vec<u64> = reports.iter().map(|r| r.e1a.seed).collect();
+
+        let mut criteria_map = BTreeMap::new();
+        let mut ordered_names = Vec::new();
+        for report in reports {
+            for c in &report.criteria {
+                let entry = criteria_map
+                    .entry(c.name)
+                    .or_insert((0usize, 0usize, 0usize));
+                match c.status {
+                    Status::Pass => entry.0 += 1,
+                    Status::Fail => entry.1 += 1,
+                    Status::NotEvaluated => entry.2 += 1,
+                }
+                if !ordered_names.contains(&c.name) {
+                    ordered_names.push(c.name);
+                }
+            }
+        }
+        let criteria = ordered_names
+            .into_iter()
+            .map(|name| {
+                let (pass, fail, not_evaluated) =
+                    criteria_map.get(&name).copied().unwrap_or((0, 0, 0));
+                CriterionSummary {
+                    name,
+                    pass,
+                    fail,
+                    not_evaluated,
+                }
+            })
+            .collect();
+
+        let mut e1a_served_requests = 0u64;
+        let mut e1a_total_requests = 0u64;
+        let mut e1a_served_turns = 0u64;
+        let mut e1a_total_turns = 0u64;
+        let mut e1a_synthetic_self_ignitions = 0u64;
+
+        let mut e1b_served_requests = 0u64;
+        let mut e1b_total_requests = 0u64;
+        let mut e1b_calls_in_noise_total = 0u64;
+        let mut e1b_calls_in_noise_max = 0u64;
+
+        let mut pooled_organism_paid_calls = 0u64;
+        let mut pooled_simple_paid_calls = 0u64;
+
+        for report in reports {
+            e1a_served_requests += report.e1a.organism.served_requests;
+            e1a_total_requests += report.e1a.organism.total_requests;
+            e1a_served_turns += report.e1a.organism.served_turns;
+            e1a_total_turns += report.e1a.organism.total_turns;
+            e1a_synthetic_self_ignitions += report.e1a.organism.synthetic_self_ignitions;
+
+            e1b_served_requests += report.e1b.organism.served_requests;
+            e1b_total_requests += report.e1b.organism.total_requests;
+            let noise_calls = report.e1b.organism.calls_in_noise;
+            e1b_calls_in_noise_total += noise_calls;
+            if noise_calls > e1b_calls_in_noise_max {
+                e1b_calls_in_noise_max = noise_calls;
+            }
+
+            pooled_organism_paid_calls +=
+                report.e1a.organism.paid_calls + report.e1b.organism.paid_calls;
+            pooled_simple_paid_calls += report.e1a.simple.paid_calls + report.e1b.simple.paid_calls;
+        }
+
+        let e1a_misses = e1a_total_requests.saturating_sub(e1a_served_requests);
+        let e1a_request_miss_rate_upper_bound =
+            clopper_pearson_upper_bound(e1a_misses, e1a_total_requests);
+
+        let e1b_calls_in_noise_mean = e1b_calls_in_noise_total as f64 / reports.len() as f64;
+
+        let pooled_reduction_percentage = if pooled_simple_paid_calls == 0 {
+            0.0
+        } else {
+            100.0 * (1.0 - pooled_organism_paid_calls as f64 / pooled_simple_paid_calls as f64)
+        };
+
+        Ok(Self {
+            version: first.version,
+            seeds,
+            criteria,
+            e1a_served_requests,
+            e1a_total_requests,
+            e1a_served_turns,
+            e1a_total_turns,
+            e1a_request_miss_rate_upper_bound,
+            e1b_served_requests,
+            e1b_total_requests,
+            e1b_calls_in_noise_total,
+            e1b_calls_in_noise_mean,
+            e1b_calls_in_noise_max,
+            pooled_organism_paid_calls,
+            pooled_simple_paid_calls,
+            pooled_reduction_percentage,
+            e1a_synthetic_self_ignitions,
+        })
+    }
+
+    /// Pooled served requests for E1a organism.
+    #[must_use]
+    pub fn e1a_organism_served_requests(&self) -> u64 {
+        self.e1a_served_requests
+    }
+
+    /// Pooled total requests for E1a organism.
+    #[must_use]
+    pub fn e1a_organism_total_requests(&self) -> u64 {
+        self.e1a_total_requests
+    }
+
+    /// Pooled served turns for E1a organism.
+    #[must_use]
+    pub fn e1a_organism_served_turns(&self) -> u64 {
+        self.e1a_served_turns
+    }
+
+    /// Pooled total turns for E1a organism.
+    #[must_use]
+    pub fn e1a_organism_total_turns(&self) -> u64 {
+        self.e1a_total_turns
+    }
+
+    /// Pooled served requests for E1b organism.
+    #[must_use]
+    pub fn e1b_organism_served_requests(&self) -> u64 {
+        self.e1b_served_requests
+    }
+
+    /// Pooled total requests for E1b organism.
+    #[must_use]
+    pub fn e1b_organism_total_requests(&self) -> u64 {
+        self.e1b_total_requests
+    }
+
+    /// Total synthetic self-ignitions for E1a organism.
+    #[must_use]
+    pub fn e1a_organism_synthetic_self_ignitions(&self) -> u64 {
+        self.e1a_synthetic_self_ignitions
+    }
+}
+
+impl fmt::Display for Summary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "E1 benchmark summary | {} seeds: {:?}",
+            self.seeds.len(),
+            self.seeds
+        )?;
+        writeln!(
+            f,
+            "Original RFC §7 criteria over {} seeds:",
+            self.seeds.len()
+        )?;
+        for c in &self.criteria {
+            writeln!(
+                f,
+                "  {}: {} pass, {} fail, {} not evaluated",
+                c.name, c.pass, c.fail, c.not_evaluated
+            )?;
+        }
+        writeln!(f, "E1a organism:")?;
+        writeln!(
+            f,
+            "  requests: {}/{} pooled, turns: {}/{} pooled",
+            self.e1a_served_requests,
+            self.e1a_total_requests,
+            self.e1a_served_turns,
+            self.e1a_total_turns
+        )?;
+        writeln!(
+            f,
+            "  request miss rate: 95% Clopper-Pearson upper bound = {:.5} ({:.2}%)",
+            self.e1a_request_miss_rate_upper_bound,
+            self.e1a_request_miss_rate_upper_bound * 100.0
+        )?;
+        writeln!(
+            f,
+            "  synthetic self-ignitions: {} total",
+            self.e1a_synthetic_self_ignitions
+        )?;
+        writeln!(f, "E1b organism:")?;
+        writeln!(
+            f,
+            "  requests: {}/{} pooled",
+            self.e1b_served_requests, self.e1b_total_requests
+        )?;
+        writeln!(
+            f,
+            "  calls in noise: {} total, {:.2} mean/seed, {} max",
+            self.e1b_calls_in_noise_total,
+            self.e1b_calls_in_noise_mean,
+            self.e1b_calls_in_noise_max
+        )?;
+        writeln!(f, "Paid calls (E1a + E1b pooled):")?;
+        if self.pooled_simple_paid_calls == 0 {
+            writeln!(
+                f,
+                "  organism: {}, simple: {}, reduction: undefined (baseline has zero calls)",
+                self.pooled_organism_paid_calls, self.pooled_simple_paid_calls
+            )?;
+        } else {
+            writeln!(
+                f,
+                "  organism: {}, simple: {}, reduction: {:.2}%",
+                self.pooled_organism_paid_calls,
+                self.pooled_simple_paid_calls,
+                self.pooled_reduction_percentage
+            )?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clopper_pearson_known_values() {
+        let tol = 1e-4;
+        let v0_100 = clopper_pearson_upper_bound(0, 100);
+        assert!(
+            (v0_100 - 0.02951).abs() < tol,
+            "k=0, n=100 expected ~0.02951, got {v0_100}"
+        );
+
+        let v1_100 = clopper_pearson_upper_bound(1, 100);
+        assert!(
+            (v1_100 - 0.04656).abs() < tol,
+            "k=1, n=100 expected ~0.04656, got {v1_100}"
+        );
+
+        let v0_3200 = clopper_pearson_upper_bound(0, 3200);
+        assert!(
+            (v0_3200 - 0.000_936).abs() < tol,
+            "k=0, n=3200 expected ~0.000936, got {v0_3200}"
+        );
+    }
+
+    #[test]
+    fn summary_empty_reports_returns_invalid_error() {
+        let res = Summary::from_reports(&[]);
+        assert!(matches!(res, Err(Error::Invalid(_))));
+    }
+
     #[test]
     fn passing_proxies_cannot_hide_missing_physical_criteria() {
         let criteria = vec![

@@ -2,7 +2,9 @@
 //! the `TigerBeetle` VOPR: the synthetic tapes explore, the watch asserts, and a
 //! violation stops the run naming the step and the event that broke it.
 
-use enton_core::{Abstention, Action, Budget, Deferred, Event, Millis, Organism, Reason, ThoughtId};
+use enton_core::{
+    Abstention, Action, Budget, Deferred, Event, Millis, Organism, Reason, ThoughtId,
+};
 
 use crate::Error;
 
@@ -96,9 +98,8 @@ impl Watch {
             | Event::Checklist { .. }
             | Event::CortexFailed { .. }
             | Event::Quiet { .. }
-            | Event::QuietHours { .. } => (!actions.is_empty()).then_some(
-                "body, playback, checklist, failure and quiet events decide nothing",
-            ),
+            | Event::QuietHours { .. } => (!actions.is_empty())
+                .then_some("body, playback, checklist, failure and quiet events decide nothing"),
         };
         broken.map_or(Ok(()), |what| Err(self.violation(event, what)))
     }
@@ -729,7 +730,10 @@ mod tests {
         let err = watch
             .after_step(&organism, &event, &[overheard])
             .unwrap_err();
-        assert!(err.to_string().contains("quiet mode or quiet hours"), "{err}");
+        assert!(
+            err.to_string().contains("quiet mode or quiet hours"),
+            "{err}"
+        );
         let err = watch
             .after_step(
                 &organism,
@@ -742,26 +746,33 @@ mod tests {
 
     #[test]
     fn a_ride_or_an_expiry_without_a_held_intent_is_a_violation() {
+        // Something to check, and the owner home: they called Enton by name.
         let mut organism = organism();
-        organism.step(&Event::Checklist {
-            now: Millis(0),
-            actionable: true,
-        });
         let mut watch = Watch::default();
-        watch
-            .after_step(
-                &organism,
-                &Event::Checklist {
-                    now: Millis(0),
-                    actionable: true,
-                },
-                &[],
-            )
-            .unwrap();
+        let called = Event::Speech {
+            now: Millis(50),
+            cue: SpeechCue {
+                energy: 0.9,
+                duration_ms: 1_500,
+                vad_confidence: 0.9,
+                keyword: true,
+                ..SpeechCue::default()
+            },
+        };
+        for event in [
+            Event::Checklist {
+                now: Millis(0),
+                actionable: true,
+            },
+            called,
+        ] {
+            let actions = organism.step(&event);
+            watch.after_step(&organism, &event, &actions).unwrap();
+        }
         let event = cue(100);
         organism.step(&event);
         let ride = |reason: Reason, propensity| Action::Think {
-            thought: ThoughtId(1),
+            thought: ThoughtId(2),
             reason,
             salience: 1.5,
             propensity,
@@ -788,9 +799,7 @@ mod tests {
             why: Abstention::Expired,
             propensity: None,
         };
-        let err = watch
-            .after_step(&organism, &tick, &[expired])
-            .unwrap_err();
+        let err = watch.after_step(&organism, &tick, &[expired]).unwrap_err();
         assert!(err.to_string().contains("expires once"), "{err}");
     }
 

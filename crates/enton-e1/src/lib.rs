@@ -37,7 +37,11 @@ pub use tape::{
 /// Version 3.4.0 opens every run with the owner's checklist holding something to check
 /// (see [`run::CHECKLIST_ACTIONABLE`]), and lets a tape read the checklist itself. Generated tapes
 /// are unchanged and carry no checklist reading of their own.
-pub const BENCHMARK_VERSION: &str = "3.4.0";
+/// Version 3.5.0 lets a tape carry the owner's quiet commands and the quiet hours (`Quiet` and
+/// `QuietHours` records), and records the drive whose deferred intent rides a paid thought.
+/// Generated tapes carry neither, and no generated tape readies a drive, so every run decides
+/// every call exactly as 3.4.0 did.
+pub const BENCHMARK_VERSION: &str = "3.5.0";
 
 /// Invalid experiments fail explicitly rather than dropping stimuli or granting free calls.
 #[derive(Debug, thiserror::Error)]

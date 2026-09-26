@@ -69,6 +69,10 @@ pub struct PaidThought {
     pub trigger: Trigger,
     /// Single-turn credit or waste.
     pub credit: Credit,
+    /// The drive whose deferred intent rode this thought, at no extra paid call. Omitted
+    /// from JSON when none did, so reports read as they did before rides.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rider: Option<String>,
 }
 
 /// Results for one policy; service is a paid-ignition proxy, not answer correctness.
@@ -658,8 +662,13 @@ impl<'a> Execution<'a> {
         for action in &actions {
             match action {
                 Action::Think {
-                    thought, reason, ..
-                } => self.paid_thought(record, *thought, reason.clone(), attending)?,
+                    thought,
+                    reason,
+                    rider,
+                    ..
+                } => {
+                    self.paid_thought(record, *thought, reason.clone(), rider.clone(), attending)?;
+                }
                 Action::Abstain { reason, why, .. } => {
                     if matches!(reason, Reason::Keyword | Reason::FollowUp) {
                         self.result.rejected_obligations += 1;
@@ -692,11 +701,14 @@ impl<'a> Execution<'a> {
                 .or_default() += 1;
         }
     }
+    /// Pay for `thought`, taken for `reason` and carrying `rider`'s deferred intent if one
+    /// rides it, and score it.
     fn paid_thought(
         &mut self,
         record: &Record,
         thought: ThoughtId,
         reason: Reason,
+        rider: Option<String>,
         attending: bool,
     ) -> Result<(), Error> {
         self.account.pay()?;
@@ -744,6 +756,7 @@ impl<'a> Execution<'a> {
             reason,
             trigger,
             credit,
+            rider,
         });
         self.feedback.reply(now, thought)
     }
@@ -998,9 +1011,9 @@ mod tests {
         )
         .unwrap();
         let record = tape.records().first().unwrap();
-        e.paid_thought(record, ThoughtId(1), Reason::Keyword, false)
+        e.paid_thought(record, ThoughtId(1), Reason::Keyword, None, false)
             .unwrap();
-        e.paid_thought(record, ThoughtId(2), Reason::Keyword, false)
+        e.paid_thought(record, ThoughtId(2), Reason::Keyword, None, false)
             .unwrap();
         assert_eq!(e.result.paid_calls, 2);
         assert_eq!(e.result.duplicate_calls, 1);

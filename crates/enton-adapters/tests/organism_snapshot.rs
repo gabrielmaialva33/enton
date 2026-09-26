@@ -8,8 +8,10 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use enton_adapters::{Soul, SoulConfig, soul::Error};
-use enton_core::{Action, BodySignals, Event, Millis, Organism, Profile, SpeechCue, ThoughtId};
+use enton_adapters::{MonotonicClock, Soul, SoulConfig, soul::Error};
+use enton_core::{
+    Abstention, Action, BodySignals, Event, Millis, Organism, Profile, SpeechCue, ThoughtId,
+};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -139,6 +141,55 @@ fn every_snapshot_boundary_survives_pruning_restart_and_replay() {
         assert_eq!(actual_actions, expected_actions);
         assert_eq!(restored, expected);
     }
+}
+
+#[test]
+fn a_restored_organism_resumes_time_where_it_stopped() {
+    let directory = TestDirectory::new();
+    let five_hours = 5 * 3_600_000;
+    {
+        let soul = Soul::open(directory.database(), SoulConfig::default()).unwrap();
+        let mut organism = Organism::new(Profile::desktop());
+        let mut last_seq = 0;
+        for event in [
+            Event::Tick {
+                now: Millis(five_hours),
+            },
+            // A paid thought after the last tick: the resume point must see it.
+            speech(five_hours + 500, false, 1000),
+        ] {
+            last_seq = soul.append_event(&event).unwrap();
+            organism.step(&event);
+        }
+        soul.save_organism_snapshot(last_seq, &organism).unwrap();
+    }
+
+    let soul = Soul::open(directory.database(), SoulConfig::default()).unwrap();
+    let (restored, _) = soul.replay_organism(&Profile::desktop()).unwrap();
+    assert_eq!(restored.last_seen(), Millis(five_hours + 500));
+
+    // A clock restarting at zero reads as time running backward: stuck in cooldown.
+    let mut naive = restored.clone();
+    assert!(matches!(
+        naive.step(&speech(60_000, false, 1000)).as_slice(),
+        [Action::Abstain {
+            why: Abstention::Cooldown,
+            ..
+        }]
+    ));
+
+    // The resumed clock keeps counting, so the same cue a minute later is paid for.
+    let mut resumed = restored;
+    let now = MonotonicClock::resuming_at(resumed.last_seen()).now();
+    assert!(now >= resumed.last_seen());
+    let actions = resumed.step(&speech(now.0 + 60_000, false, 1000));
+    assert_eq!(thought_ids(&actions), vec![ThoughtId(2)]);
+
+    let before = resumed.discretionary_budget().available;
+    resumed.step(&Event::Tick {
+        now: Millis(now.0 + 3_600_000),
+    });
+    assert!(resumed.discretionary_budget().available > before);
 }
 
 #[test]

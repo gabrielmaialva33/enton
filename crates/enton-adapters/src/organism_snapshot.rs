@@ -40,6 +40,11 @@ impl Soul {
     /// Returned actions cover only the replayed tail, not the snapshotted prefix.
     /// As with [`Soul::replay`], callers must bound the log with retention to bound
     /// the returned action vector. Run this blocking API outside async executors.
+    ///
+    /// Drive the restored organism with
+    /// [`MonotonicClock::resuming_at`](crate::MonotonicClock::resuming_at) at
+    /// [`Organism::last_seen`]: a fresh clock starts at zero, and the reducer
+    /// ignores time that runs backward.
     pub fn replay_organism(&self, profile: &Profile) -> Result<(Organism, Vec<Action>), Error> {
         self.replay(
             || Organism::new(profile.clone()),

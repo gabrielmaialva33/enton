@@ -1134,15 +1134,8 @@ impl Organism {
         }
         if self.pending_attend.is_some() {
             // The rest of a request Enton was waiting for, over its own acknowledgement:
-            // it finishes that request, as it would in silence, and only once.
-            return self.accept_in_window(
-                now,
-                cue,
-                norm_energy,
-                norm_vad,
-                norm_dur,
-                Payment::Obligation,
-            );
+            // judged as in silence, it finishes that request, and only once.
+            return self.speech_in_window(now, cue, norm_energy, norm_vad, norm_dur);
         }
 
         // An accepted barge-in in the caller's voice: the owner is home.

@@ -6,8 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use enton_adapters::cortex::Persona;
+use enton_adapters::soul::PersonaDigest;
 use enton_adapters::{Soul, SoulConfig};
-use enton_core::{Event, Millis, Profile, SpeechCue, ThoughtId};
+use enton_core::{Event, Millis, Profile, SpeechCue, ThoughtId, UtteranceId};
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -83,7 +85,7 @@ fn write_soul(path: &Path) -> Result<(), Box<dyn Error>> {
         now: Millis(5_000),
         cue: request(),
     })?;
-    soul.record_pending(ThoughtId(1), asked)?;
+    soul.record_pending(ThoughtId(1), asked, &built_in())?;
     soul.mark_failed(ThoughtId(1), r#"{"reason":"cortex unavailable"}"#)?;
     soul.append_event(&Event::CortexReply {
         now: Millis(6_000),
@@ -107,6 +109,11 @@ fn write_soul(path: &Path) -> Result<(), Box<dyn Error>> {
     let (organism, _) = soul.replay_organism(&Profile::t1_ref())?;
     soul.save_organism_snapshot(last, &organism)?;
     Ok(())
+}
+
+/// The persona the thought in [`write_soul`] was asked with.
+fn built_in() -> PersonaDigest {
+    (&Persona::built_in()).into()
 }
 
 fn why(data: &TempDir, args: &[&str]) -> Result<Output, Box<dyn Error>> {
@@ -180,6 +187,23 @@ fn why_reports_a_thought_the_cortex_never_answered() {
         "{text}"
     );
     assert!(!text.contains(REPLY), "{text}");
+    // The persona it was asked with, by the hash the startup line shows.
+    let persona = built_in();
+    let name = format!(
+        "{} (built-in default, {} bytes)",
+        persona.short_hex(),
+        persona.bytes
+    );
+    assert!(
+        text.contains(&format!("Persona: {name} first used at seq 2.\n")),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("  persona   {name}\n  why       Thought #1 ")),
+        "{text}"
+    );
+    assert!(!text.contains("  warning"), "{text}");
+    assert_eq!(text.matches("  persona   ").count(), 1, "{text}");
 }
 
 #[test]
@@ -234,6 +258,11 @@ fn why_prints_machine_readable_records() {
     assert_eq!(asked["decision"]["reason"], "Keyword");
     assert_eq!(asked["decision"]["fate"]["status"], "failed");
     assert_eq!(asked["decision"]["fate"]["failure"], "cortex unavailable");
+    assert_eq!(asked["decision"]["persona"]["sha256"], built_in().hex());
+    assert_eq!(asked["decision"]["persona"]["source"], "built_in");
+    assert_eq!(asked["decision"]["persona"]["first_seq"], 2);
+    assert!(asked["decision"].get("persona_changed").is_none());
+    assert_eq!(report["personas"][0]["bytes"], built_in().bytes);
     assert_eq!(asked["evidence"], serde_json::json!({}));
 
     // `--since` counts back from the last event: nothing was said in its last minute.
@@ -272,4 +301,72 @@ fn why_refuses_to_replay_under_another_profile() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("profile differs"), "{stderr}");
+}
+
+/// The owner asked, Enton answered aloud, and the owner called again over its second
+/// sentence: the player cut that sentence and the one queued after it.
+fn write_cut_soul(path: &Path) -> Result<(), Box<dyn Error>> {
+    let soul = Soul::open(path, SoulConfig::default())?;
+    let played = |now, utterance, interrupted| Event::PlaybackFinished {
+        now: Millis(now),
+        utterance: UtteranceId(utterance),
+        interrupted,
+    };
+    soul.append_event(&Event::Speech {
+        now: Millis(1_000),
+        cue: request(),
+    })?;
+    soul.append_event(&Event::CortexReply {
+        now: Millis(2_000),
+        thought: ThoughtId(1),
+        text: REPLY.to_owned(),
+    })?;
+    soul.append_event(&Event::PlaybackStarted {
+        now: Millis(2_100),
+        utterance: UtteranceId(1),
+    })?;
+    soul.append_event(&played(3_000, 1, false))?;
+    soul.append_event(&Event::PlaybackStarted {
+        now: Millis(3_010),
+        utterance: UtteranceId(2),
+    })?;
+    // Loud: over a reply with its own name in it, only that interrupts Enton.
+    soul.append_event(&Event::Speech {
+        now: Millis(4_000),
+        cue: SpeechCue {
+            energy: 0.95,
+            ..request()
+        },
+    })?;
+    soul.append_event(&played(4_010, 2, true))?;
+    soul.append_event(&played(4_010, 3, true))?;
+    Ok(())
+}
+
+#[test]
+fn why_says_which_cue_cut_enton_off() {
+    let data = TempDir::new().unwrap();
+    let path = data.path.join("cut.sqlite");
+    write_cut_soul(&path).unwrap();
+    let soul = path.to_string_lossy().into_owned();
+
+    let output = why(&data, &["--soul", &soul]).unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = stdout(&output);
+    let cut = "  playback  cut off: Enton stopped speaking for this cue";
+    assert_eq!(text.matches(cut).count(), 1, "{text}");
+    // Under the second request, which interrupted Enton, not the first.
+    let second = text.find("(t = 4000 ms, seq 6)").unwrap();
+    assert!(text.find(cut).unwrap() > second, "{text}");
+    assert!(!text.contains(REPLY), "{text}");
+
+    let output = why(&data, &["--soul", &soul, "--json"]).unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let cut_off: Vec<bool> = report["cues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|cue| cue.get("cut_off").is_some_and(|flag| flag == true))
+        .collect();
+    assert_eq!(cut_off, [false, true]);
 }

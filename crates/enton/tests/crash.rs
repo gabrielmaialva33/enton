@@ -1517,11 +1517,15 @@ impl Enton {
         } else {
             Command::new(binary)
         };
+        // Never the owner's own PERSONA.md or CHECKLIST.md: a directory that does not
+        // exist beside the soul gives the built-in persona and nothing to check.
+        let config = soul.with_extension("config");
         command
             .arg("--soul")
             .arg(soul)
             .arg("--cortex-url")
             .arg(cortex.url())
+            .env("XDG_CONFIG_HOME", config)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -1885,12 +1889,23 @@ fn serve(stream: TcpStream, state: &CortexState) -> TestResult {
     }
     let mut body = vec![0; length];
     reader.read_exact(&mut body)?;
+    let body = String::from_utf8(body)?;
+    // The warm-up at startup only loads the model: answer it, but it is no thought,
+    // so it is neither recorded nor numbered.
+    if body.contains("\"max_tokens\":1") && body.contains("\"stream\":false") {
+        let mut stream = stream;
+        stream.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\
+              Connection: close\r\n\r\n{}",
+        )?;
+        return Ok(());
+    }
     let number = {
         let mut requests = state
             .requests
             .lock()
             .map_err(|_| "cortex requests poisoned")?;
-        requests.push(String::from_utf8(body)?);
+        requests.push(body);
         requests.len()
     };
 

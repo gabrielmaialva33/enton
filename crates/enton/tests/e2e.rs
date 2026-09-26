@@ -42,6 +42,16 @@ impl Drop for TempSoulDir {
     }
 }
 
+/// A reply to the startup warm-up: a successful empty completion.
+const WARM_UP_REPLY: &[u8] =
+    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+
+/// Whether a request body is the cortex warm-up (one token, no streaming).
+fn is_warm_up(body: &[u8]) -> bool {
+    let body = String::from_utf8_lossy(body);
+    body.contains("\"max_tokens\":1") && body.contains("\"stream\":false")
+}
+
 /// A fake OpenAI-compatible streaming cortex server using only `std::net`.
 #[derive(Debug)]
 struct FakeCortex {
@@ -103,9 +113,15 @@ impl FakeCortex {
                             }
                         }
                     }
-                    if content_length > 0 {
-                        let mut body = vec![0u8; content_length];
-                        drop(reader.read_exact(&mut body));
+                    let mut body = vec![0u8; content_length];
+                    drop(reader.read_exact(&mut body));
+                    // The warm-up at startup only loads the model: answer it, but it
+                    // is not a thought.
+                    if is_warm_up(&body) {
+                        drop(stream.write_all(WARM_UP_REPLY));
+                        drop(stream.flush());
+                        drop(stream.shutdown(std::net::Shutdown::Both));
+                        continue;
                     }
                 }
 
@@ -277,11 +293,15 @@ fn run_session(
 ) -> Result<u64, Box<dyn Error>> {
     let binary = env!("CARGO_BIN_EXE_enton");
     let mut command = Command::new(binary);
+    // Never the owner's own PERSONA.md or CHECKLIST.md: a directory that does not
+    // exist beside the soul gives the built-in persona and nothing to check.
+    let config = soul_path.with_extension("config");
     command
         .arg("--cortex-url")
         .arg(cortex_url)
         .arg("--soul")
         .arg(soul_path)
+        .env("XDG_CONFIG_HOME", config)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

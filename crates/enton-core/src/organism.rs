@@ -302,6 +302,8 @@ pub struct Organism {
     discretionary_budget: Budget,
     ignition: Ignition,
     last_tick: Millis,
+    #[serde(default)]
+    last_seen: Millis,
     torpor: bool,
     next_thought: u64,
     attention_until: Option<Millis>,
@@ -347,6 +349,7 @@ impl Organism {
             ),
             profile,
             last_tick: Millis(0),
+            last_seen: Millis(0),
             torpor: false,
             next_thought: 1,
             attention_until: None,
@@ -433,8 +436,19 @@ impl Organism {
         self.self_speech_has_keyword
     }
 
+    /// The latest instant this organism has observed, from any event.
+    ///
+    /// A restored organism must resume its clock here. The reducer ignores time
+    /// that runs backward, so a clock restarting at zero would freeze drives,
+    /// budget refills and cooldowns until it caught up with the old uptime.
+    #[must_use]
+    pub fn last_seen(&self) -> Millis {
+        self.last_seen.max(self.last_tick)
+    }
+
     /// Consume a recorded event and return decisions without executing effects.
     pub fn step(&mut self, event: &Event) -> Vec<Action> {
+        self.last_seen = self.last_seen.max(event.now());
         match event {
             Event::Tick { now } => self.tick(*now),
             Event::Body { signals, .. } => {

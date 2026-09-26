@@ -3,8 +3,11 @@
 // A CLI binary talks to the terminal by design; only libraries must not print.
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
+mod journal;
+
 use std::collections::VecDeque;
 use std::io::Write;
+use std::path::PathBuf;
 #[cfg(feature = "voice")]
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -12,10 +15,19 @@ use std::time::{Duration, Instant};
 use enton_adapters::cortex::{CortexConfig, OpenAiCortex};
 #[cfg(feature = "voice")]
 use enton_adapters::voice::{PlaybackEvent, UtteranceId, VoiceConfig, VoicePlayer};
-use enton_adapters::{MonotonicClock, read_body_signals};
+use enton_adapters::{MonotonicClock, SeqNo, read_body_signals};
 use enton_core::ports::{ConversationTurn, Cortex, ThoughtRequest};
 use enton_core::{Action, Event, Organism, Profile, SpeechCue, ThoughtId};
+use journal::{Journal, JournalError};
 use tokio::sync::mpsc;
+
+/// Snapshot the organism after this many recorded events (about ten minutes of ticks).
+const SNAPSHOT_EVERY: u32 = 600;
+
+/// How a cortex call ended; failures carry a fixed reason for the soul, never text.
+type Outcome = Result<(), &'static str>;
+
+const USAGE: &str = "Usage: enton [--profile t1-ref|desktop] [--cortex-url <URL>] [--model <MODEL>] [--soul <PATH> | --no-soul] [--voice] [--speaker <ID>]";
 
 enum LoopMessage {
     Event(Event),
@@ -41,6 +53,7 @@ enum LoopMessage {
         thought: ThoughtId,
         text: String,
         user_prompt: Option<String>,
+        outcome: Outcome,
     },
     Quit,
 }
@@ -57,6 +70,7 @@ struct CliConfig {
     profile: Profile,
     cortex_url: String,
     model: String,
+    soul: Option<PathBuf>,
     #[cfg(feature = "voice")]
     voice: bool,
     #[cfg(feature = "voice")]
@@ -64,108 +78,106 @@ struct CliConfig {
 }
 
 fn parse_cli_args() -> Result<CliConfig, String> {
-    let mut args = std::env::args().skip(1);
-    let mut profile_name = "t1-ref";
+    parse_args(std::env::args().skip(1))
+}
+
+/// Parse flags given either as `--flag value` or as `--flag=value`.
+fn parse_args(args: impl IntoIterator<Item = String>) -> Result<CliConfig, String> {
+    let mut args = args.into_iter();
+    let mut profile = Profile::t1_ref();
     let mut cortex_url = "http://127.0.0.1:11434/v1".to_string();
     let mut model = "qwen3.8:27b-gato".to_string();
+    let mut soul = None;
+    let mut no_soul = false;
     #[cfg(feature = "voice")]
     let mut voice = false;
     #[cfg(feature = "voice")]
     let mut speaker_id = None;
 
     while let Some(arg) = args.next() {
-        if arg == "--profile" {
-            let Some(val) = args.next() else {
-                return Err("missing value for --profile".to_string());
-            };
-            profile_name = match val.as_str() {
-                "t1-ref" => "t1-ref",
-                "desktop" => "desktop",
-                other => return Err(format!("unknown profile: {other}")),
-            };
-        } else if let Some(val) = arg.strip_prefix("--profile=") {
-            profile_name = match val {
-                "t1-ref" => "t1-ref",
-                "desktop" => "desktop",
-                other => return Err(format!("unknown profile: {other}")),
-            };
-        } else if arg == "--cortex-url" {
-            let Some(val) = args.next() else {
-                return Err("missing value for --cortex-url".to_string());
-            };
-            cortex_url = val;
-        } else if let Some(val) = arg.strip_prefix("--cortex-url=") {
-            cortex_url = val.to_string();
-        } else if arg == "--model" {
-            let Some(val) = args.next() else {
-                return Err("missing value for --model".to_string());
-            };
-            model = val;
-        } else if let Some(val) = arg.strip_prefix("--model=") {
-            model = val.to_string();
-        } else if arg == "--voice" {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((flag, value)) if flag.starts_with("--") => {
+                (flag.to_owned(), Some(value.to_owned()))
+            }
+            _ => (arg.clone(), None),
+        };
+        let mut value = || {
+            inline
+                .clone()
+                .or_else(|| args.next())
+                .ok_or_else(|| format!("missing value for {flag}"))
+        };
+        match flag.as_str() {
+            "--profile" => {
+                profile = match value()?.as_str() {
+                    "t1-ref" => Profile::t1_ref(),
+                    "desktop" => Profile::desktop(),
+                    other => return Err(format!("unknown profile: {other}")),
+                };
+            }
+            "--cortex-url" => cortex_url = value()?,
+            "--model" => model = value()?,
+            "--soul" => soul = Some(PathBuf::from(value()?)),
+            "--no-soul" => no_soul = true,
             #[cfg(feature = "voice")]
-            {
-                voice = true;
+            "--voice" => voice = true,
+            #[cfg(feature = "voice")]
+            "--speaker" => {
+                let id = value()?;
+                speaker_id = Some(
+                    id.parse::<i32>()
+                        .map_err(|e| format!("invalid speaker id: {e}"))?,
+                );
             }
             #[cfg(not(feature = "voice"))]
-            {
-                eprintln!("Warning: --voice flag ignored (voice feature disabled)");
+            "--voice" | "--speaker" => {
+                if flag == "--speaker" {
+                    value()?;
+                }
+                eprintln!("Warning: {flag} ignored (voice feature disabled)");
             }
-        } else if arg == "--speaker" {
-            let Some(val) = args.next() else {
-                return Err("missing value for --speaker".to_string());
-            };
-            #[cfg(feature = "voice")]
-            {
-                let sid = val
-                    .parse::<i32>()
-                    .map_err(|e| format!("invalid speaker id: {e}"))?;
-                speaker_id = Some(sid);
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                std::process::exit(0);
             }
-            #[cfg(not(feature = "voice"))]
-            {
-                let _ = val;
-                eprintln!("Warning: --speaker flag ignored (voice feature disabled)");
-            }
-        } else if let Some(val) = arg.strip_prefix("--speaker=") {
-            #[cfg(feature = "voice")]
-            {
-                let sid = val
-                    .parse::<i32>()
-                    .map_err(|e| format!("invalid speaker id: {e}"))?;
-                speaker_id = Some(sid);
-            }
-            #[cfg(not(feature = "voice"))]
-            {
-                let _ = val;
-                eprintln!("Warning: --speaker flag ignored (voice feature disabled)");
-            }
-        } else if arg == "--help" || arg == "-h" {
-            println!(
-                "Usage: enton [--profile t1-ref|desktop] [--cortex-url <URL>] [--model <MODEL>] [--voice] [--speaker <ID>]"
-            );
-            std::process::exit(0);
-        } else {
-            return Err(format!("unknown argument: {arg}"));
+            _ => return Err(format!("unknown argument: {arg}")),
         }
     }
 
-    let profile = match profile_name {
-        "t1-ref" => Profile::t1_ref(),
-        "desktop" => Profile::desktop(),
-        _ => unreachable!(),
+    if no_soul && soul.is_some() {
+        return Err("--soul and --no-soul are mutually exclusive".to_string());
+    }
+    let soul = if no_soul {
+        None
+    } else {
+        soul.or_else(|| default_soul_path(&profile.name))
     };
 
     Ok(CliConfig {
         profile,
         cortex_url,
         model,
+        soul,
         #[cfg(feature = "voice")]
         voice,
         #[cfg(feature = "voice")]
         speaker_id,
     })
+}
+
+/// `$XDG_DATA_HOME/enton/soul-<profile>.sqlite`, falling back to `~/.local/share`.
+/// One log per profile: a snapshot only restores under the profile that wrote it.
+fn default_soul_path(profile_name: &str) -> Option<PathBuf> {
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+        })?;
+    Some(
+        data.join("enton")
+            .join(format!("soul-{profile_name}.sqlite")),
+    )
 }
 
 struct RuntimeState {
@@ -180,31 +192,45 @@ struct RuntimeState {
     pending_first_audio_timer: Option<Instant>,
     active_cortex_task: Option<tokio::task::JoinHandle<()>>,
     in_flight_thought: Option<ThoughtId>,
+    journal: Option<Journal>,
+    last_seq: Option<SeqNo>,
+    unsnapshotted: u32,
 }
 
 impl RuntimeState {
-    fn step_event(&mut self, event: &Event, tx: &mpsc::Sender<LoopMessage>) {
-        let actions = self.organism.step(event);
-        self.dispatch(actions, tx);
+    /// Write-ahead: record `event` in the soul (when there is one), then reduce it.
+    async fn record_and_step(&mut self, event: &Event) -> Result<Vec<Action>, JournalError> {
+        if let Some(journal) = &self.journal {
+            self.last_seq = Some(journal.append(event).await?);
+            self.unsnapshotted += 1;
+        }
+        Ok(self.organism.step(event))
     }
 
-    fn handle_speech_input(
+    async fn step_event(
+        &mut self,
+        event: &Event,
+        tx: &mpsc::Sender<LoopMessage>,
+    ) -> Result<(), JournalError> {
+        let actions = self.record_and_step(event).await?;
+        self.dispatch(actions, tx).await?;
+        self.maybe_snapshot().await
+    }
+
+    async fn handle_speech_input(
         &mut self,
         text: String,
         event: &Event,
         input_end_time: Instant,
         tx: &mpsc::Sender<LoopMessage>,
-    ) {
-        let actions = self.organism.step(event);
+    ) -> Result<(), JournalError> {
+        let actions = self.record_and_step(event).await?;
         let is_accepted = actions
             .iter()
             .any(|a| matches!(a, Action::Think { .. } | Action::Attend { .. }));
 
         if is_accepted {
-            if let Some(task) = self.active_cortex_task.take() {
-                task.abort();
-            }
-            self.in_flight_thought = None;
+            self.abandon_in_flight("superseded").await?;
             #[cfg(feature = "voice")]
             if let Some(ref player) = self.voice_player {
                 player.cancel();
@@ -218,21 +244,25 @@ impl RuntimeState {
             self.last_transcript = Some(full_text);
         }
 
-        self.dispatch(actions, tx);
+        self.dispatch(actions, tx).await?;
+        self.maybe_snapshot().await
     }
 
-    fn handle_cortex_finished(
+    async fn handle_cortex_finished(
         &mut self,
         thought: ThoughtId,
         text: String,
         user_prompt: Option<String>,
+        outcome: Outcome,
         tx: &mpsc::Sender<LoopMessage>,
-    ) {
+    ) -> Result<(), JournalError> {
         if self.in_flight_thought != Some(thought) {
-            return;
+            return Ok(());
         }
         self.active_cortex_task = None;
         self.in_flight_thought = None;
+        self.resolve(thought, outcome.map(|()| text.chars().count()))
+            .await?;
 
         if let Some(user_text) = user_prompt {
             self.history.push_back(ConversationTurn::user(user_text));
@@ -247,18 +277,23 @@ impl RuntimeState {
             thought,
             text,
         };
-        self.step_event(&reply, tx);
+        self.step_event(&reply, tx).await
     }
 
-    fn handle_message(&mut self, msg: LoopMessage, tx: &mpsc::Sender<LoopMessage>) -> bool {
+    /// Handle one loop message; `Ok(false)` asks the loop to stop.
+    async fn handle_message(
+        &mut self,
+        msg: LoopMessage,
+        tx: &mpsc::Sender<LoopMessage>,
+    ) -> Result<bool, JournalError> {
         match msg {
             LoopMessage::SpeechInput {
                 text,
                 event,
                 input_end_time,
             } => {
-                self.handle_speech_input(text, &event, input_end_time, tx);
-                true
+                self.handle_speech_input(text, &event, input_end_time, tx)
+                    .await?;
             }
             #[cfg(feature = "voice")]
             LoopMessage::PlaybackStarted { id } => {
@@ -270,19 +305,17 @@ impl RuntimeState {
                 }
                 let event = Event::PlaybackStarted {
                     now: self.clock.now(),
-                    utterance: enton_core::UtteranceId(id.0),
+                    utterance: id,
                 };
-                self.step_event(&event, tx);
-                true
+                self.step_event(&event, tx).await?;
             }
             #[cfg(feature = "voice")]
             LoopMessage::PlaybackFinished { id } => {
                 let event = Event::PlaybackFinished {
                     now: self.clock.now(),
-                    utterance: enton_core::UtteranceId(id.0),
+                    utterance: id,
                 };
-                self.step_event(&event, tx);
-                true
+                self.step_event(&event, tx).await?;
             }
             #[cfg(feature = "voice")]
             LoopMessage::PlaybackFailed { id, reason } => {
@@ -290,39 +323,41 @@ impl RuntimeState {
                 self.pending_first_audio_timer = None;
                 let event = Event::PlaybackFinished {
                     now: self.clock.now(),
-                    utterance: enton_core::UtteranceId(id.0),
+                    utterance: id,
                 };
-                self.step_event(&event, tx);
-                true
+                self.step_event(&event, tx).await?;
             }
             LoopMessage::Event(event) => {
-                self.step_event(&event, tx);
-                true
+                self.step_event(&event, tx).await?;
             }
             LoopMessage::CortexFinished {
                 thought,
                 text,
                 user_prompt,
+                outcome,
             } => {
-                self.handle_cortex_finished(thought, text, user_prompt, tx);
-                true
+                self.handle_cortex_finished(thought, text, user_prompt, outcome, tx)
+                    .await?;
             }
             LoopMessage::Quit => {
-                if let Some(task) = self.active_cortex_task.take() {
-                    task.abort();
-                }
+                self.abandon_in_flight("shutdown").await?;
                 #[cfg(feature = "voice")]
                 if let Some(ref player) = self.voice_player {
                     player.cancel();
                 }
                 self.attended_transcript = None;
                 flush_stdout();
-                false
+                return Ok(false);
             }
         }
+        Ok(true)
     }
 
-    fn dispatch(&mut self, actions: Vec<Action>, tx: &mpsc::Sender<LoopMessage>) {
+    async fn dispatch(
+        &mut self,
+        actions: Vec<Action>,
+        tx: &mpsc::Sender<LoopMessage>,
+    ) -> Result<(), JournalError> {
         for action in actions {
             println!("{action:?}");
             flush_stdout();
@@ -330,8 +365,10 @@ impl RuntimeState {
                 Action::Think {
                     thought, reason, ..
                 } => {
-                    if let Some(old_task) = self.active_cortex_task.take() {
-                        old_task.abort();
+                    self.abandon_in_flight("superseded").await?;
+                    // Recorded before the effect, so a crash mid-call leaves a row to reconcile.
+                    if let (Some(journal), Some(seq)) = (&self.journal, self.last_seq) {
+                        journal.pending(thought, seq).await?;
                     }
                     self.in_flight_thought = Some(thought);
 
@@ -362,6 +399,66 @@ impl RuntimeState {
                 Action::Speak { .. } | Action::Abstain { .. } => {}
             }
         }
+        Ok(())
+    }
+
+    /// Stop the in-flight cortex call, if any, and record why it never finished.
+    async fn abandon_in_flight(&mut self, reason: &'static str) -> Result<(), JournalError> {
+        if let Some(task) = self.active_cortex_task.take() {
+            task.abort();
+        }
+        match self.in_flight_thought.take() {
+            Some(thought) => self.resolve(thought, Err(reason)).await,
+            None => Ok(()),
+        }
+    }
+
+    /// Resolve a recorded thought: done with the reply length, or failed with a reason.
+    async fn resolve(
+        &self,
+        thought: ThoughtId,
+        outcome: Result<usize, &'static str>,
+    ) -> Result<(), JournalError> {
+        let Some(journal) = &self.journal else {
+            return Ok(());
+        };
+        match outcome {
+            Ok(chars) => {
+                journal
+                    .resolve(thought, true, format!(r#"{{"chars":{chars}}}"#))
+                    .await
+            }
+            Err(reason) => {
+                journal
+                    .resolve(thought, false, format!(r#"{{"reason":"{reason}"}}"#))
+                    .await
+            }
+        }
+    }
+
+    async fn maybe_snapshot(&mut self) -> Result<(), JournalError> {
+        if self.unsnapshotted < SNAPSHOT_EVERY {
+            return Ok(());
+        }
+        let (Some(journal), Some(seq)) = (&self.journal, self.last_seq) else {
+            return Ok(());
+        };
+        journal.snapshot(seq, &self.organism).await?;
+        self.unsnapshotted = 0;
+        Ok(())
+    }
+
+    /// Snapshot what the log holds beyond the last snapshot, then stop the worker.
+    async fn close_journal(&mut self) -> Result<(), JournalError> {
+        let Some(journal) = self.journal.take() else {
+            return Ok(());
+        };
+        let snapshot = match self.last_seq {
+            Some(seq) if self.unsnapshotted > 0 => journal.snapshot(seq, &self.organism).await,
+            _ => Ok(()),
+        };
+        let closed = journal.close().await;
+        snapshot.and(closed)
     }
 }
 
@@ -370,7 +467,7 @@ async fn think_stream_and_speak(
     cortex: &OpenAiCortex,
     player: &Arc<VoicePlayer>,
     request: &ThoughtRequest,
-) -> String {
+) -> (String, Outcome) {
     match cortex.think_stream(request).await {
         Ok(mut rx) => {
             let mut accumulated = String::new();
@@ -389,9 +486,9 @@ async fn think_stream_and_speak(
                 if let Err(err) = player.speak(&placeholder) {
                     eprintln!("[enton-voice] playback queue error: {err}");
                 }
-                placeholder
+                (placeholder, Err("empty reply"))
             } else {
-                accumulated
+                (accumulated, Ok(()))
             }
         }
         Err(err) => {
@@ -400,24 +497,30 @@ async fn think_stream_and_speak(
             if let Err(speak_err) = player.speak(&placeholder) {
                 eprintln!("[enton-voice] playback queue error: {speak_err}");
             }
-            placeholder
+            (placeholder, Err("cortex unavailable"))
         }
     }
 }
 
-async fn think_text(cortex: &OpenAiCortex, request: &ThoughtRequest) -> String {
+async fn think_text(cortex: &OpenAiCortex, request: &ThoughtRequest) -> (String, Outcome) {
     match cortex.think(request).await {
         Ok(text) => {
             if text.trim().is_empty() {
                 eprintln!("cortex produced empty reply; falling back to offline placeholder");
-                "(cortex offline in scaffold)".to_string()
+                (
+                    "(cortex offline in scaffold)".to_string(),
+                    Err("empty reply"),
+                )
             } else {
-                text
+                (text, Ok(()))
             }
         }
         Err(err) => {
             eprintln!("cortex unavailable ({err}); falling back to offline placeholder");
-            "(cortex offline in scaffold)".to_string()
+            (
+                "(cortex offline in scaffold)".to_string(),
+                Err("cortex unavailable"),
+            )
         }
     }
 }
@@ -432,18 +535,19 @@ fn spawn_cortex_think(
         let thought = request.thought;
         let user_prompt = request.transcript.clone();
         #[cfg(feature = "voice")]
-        let text = if let Some(ref player) = player {
+        let (text, outcome) = if let Some(ref player) = player {
             think_stream_and_speak(&cortex, player, &request).await
         } else {
             think_text(&cortex, &request).await
         };
         #[cfg(not(feature = "voice"))]
-        let text = think_text(&cortex, &request).await;
+        let (text, outcome) = think_text(&cortex, &request).await;
         if let Err(_err) = tx
             .send(LoopMessage::CortexFinished {
                 thought,
                 text,
                 user_prompt,
+                outcome,
             })
             .await
         {
@@ -585,15 +689,22 @@ async fn main() -> std::process::ExitCode {
         Ok(c) => c,
         Err(err) => {
             eprintln!("Error: {err}");
-            eprintln!(
-                "Usage: enton [--profile t1-ref|desktop] [--cortex-url <URL>] [--model <MODEL>] [--voice] [--speaker <ID>]"
-            );
+            eprintln!("{USAGE}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+
+    let (organism, journal) = match restore(cli.profile, cli.soul).await {
+        Ok(restored) => restored,
+        Err(err) => {
+            eprintln!("Error: {err}");
+            eprintln!("hint: pass --soul <PATH> for another log, or --no-soul to run without one");
             return std::process::ExitCode::FAILURE;
         }
     };
 
     #[cfg(feature = "voice")]
-    let voice_profile_name = cli.profile.name.clone();
+    let voice_profile_name = organism.profile().name.clone();
     #[cfg(feature = "voice")]
     let voice_player = match tokio::task::spawn_blocking(move || {
         try_init_voice(cli.voice, cli.speaker_id, &voice_profile_name)
@@ -606,7 +717,8 @@ async fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let clock = MonotonicClock::new();
+    // A restored organism resumes where it stopped; a fresh one starts at zero.
+    let clock = MonotonicClock::resuming_at(organism.last_seen());
 
     let (tx, rx) = mpsc::channel::<LoopMessage>(64);
 
@@ -619,7 +731,7 @@ async fn main() -> std::process::ExitCode {
     spawn_stdin_task(tx.clone(), clock);
 
     let state = RuntimeState {
-        organism: Organism::new(cli.profile),
+        organism,
         clock,
         cortex: OpenAiCortex::new(CortexConfig {
             base_url: cli.cortex_url,
@@ -634,24 +746,70 @@ async fn main() -> std::process::ExitCode {
         pending_first_audio_timer: None,
         active_cortex_task: None,
         in_flight_thought: None,
+        journal,
+        last_seq: None,
+        unsnapshotted: 0,
     };
 
-    run_event_loop(state, rx, tx).await;
-    std::process::ExitCode::SUCCESS
+    match run_event_loop(state, rx, tx).await {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(err) => {
+            // Acting on events the soul did not record would break replay; stop instead.
+            eprintln!("[enton] stopping: {err}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// Restore the organism from its soul, or start a fresh one without a log.
+async fn restore(
+    profile: Profile,
+    soul: Option<PathBuf>,
+) -> Result<(Organism, Option<Journal>), String> {
+    let Some(path) = soul else {
+        println!("[enton] Soul disabled: nothing is recorded");
+        return Organism::new(profile)
+            .map(|organism| (organism, None))
+            .map_err(|err| err.to_string());
+    };
+    let opened = tokio::task::spawn_blocking(move || {
+        Journal::open(&path, &profile).map(|(journal, restored)| (journal, restored, path))
+    })
+    .await
+    .map_err(|err| format!("soul worker failed: {err}"))?;
+    let (journal, restored, path) = opened.map_err(|err| err.to_string())?;
+    println!(
+        "[enton] Soul: {} (resuming at {} ms)",
+        path.display(),
+        restored.organism.last_seen().0
+    );
+    if !restored.abandoned.is_empty() {
+        eprintln!(
+            "[enton] {} thought(s) interrupted by the last shutdown were marked failed",
+            restored.abandoned.len()
+        );
+    }
+    Ok((restored.organism, Some(journal)))
 }
 
 async fn run_event_loop(
     mut state: RuntimeState,
     mut rx: mpsc::Receiver<LoopMessage>,
     tx: mpsc::Sender<LoopMessage>,
-) {
-    while let Some(msg) = rx.recv().await {
-        let should_continue = state.handle_message(msg, &tx);
-        if !should_continue {
-            break;
+) -> Result<(), JournalError> {
+    let outcome = loop {
+        let Some(msg) = rx.recv().await else {
+            break Ok(());
+        };
+        match state.handle_message(msg, &tx).await {
+            Ok(true) => {}
+            Ok(false) => break Ok(()),
+            Err(err) => break Err(err),
         }
-    }
+    };
     flush_stdout();
+    let closed = state.close_journal().await;
+    outcome.and(closed)
 }
 
 #[cfg(feature = "voice")]
@@ -698,19 +856,7 @@ mod tests {
     #[tokio::test]
     async fn rejected_cues_leave_transcripts_intact() {
         let (tx, _rx) = mpsc::channel(1);
-        let mut state = RuntimeState {
-            organism: Organism::new(Profile::t1_ref()),
-            clock: MonotonicClock::new(),
-            cortex: OpenAiCortex::with_endpoint("http://127.0.0.1:9", "unused"),
-            #[cfg(feature = "voice")]
-            voice_player: None,
-            last_transcript: None,
-            attended_transcript: None,
-            history: VecDeque::new(),
-            pending_first_audio_timer: None,
-            active_cortex_task: None,
-            in_flight_thought: None,
-        };
+        let mut state = test_state(Organism::new(Profile::t1_ref()).unwrap(), None);
 
         // 1. Keyword -> accepted, Attend until later.
         let kw_event = Event::Speech {
@@ -722,14 +868,17 @@ mod tests {
                 keyword: true,
             },
         };
-        state.handle_message(
-            LoopMessage::SpeechInput {
-                text: "enton".to_string(),
-                event: kw_event,
-                input_end_time: Instant::now(),
-            },
-            &tx,
-        );
+        state
+            .handle_message(
+                LoopMessage::SpeechInput {
+                    text: "enton".to_string(),
+                    event: kw_event,
+                    input_end_time: Instant::now(),
+                },
+                &tx,
+            )
+            .await
+            .unwrap();
 
         assert_eq!(state.last_transcript.as_deref(), None);
         assert_eq!(state.attended_transcript.as_deref(), Some("enton")); // Attend sets attended_transcript
@@ -744,14 +893,17 @@ mod tests {
                 keyword: false,
             },
         };
-        state.handle_message(
-            LoopMessage::SpeechInput {
-                text: "shhh".to_string(),
-                event: noise_event,
-                input_end_time: Instant::now(),
-            },
-            &tx,
-        );
+        state
+            .handle_message(
+                LoopMessage::SpeechInput {
+                    text: "shhh".to_string(),
+                    event: noise_event,
+                    input_end_time: Instant::now(),
+                },
+                &tx,
+            )
+            .await
+            .unwrap();
 
         // State is intact
         assert_eq!(
@@ -771,14 +923,17 @@ mod tests {
                 keyword: false,
             },
         };
-        state.handle_message(
-            LoopMessage::SpeechInput {
-                text: "help me".to_string(),
-                event: cont_event,
-                input_end_time: Instant::now(),
-            },
-            &tx,
-        );
+        state
+            .handle_message(
+                LoopMessage::SpeechInput {
+                    text: "help me".to_string(),
+                    event: cont_event,
+                    input_end_time: Instant::now(),
+                },
+                &tx,
+            )
+            .await
+            .unwrap();
 
         assert_eq!(state.last_transcript.as_deref(), None);
         assert_eq!(
@@ -799,14 +954,17 @@ mod tests {
                 keyword: false,
             },
         };
-        state.handle_message(
-            LoopMessage::SpeechInput {
-                text: "cough".to_string(),
-                event: noise2_event,
-                input_end_time: Instant::now(),
-            },
-            &tx,
-        );
+        state
+            .handle_message(
+                LoopMessage::SpeechInput {
+                    text: "cough".to_string(),
+                    event: noise2_event,
+                    input_end_time: Instant::now(),
+                },
+                &tx,
+            )
+            .await
+            .unwrap();
 
         assert!(
             state.in_flight_thought.is_some(),
@@ -856,23 +1014,119 @@ mod tests {
 
         let (tx, rx) = mpsc::channel(1);
         tx.send(LoopMessage::Quit).await.unwrap();
+        let state = test_state(Organism::new(Profile::t1_ref()).unwrap(), None);
+        #[cfg(feature = "voice")]
         let state = RuntimeState {
-            organism: Organism::new(Profile::t1_ref()),
+            voice_player: Some(player),
+            ..state
+        };
+        run_event_loop(state, rx, tx).await.unwrap();
+        #[cfg(feature = "voice")]
+        assert!(weak.upgrade().is_none());
+        println!("runtime resources dropped");
+    }
+
+    fn test_state(organism: Organism, journal: Option<Journal>) -> RuntimeState {
+        RuntimeState {
+            organism,
             clock: MonotonicClock::new(),
             cortex: OpenAiCortex::with_endpoint("http://127.0.0.1:9", "unused"),
             #[cfg(feature = "voice")]
-            voice_player: Some(player),
+            voice_player: None,
             last_transcript: None,
             attended_transcript: None,
             history: VecDeque::new(),
             pending_first_audio_timer: None,
             active_cortex_task: None,
             in_flight_thought: None,
-        };
-        run_event_loop(state, rx, tx).await;
-        #[cfg(feature = "voice")]
-        assert!(weak.upgrade().is_none());
-        println!("runtime resources dropped");
+            journal,
+            last_seq: None,
+            unsnapshotted: 0,
+        }
+    }
+
+    fn addressed_request() -> LoopMessage {
+        let text = "Enton, que horas são?";
+        LoopMessage::SpeechInput {
+            text: text.to_string(),
+            event: Event::Speech {
+                now: enton_core::Millis(1_000),
+                cue: speech_cue(text),
+            },
+            input_end_time: Instant::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_crash_mid_thought_is_restored_and_the_thought_abandoned() {
+        let dir = std::env::temp_dir().join(format!("enton-bin-crash-{}", std::process::id()));
+        let path = dir.join("soul.sqlite");
+        let profile = Profile::t1_ref();
+        let (journal, restored) = Journal::open(&path, &profile).unwrap();
+        assert!(restored.abandoned.is_empty());
+        let (tx, _rx) = mpsc::channel(8);
+        let mut state = test_state(restored.organism, Some(journal));
+
+        state
+            .handle_message(addressed_request(), &tx)
+            .await
+            .unwrap();
+        let thought = state.in_flight_thought.unwrap();
+        let before = state.organism.clone();
+
+        // Crash: no Quit, no final snapshot, the thought never resolves.
+        state.active_cortex_task.take().unwrap().abort();
+        state.journal.take().unwrap().close().await.unwrap();
+
+        let (_journal, restored) = Journal::open(&path, &profile).unwrap();
+        assert_eq!(restored.organism, before);
+        assert_eq!(restored.organism.last_seen(), enton_core::Millis(1_000));
+        assert_eq!(restored.abandoned, vec![thought]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_clean_shutdown_resolves_the_thought_and_snapshots() {
+        let dir = std::env::temp_dir().join(format!("enton-bin-quit-{}", std::process::id()));
+        let path = dir.join("soul.sqlite");
+        let profile = Profile::t1_ref();
+        let (journal, restored) = Journal::open(&path, &profile).unwrap();
+        let (tx, _rx) = mpsc::channel(8);
+        let mut state = test_state(restored.organism, Some(journal));
+
+        state
+            .handle_message(addressed_request(), &tx)
+            .await
+            .unwrap();
+        assert!(!state.handle_message(LoopMessage::Quit, &tx).await.unwrap());
+        let before = state.organism.clone();
+        state.close_journal().await.unwrap();
+
+        let (_journal, restored) = Journal::open(&path, &profile).unwrap();
+        assert_eq!(restored.organism, before);
+        assert!(restored.abandoned.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn cli_accepts_both_flag_forms_and_rejects_conflicts() {
+        let parse = |args: &[&str]| parse_args(args.iter().map(|arg| (*arg).to_owned()));
+        let cli = parse(&[
+            "--profile=desktop",
+            "--model",
+            "m",
+            "--soul",
+            "/tmp/s.sqlite",
+        ])
+        .unwrap();
+        assert_eq!(cli.profile.name, "desktop");
+        assert_eq!(cli.model, "m");
+        assert_eq!(cli.soul, Some(PathBuf::from("/tmp/s.sqlite")));
+        assert!(parse(&["--no-soul"]).unwrap().soul.is_none());
+        assert!(parse(&["--soul=/tmp/s.sqlite", "--no-soul"]).is_err());
+        assert!(parse(&["--model"]).is_err());
+        assert!(parse(&["--profile", "mars"]).is_err());
+        assert!(parse(&["--bogus"]).is_err());
     }
 
     #[test]
@@ -904,41 +1158,42 @@ mod tests {
     #[tokio::test]
     async fn voice_playback_lifecycle_events_forward_to_core() {
         let (tx, _rx) = mpsc::channel(64);
-        let mut state = RuntimeState {
-            organism: Organism::new(Profile::t1_ref()),
-            clock: MonotonicClock::new(),
-            cortex: OpenAiCortex::with_endpoint("http://127.0.0.1:9", "unused"),
-            voice_player: None,
-            last_transcript: None,
-            attended_transcript: None,
-            history: VecDeque::new(),
-            pending_first_audio_timer: None,
-            active_cortex_task: None,
-            in_flight_thought: None,
-        };
+        let mut state = test_state(Organism::new(Profile::t1_ref()).unwrap(), None);
 
         // 1. PlaybackStarted forwards to core and updates playback status to speaking
         assert!(!state.organism.is_speaking());
-        state.handle_message(LoopMessage::PlaybackStarted { id: UtteranceId(1) }, &tx);
+        state
+            .handle_message(LoopMessage::PlaybackStarted { id: UtteranceId(1) }, &tx)
+            .await
+            .unwrap();
         assert!(state.organism.is_speaking());
 
         // 2. PlaybackFinished forwards to core and transitions from speaking to hangover
-        state.handle_message(LoopMessage::PlaybackFinished { id: UtteranceId(1) }, &tx);
+        state
+            .handle_message(LoopMessage::PlaybackFinished { id: UtteranceId(1) }, &tx)
+            .await
+            .unwrap();
         assert!(!state.organism.is_speaking());
         assert!(state.organism.is_hangover());
 
         // 3. PlaybackStarted again with utterance 2
-        state.handle_message(LoopMessage::PlaybackStarted { id: UtteranceId(2) }, &tx);
+        state
+            .handle_message(LoopMessage::PlaybackStarted { id: UtteranceId(2) }, &tx)
+            .await
+            .unwrap();
         assert!(state.organism.is_speaking());
 
         // 4. PlaybackFailed forwards to core as finish so the watchdog is not waited on
-        state.handle_message(
-            LoopMessage::PlaybackFailed {
-                id: UtteranceId(2),
-                reason: "DAC buffer underrun".into(),
-            },
-            &tx,
-        );
+        state
+            .handle_message(
+                LoopMessage::PlaybackFailed {
+                    id: UtteranceId(2),
+                    reason: "DAC buffer underrun".into(),
+                },
+                &tx,
+            )
+            .await
+            .unwrap();
         assert!(!state.organism.is_speaking());
         assert!(state.organism.is_hangover());
     }

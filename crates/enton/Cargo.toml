@@ -15,8 +15,9 @@ voice = ["enton-adapters/voice"]
 shared-runtime = ["enton-adapters/shared-runtime"]
 
 [dependencies]
-enton-adapters = { workspace = true, features = ["cortex"] }
+enton-adapters = { workspace = true, features = ["cortex", "soul"] }
 enton-core.workspace = true
+thiserror.workspace = true
 tokio = { version = "1", features = ["rt", "macros", "sync", "time", "io-util", "io-std"] }
 
 [lints]

@@ -140,7 +140,7 @@ pub struct Deferred {
 }
 
 /// The version of the brainstem reducer and snapshot schema.
-pub const REDUCER_VERSION: u32 = 14;
+pub const REDUCER_VERSION: u32 = 15;
 
 /// Which account pays for a thought.
 #[derive(Debug, Clone, Copy)]

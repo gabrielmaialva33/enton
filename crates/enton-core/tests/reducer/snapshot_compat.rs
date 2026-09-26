@@ -10,7 +10,7 @@ use enton_core::{
 /// Reducer version that wrote the fixture. After bumping `REDUCER_VERSION`, regenerate it
 /// with `cargo test -p enton-core --test reducer -- --ignored regenerate_the_snapshot_fixture`
 /// and review the diff: it shows exactly how the organism's state changed.
-const FIXTURE_REDUCER_VERSION: u32 = 14;
+const FIXTURE_REDUCER_VERSION: u32 = 15;
 
 /// State after `run_tape`, as the soul would store it.
 const FIXTURE: &str = include_str!("../fixtures/organism-snapshot.json");
@@ -52,8 +52,10 @@ fn addressed(cue: SpeechCue, directed: f32) -> SpeechCue {
 
 /// A tape that leaves almost every piece of organism state non-trivial: a
 /// checklist, a conversation, echo adaptation, a follow-up whose thought failed
-/// (so the cortex backs off), a habituated TV whose direction the array read, an
-/// hour of drives and a pending "Enton?" still waiting for its continuation.
+/// (so the cortex backs off), a quiet command that ran out and quiet hours that came
+/// and went, four hours of drives that got ready with nobody home, a habituated TV
+/// whose direction the array read, and a pending "Enton?" still waiting for its
+/// continuation, during which the ready drive holds its intent to ride the answer.
 fn run_tape(mut organism: Organism) -> Organism {
     let speech = |now: u64, cue: SpeechCue| Event::Speech {
         now: Millis(now),
@@ -105,10 +107,29 @@ fn run_tape(mut organism: Organism) -> Organism {
         Event::Tick {
             now: Millis(60_000),
         },
+        // "Enton, silêncio por meia hora", and a night band that begins and ends.
+        Event::Quiet {
+            now: Millis(120_000),
+            until: Millis(1_920_000),
+        },
+        Event::QuietHours {
+            now: Millis(180_000),
+            active: true,
+        },
+        Event::QuietHours {
+            now: Millis(3_000_000),
+            active: false,
+        },
     ];
+    // Four hours of ticks: the drives get ready with nobody home.
+    for minute in 2..=238 {
+        events.push(Event::Tick {
+            now: Millis(minute * 60_000),
+        });
+    }
     for i in 0..10 {
         events.push(speech(
-            70_000 + i * 4_000,
+            14_290_000 + i * 4_000,
             SpeechCue {
                 direction: Some([0.6, 0.8]),
                 ..cue(0.8, 0.9, 1_500, false, (0.2, 0.9, 0.5))
@@ -116,10 +137,14 @@ fn run_tape(mut organism: Organism) -> Organism {
         ));
     }
     events.push(Event::Tick {
-        now: Millis(3_600_000),
+        now: Millis(14_400_000),
     });
-    // An unfinished "Enton..." is still waiting when the snapshot is taken.
-    events.push(speech(3_600_500, cue(0.9, 0.9, 400, true, (0.9, 0.1, 0.2))));
+    // An unfinished "Enton..." is still waiting when the snapshot is taken, and the
+    // ready drive holds its intent to ride the answer.
+    events.push(speech(14_400_500, cue(0.9, 0.9, 400, true, (0.9, 0.1, 0.2))));
+    events.push(Event::Tick {
+        now: Millis(14_401_000),
+    });
 
     for event in &events {
         organism.step(event);
@@ -158,16 +183,18 @@ fn a_stored_snapshot_restores_to_the_same_state() {
         "the stored state reads back as the live one"
     );
 
-    // Restored mid-request, it finishes the caller's request exactly like the live one.
+    // Restored mid-request, it finishes the caller's request exactly like the live one,
+    // and the held intent rides the answer.
+    assert!(organism.deferred().is_some());
     let rest = Event::Speech {
-        now: Millis(3_601_200),
+        now: Millis(14_401_200),
         cue: addressed(cue(0.9, 0.9, 600, false, (0.9, 0.1, 0.9)), 0.9),
     };
     let (mut live, mut resumed) = (organism.clone(), restored);
     let finished = live.step(&rest);
     assert!(matches!(
         finished.as_slice(),
-        [enton_core::Action::Think { .. }]
+        [enton_core::Action::Think { rider: Some(drive), .. }] if drive == "curiosity"
     ));
     assert_eq!(resumed.step(&rest), finished);
     assert_eq!(resumed, live);

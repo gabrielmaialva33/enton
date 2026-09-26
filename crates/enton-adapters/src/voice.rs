@@ -28,15 +28,7 @@ use sherpa_onnx::{
     OfflineTtsModelConfig,
 };
 
-/// Monotonically increasing identifier assigned to each synthesized and played utterance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct UtteranceId(pub u64);
-
-impl fmt::Display for UtteranceId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "#{}", self.0)
-    }
-}
+pub use enton_core::UtteranceId;
 
 /// Playback lifecycle events emitted by the voice player.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -103,7 +103,7 @@ fn every_snapshot_boundary_survives_pruning_restart_and_replay() {
             max_snapshots: Some(1),
             ..SoulConfig::default()
         };
-        let mut expected = Organism::new(Profile::t1_ref());
+        let mut expected = Organism::new(Profile::t1_ref()).unwrap();
         let mut expected_tail = Vec::new();
         {
             let soul = Soul::open(directory.database(), config.clone()).unwrap();
@@ -149,7 +149,7 @@ fn a_restored_organism_resumes_time_where_it_stopped() {
     let five_hours = 5 * 3_600_000;
     {
         let soul = Soul::open(directory.database(), SoulConfig::default()).unwrap();
-        let mut organism = Organism::new(Profile::desktop());
+        let mut organism = Organism::new(Profile::desktop()).unwrap();
         let mut last_seq = 0;
         for event in [
             Event::Tick {
@@ -196,7 +196,7 @@ fn a_restored_organism_resumes_time_where_it_stopped() {
 fn replay_without_snapshot_and_across_multiple_tail_pages_is_identical() {
     let directory = TestDirectory::new();
     let soul = Soul::open(directory.database(), SoulConfig::default()).unwrap();
-    let mut expected = Organism::new(Profile::desktop());
+    let mut expected = Organism::new(Profile::desktop()).unwrap();
     let mut actions = Vec::new();
     assert_eq!(
         soul.replay_organism(&Profile::desktop()).unwrap(),
@@ -230,7 +230,7 @@ fn retention_preserves_unsnapshotted_tail_and_reports_unreachable_caps() {
         },
     )
     .unwrap();
-    let mut expected = Organism::new(Profile::t1_ref());
+    let mut expected = Organism::new(Profile::t1_ref()).unwrap();
     let event = speech(0, true, 400);
     let seq = soul.append_event(&event).unwrap();
     expected.step(&event);
@@ -253,7 +253,7 @@ fn corrupt_unknown_format_and_mismatched_profiles_do_not_fall_back() {
     let soul = Soul::open(directory.database(), SoulConfig::default()).unwrap();
     let event = speech(0, true, 1200);
     let seq = soul.append_event(&event).unwrap();
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
     organism.step(&event);
     soul.save_organism_snapshot(seq, &organism).unwrap();
     let mut changed = Profile::t1_ref();
@@ -282,7 +282,7 @@ fn snapshots_preserve_custom_profile_names_and_policy() {
     profile.name = "custom-owned-policy".into();
     profile.obligation_budget_per_hour = 17.0;
     profile.attention_ms = 2345;
-    let mut organism = Organism::new(profile.clone());
+    let mut organism = Organism::new(profile.clone()).unwrap();
     let event = speech(123, true, 300);
     let seq = soul.append_event(&event).unwrap();
     organism.step(&event);
@@ -298,7 +298,7 @@ fn snapshot_recovery_replays_multiple_pages_after_reopening() {
         max_snapshots: Some(1),
         ..SoulConfig::default()
     };
-    let mut expected = Organism::new(Profile::t1_ref());
+    let mut expected = Organism::new(Profile::t1_ref()).unwrap();
     let mut expected_tail = Vec::new();
     {
         let soul = Soul::open(directory.database(), config.clone()).unwrap();
@@ -341,7 +341,7 @@ fn an_unreachable_byte_cap_is_reported_without_losing_the_snapshot() {
     .unwrap();
     let event = speech(0, true, 300);
     let seq = soul.append_event(&event).unwrap();
-    let mut organism = Organism::new(Profile::t1_ref());
+    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
     organism.step(&event);
     soul.save_organism_snapshot(seq, &organism).unwrap();
     let Error::RetentionCap(message) = soul.retain().unwrap_err() else {
@@ -352,4 +352,16 @@ fn an_unreachable_byte_cap_is_reported_without_losing_the_snapshot() {
         soul.replay_organism(&Profile::t1_ref()).unwrap(),
         (organism, vec![])
     );
+}
+
+#[test]
+fn replay_organism_rejects_invalid_profile() {
+    let directory = TestDirectory::new();
+    let soul = Soul::open(directory.database(), SoulConfig::default()).unwrap();
+    let mut invalid = Profile::t1_ref();
+    invalid.hysteresis = invalid.threshold;
+    assert!(matches!(
+        soul.replay_organism(&invalid),
+        Err(Error::InvalidProfile(_))
+    ));
 }

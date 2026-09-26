@@ -46,8 +46,9 @@ impl Soul {
     /// [`Organism::last_seen`]: a fresh clock starts at zero, and the reducer
     /// ignores time that runs backward.
     pub fn replay_organism(&self, profile: &Profile) -> Result<(Organism, Vec<Action>), Error> {
+        let fresh = Organism::new(profile.clone())?;
         self.replay(
-            || Organism::new(profile.clone()),
+            || fresh,
             |blob| {
                 let Snapshot::V1 { state } = serde_json::from_slice::<Snapshot<Organism>>(blob)?;
                 if state.profile() != profile {

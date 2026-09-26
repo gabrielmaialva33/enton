@@ -98,6 +98,9 @@ pub enum Error {
     /// The database checkpoint is busy.
     #[error("database checkpoint is busy")]
     CheckpointBusy,
+    /// The organism profile failed validation.
+    #[error("invalid organism profile: {0}")]
+    InvalidProfile(#[from] enton_core::InvalidProfile),
 }
 
 /// The organism's durable memory: a single-writer, append-only event log with
@@ -1002,7 +1005,7 @@ mod tests {
     }
 
     #[test]
-    fn v1_snapshot_is_rejected_as_incompatible_by_v2_default() {
+    fn v1_snapshot_is_rejected_as_incompatible_by_the_current_default() {
         let path = temp_path("v1_snapshot_incompatible");
         // Open soul with explicit reducer_version = 1 (simulating organism v1)
         let v1_config = SoulConfig {
@@ -1016,15 +1019,15 @@ mod tests {
             .expect("save v1 snapshot");
         drop(soul_v1);
 
-        // Opening with default config (v2) must reject the v1 snapshot
+        // Opening with the default config (the current reducer) must reject the v1 snapshot.
         let err = Soul::open(&path, SoulConfig::default()).expect_err("should reject v1 snapshot");
         assert!(matches!(
             err,
             Error::IncompatibleHistory {
                 kind: "snapshot",
                 found: 1,
-                expected: 2,
-            }
+                expected,
+            } if expected == enton_core::REDUCER_VERSION
         ));
 
         cleanup(&path);

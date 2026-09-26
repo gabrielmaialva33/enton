@@ -193,24 +193,24 @@
   <!-- Nasal cavity -->
   <path d="M256 290 L238 322 L246 336 L256 326 L266 336 L274 322 Z" fill="#0a0a0a"/>
 
-  <!-- Mouth and teeth, in a grin: red on the left, green on the right -->
-  <rect x="168" y="342" width="176" height="56" rx="10" fill="#0a0a0a"/>
+  <!-- Mouth and teeth, in a clenched grin: red on the left, green on the right -->
+  <path d="M174 342 H338 Q348 342 345 352 L334 394 Q331 402 321 402 H191 Q181 402 178 394 L167 352 Q164 342 174 342 Z" fill="#0a0a0a"/>
   <g stroke="#0a0a0a" stroke-width="2">
-    <rect x="178" y="352" width="16" height="16" rx="2" fill="#ef4444"/>
-    <rect x="198" y="349" width="16" height="19" rx="2" fill="#ef4444"/>
-    <rect x="218" y="347" width="16" height="21" rx="2" fill="#dc2626"/>
-    <rect x="238" y="346" width="16" height="22" rx="2" fill="#dc2626"/>
-    <rect x="258" y="346" width="16" height="22" rx="2" fill="#16a34a"/>
-    <rect x="278" y="347" width="16" height="21" rx="2" fill="#16a34a"/>
-    <rect x="298" y="349" width="16" height="19" rx="2" fill="#22c55e"/>
-    <rect x="318" y="352" width="16" height="16" rx="2" fill="#22c55e"/>
-    <rect x="178" y="372" width="16" height="13" rx="2" fill="#b91c1c"/>
-    <rect x="198" y="372" width="16" height="16" rx="2" fill="#dc2626"/>
-    <rect x="218" y="372" width="16" height="18" rx="2" fill="#dc2626"/>
-    <rect x="238" y="372" width="16" height="19" rx="2" fill="#b91c1c"/>
-    <rect x="258" y="372" width="16" height="19" rx="2" fill="#15803d"/>
-    <rect x="278" y="372" width="16" height="18" rx="2" fill="#16a34a"/>
-    <rect x="298" y="372" width="16" height="16" rx="2" fill="#16a34a"/>
-    <rect x="318" y="372" width="16" height="13" rx="2" fill="#15803d"/>
+    <rect x="178" y="348" width="16" height="19" rx="2.5" fill="#ef4444"/>
+    <rect x="198" y="348" width="16" height="23" rx="2.5" fill="#ef4444"/>
+    <rect x="218" y="348" width="16" height="25" rx="2.5" fill="#dc2626"/>
+    <rect x="238" y="348" width="16" height="26" rx="2.5" fill="#dc2626"/>
+    <rect x="258" y="348" width="16" height="26" rx="2.5" fill="#16a34a"/>
+    <rect x="278" y="348" width="16" height="25" rx="2.5" fill="#16a34a"/>
+    <rect x="298" y="348" width="16" height="23" rx="2.5" fill="#22c55e"/>
+    <rect x="318" y="348" width="16" height="19" rx="2.5" fill="#22c55e"/>
+    <rect x="179" y="383" width="15" height="13" rx="2.5" fill="#b91c1c"/>
+    <rect x="199" y="380" width="15" height="16" rx="2.5" fill="#dc2626"/>
+    <rect x="219" y="378" width="15" height="18" rx="2.5" fill="#dc2626"/>
+    <rect x="239" y="377" width="15" height="19" rx="2.5" fill="#b91c1c"/>
+    <rect x="257" y="377" width="15" height="19" rx="2.5" fill="#15803d"/>
+    <rect x="277" y="378" width="15" height="18" rx="2.5" fill="#16a34a"/>
+    <rect x="297" y="380" width="15" height="16" rx="2.5" fill="#16a34a"/>
+    <rect x="317" y="383" width="15" height="13" rx="2.5" fill="#15803d"/>
   </g>
 </svg>

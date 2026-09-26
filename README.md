@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:991b1b,50:dc2626,100:15803d&height=200&section=header&text=E%20N%20T%20O%20N&fontSize=60&fontColor=fff&animation=twinkling&fontAlignY=35&desc=Digital%20Organism%20—%20Cheap%20Life%20%7C%20Costly%20Thought%20%7C%20Auditable%20Soul&descSize=18&descAlignY=55" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:991b1b,50:dc2626,100:15803d&height=200&section=header&text=E%20N%20T%20O%20N&fontSize=60&fontColor=fff&animation=twinkling&fontAlignY=35&desc=Digital%20Organism%20%7C%20Cheap%20Life%20%7C%20Costly%20Thought%20%7C%20Auditable%20Soul&descSize=18&descAlignY=55" width="100%"/>
 
 <br/>
 
-<img src="static/logo.png" width="280" alt="Enton — Son of Anton"/>
+<img src="static/logo.png" width="280" alt="Enton, Son of Anton"/>
 
 <br/><br/>
 
@@ -18,7 +18,9 @@
 
 ---
 
-*"I heard you. I just decided you weren't worth a thought — and I wrote down why."* — Enton
+*"I heard you. I just decided you weren't worth a thought, and I wrote down why."*
+
+<sub>Enton</sub>
 
 </div>
 
@@ -26,11 +28,11 @@
 
 > [!IMPORTANT]
 > **Enton is not a chatbot, and it does not answer everything.** It is a digital organism whose
-> body is the machine it runs on. Living is cheap and continuous — clock ticks, body signals,
+> body is the machine it runs on. Living is cheap and continuous: clock ticks, body signals,
 > voice activity. Thinking is expensive and rare: the LLM (its *cortex*) wakes only when ignition
 > fires and the budget can pay for it, and every stimulus it ignores leaves a written reason.
 >
-> *Still inspired by [Son of Anton](https://silicon-valley.fandom.com/wiki/Son_of_Anton) — Gilfoyle's sentient AI from HBO's Silicon Valley.*
+> *Still inspired by [Son of Anton](https://silicon-valley.fandom.com/wiki/Son_of_Anton), Gilfoyle's sentient AI from HBO's Silicon Valley.*
 
 > [!NOTE]
 > **v1 is a ground-up rewrite in Rust.** v0 was a Python/CUDA stack (YOLO, Whisper, Agno, nine
@@ -42,9 +44,9 @@
 
 ## Thesis
 
-1. **Enton is a digital organism** — its body is the hardware, its economy is auditable, and its learning is reversible.
+1. **Enton is a digital organism.** Its body is the hardware, its economy is auditable, and its learning is reversible.
 2. **Life is cheap and continuous; thought is expensive and rare.**
-3. **The thesis only holds if it is measured** — [experiment E1](#experiment-e1) exists to refute it.
+3. **The thesis only holds if it is measured.** [Experiment E1](#experiment-e1) exists to refute it.
 
 ---
 
@@ -53,13 +55,13 @@
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#fecaca', 'primaryTextColor': '#450a0a', 'primaryBorderColor': '#991b1b', 'secondaryColor': '#bbf7d0', 'secondaryTextColor': '#052e16', 'secondaryBorderColor': '#166534', 'tertiaryColor': '#fee2e2', 'tertiaryTextColor': '#450a0a', 'lineColor': '#991b1b', 'textColor': '#1c1917'}}}%%
 flowchart LR
-    subgraph Body["Body — the machine"]
+    subgraph Body["Body: the machine"]
         SYS["sysfs / procfs<br/>temperature · battery · load"]
         MIC["Microphone<br/>Silero VAD + keyword"]
         TTY["Terminal<br/>typed lines as speech cues"]
     end
 
-    subgraph Brainstem["Brainstem — pure reducer"]
+    subgraph Brainstem["Brainstem: pure reducer"]
         direction TB
         DRV["Drives<br/>curiosity · social · rest"]
         IGN["Ignition<br/>EMA + hysteresis + cooldown"]
@@ -88,12 +90,12 @@ flowchart LR
 | Property | Value |
 |:---------|:------|
 | **Language** | Rust 2024 · MSRV 1.88 · `unsafe_code = "forbid"` |
-| **Runtime** | tokio `current_thread` — one event loop, bounded channels |
-| **Crates** | 4 — core, adapters, binary, E1 harness |
+| **Runtime** | tokio `current_thread`: one event loop, bounded channels |
+| **Crates** | 4: core, adapters, binary, E1 harness |
 | **Source** | 13,049 lines + 4,474 lines of tests and examples |
 | **Tests** | 115 passing with default features, 201 with all features |
 | **Lean binary** | 4.7 MiB, no shared libraries |
-| **Cortex** | Any OpenAI-compatible server — local Ollama by default |
+| **Cortex** | Any OpenAI-compatible server, local Ollama by default |
 
 ---
 
@@ -114,7 +116,7 @@ Every decision is printed as it happens (lines starting with `>` are what was ty
 Attend { until: Millis(5000) }
 > que horas são?
 Think { thought: ThoughtId(1), reason: Keyword, salience: 1.926 }
-Speak { text: "…" }
+Speak { text: "..." }
 > a tv tá ligada
 Abstain { reason: Speech, salience: 0.976, why: Cooldown }
 ```
@@ -128,10 +130,10 @@ continuation into a single thought. The later remark, not addressed to it, lands
 
 | Tool | Version | Required |
 |:-----|:--------|:---------|
-| Rust | stable, `>= 1.88` | Yes — pinned by `rust-toolchain.toml` |
-| OpenAI-compatible LLM server | any | Yes — Ollama, llama.cpp, vLLM… |
+| Rust | stable, `>= 1.88` | Yes, pinned by `rust-toolchain.toml` |
+| OpenAI-compatible LLM server | any | Yes (Ollama, llama.cpp, vLLM, etc.) |
 | ONNX models (`~/.cache/enton/models`) | see below | Only for `audio` / `voice` |
-| Audio devices (ALSA / PipeWire via cpal) | — | Only for `audio` / `voice` |
+| Audio devices (ALSA / PipeWire via cpal) | any | Only for `audio` / `voice` |
 
 </details>
 
@@ -192,8 +194,8 @@ The keyword worker can run on another machine over SSH
 ## Anatomy of a Decision
 
 Every input is an `Event`; every output is an `Action`. This is the path a speech cue takes
-through the brainstem — no transcript, only energy, voice-activity confidence, duration and
-whether the keyword was heard:
+through the brainstem. There is no transcript, only energy, voice-activity confidence, duration
+and whether the keyword was heard:
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#fecaca', 'primaryTextColor': '#450a0a', 'primaryBorderColor': '#991b1b', 'secondaryColor': '#bbf7d0', 'secondaryTextColor': '#052e16', 'secondaryBorderColor': '#166534', 'tertiaryColor': '#fee2e2', 'tertiaryTextColor': '#450a0a', 'lineColor': '#991b1b', 'textColor': '#1c1917'}}}%%
@@ -224,7 +226,7 @@ flowchart TD
 ```
 
 Internal drives take the same road on every clock tick: pressure grows, is smoothed, and fires
-`Think { reason: Drive("curiosity") }` when it crosses the threshold — unless the body is in
+`Think { reason: Drive("curiosity") }` when it crosses the threshold, unless the body is in
 torpor or the discretionary budget is empty.
 
 ### Why Enton did not think
@@ -248,18 +250,18 @@ audited later to find false negatives.
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#fecaca', 'primaryTextColor': '#450a0a', 'primaryBorderColor': '#991b1b', 'secondaryColor': '#bbf7d0', 'secondaryTextColor': '#052e16', 'secondaryBorderColor': '#166534', 'tertiaryColor': '#fee2e2', 'tertiaryTextColor': '#450a0a', 'lineColor': '#991b1b', 'textColor': '#1c1917'}}}%%
 graph LR
-    subgraph BIN["crates/enton — binary"]
+    subgraph BIN["crates/enton: binary"]
         LOOP["Event loop<br/>tokio current_thread"]
         DRIVER["Terminal driver<br/>stdin → Speech cues"]
     end
 
-    subgraph CORE["crates/enton-core — pure, no I/O"]
+    subgraph CORE["crates/enton-core: pure, no I/O"]
         ORG["Organism<br/>(state, event) → (state, actions)"]
         MECH["Drives · Ignition · Budget"]
         PORTS["Ports<br/>Cortex · SpeechToText · TextToSpeech"]
     end
 
-    subgraph ADP["crates/enton-adapters — all I/O"]
+    subgraph ADP["crates/enton-adapters: all I/O"]
         BODY["body · clock"]
         CORTEX["cortex"]
         AUDIO["audio"]
@@ -267,7 +269,7 @@ graph LR
         SOUL["soul"]
     end
 
-    subgraph E1["crates/enton-e1 — refutation harness"]
+    subgraph E1["crates/enton-e1: refutation harness"]
         SIM["e1-sim<br/>synthetic tapes · baselines · report"]
     end
 
@@ -279,7 +281,7 @@ graph LR
 
 | Crate | Responsibility |
 |:------|:---------------|
-| **`enton-core`** | The brainstem: `(state, event) → (state, actions)`. **No I/O, no clock, no randomness** — time enters as data, so replaying the same event tape with the same profile reproduces the same decisions. Also defines the inference ports, with no implementations |
+| **`enton-core`** | The brainstem: `(state, event) → (state, actions)`. **No I/O, no clock, no randomness**: time enters as data, so replaying the same event tape with the same profile reproduces the same decisions. Also defines the inference ports, with no implementations |
 | **`enton-adapters`** | Everything that touches the world: sensors, clock, microphone, speaker, LLM client, event log. Each module is feature-gated so a lean build compiles only what it runs |
 | **`enton`** | The binary: composes core and adapters for a hardware profile and runs the event loop |
 | **`enton-e1`** | Experiment E1: synthetic cue tapes, the simple-controller baselines and the pass/fail report |
@@ -297,7 +299,7 @@ Boundaries are crossed only through the core's public API.
 | **Organism** | The reducer. Routes ticks, body signals, speech cues, cortex replies and playback events into decisions |
 | **Drives** | Homeostatic pressures that grow with elapsed time; pressure is the weighted sum of squared levels |
 | **Ignition** | EMA-smoothed drive pressure with hysteresis and a shared thought cooldown |
-| **Budget** | Two accounts: **obligation** (addressed turns, follow-ups) and **discretionary** (drives, overheard speech) — being addressed never competes with idle curiosity |
+| **Budget** | Two accounts: **obligation** (addressed turns, follow-ups) and **discretionary** (drives, overheard speech), so being addressed never competes with idle curiosity |
 | **Habituation & novelty** | A running expectation of recent cues; repetition suppresses salience, prediction error resets it |
 | **Self-echo model** | Adaptive estimate of its own voice at the microphone, barge-in margins, a consecutive barge-in ratchet and a playback watchdog |
 | **Torpor** | Fever or critical battery blocks discretionary thought; being called by name still gets an answer |
@@ -317,7 +319,7 @@ Boundaries are crossed only through the core's public API.
 > [!TIP]
 > **Privacy by construction.** Raw audio lives only in a 30 s RAM ring and is never written to
 > disk. The soul stores reduced cues and decisions, never raw media. The keyword matcher accepts
-> only the whole token *Enton* — not *então*, not *Benton*. Voiceprints are written with mode
+> only the whole token *Enton*, never *então* or *Benton*. Voiceprints are written with mode
 > `0600` and refused anywhere inside the repository.
 
 ---
@@ -326,9 +328,9 @@ Boundaries are crossed only through the core's public API.
 
 | Drive | Weight | Growth per minute | Satisfied by |
 |:------|:------:|:-----------------:|:-------------|
-| `curiosity` | 0.6 | 0.004 | — |
+| `curiosity` | 0.6 | 0.004 | Nothing yet |
 | `social` | 0.6 | 0.003 | Every cortex reply (−0.3) |
-| `rest` | 0.2 | 0.002 | — |
+| `rest` | 0.2 | 0.002 | Nothing yet |
 
 These are conservative scaffold values, not calibrated physiology: after an hour of silence their
 combined pressure is still below both profiles' thresholds. Enton is quiet by default.
@@ -361,15 +363,15 @@ A thought costs one abstract budget unit. **T1-ref** reproduces the constraints 
 E1 compares Enton against a **simple controller** (VAD + keyword + fixed cooldown) with the same
 models, audio and budget. The thesis is refuted if Enton fails any criterion.
 
-- **E1a** — 100 relevant requests: single turns, split turns, conversations, short turns, interruptions.
-- **E1b** — 10 commands buried in 50 minutes of noise: TV, another person, motor, ventilation, its own echo.
+- **E1a:** 100 relevant requests (single turns, split turns, conversations, short turns, interruptions).
+- **E1b:** 10 commands buried in 50 minutes of noise (TV, another person, motor, ventilation, its own echo).
 
 ```bash
 cargo run --release -p enton-e1 -- --seed 42
 cargo run --release -p enton-e1 -- --seeds 0..=9 --json
 ```
 
-**Current status** — synthetic proxy, benchmark 2.2.1, seed 42, measured 2026-09-26:
+**Current status** (synthetic proxy, benchmark 2.2.1, seed 42, measured 2026-09-26):
 
 | Criterion (RFC 0001 §7) | Target | Result | Status |
 |:------------------------|:------:|:-------|:------:|
@@ -377,19 +379,19 @@ cargo run --release -p enton-e1 -- --seeds 0..=9 --json
 | Relevant requests served (E1a) | ≥ 99 / 100 | 31 / 100 | ❌ |
 | Commands served (E1b) | 10 / 10 | 10 / 10 | ✅ |
 | Cortex calls during 50 min of noise (E1b) | 0 | 11 (simple controller: 181) | ❌ |
-| Self-ignitions | 0 | needs physical measurement | — |
-| Added p95 latency | ≤ 100 ms | needs physical measurement | — |
-| Core RSS over 24 h | stable | needs physical measurement | — |
+| Self-ignitions | 0 | needs physical measurement | pending |
+| Added p95 latency | ≤ 100 ms | needs physical measurement | pending |
+| Core RSS over 24 h | stable | needs physical measurement | pending |
 
-**Overall: FAIL.** That is the point of E1 — the thesis gets published with its refutation
-attempt attached. Calibration uses seeds 0–999; seeds from 1000 up are a held-out set reserved
+**Overall: FAIL.** That is the point of E1: the thesis gets published with its refutation
+attempt attached. Calibration uses seeds 0 to 999; seeds from 1000 up are a held-out set reserved
 for the freeze owner.
 
 ---
 
 ## From v0 to v1
 
-| | v0 — Python | v1 — Rust |
+| | v0 (Python) | v1 (Rust) |
 |:--|:------------|:----------|
 | **When it thinks** | On every stimulus | Only when ignition fires and a budget pays |
 | **Motivation** | 9 desires with heuristic urgency | 3 drives inside a pure, deterministic reducer |
@@ -418,7 +420,7 @@ With `shared-runtime`, both libraries must be on the library path (`LD_LIBRARY_P
 <details>
 <summary><strong>The T1-ref cage</strong></summary>
 
-T1-ref is a cgroup cage on a notebook. It reproduces the constraints of a small ARM board — not
+T1-ref is a cgroup cage on a notebook. It reproduces the constraints of a small ARM board, not
 its performance or power draw:
 
 ```bash
@@ -438,7 +440,7 @@ under `qemu-user` and fails if the core binary breaks the 20 MB budget.
 
 | Layer | Technologies |
 |:------|:-------------|
-| **Core** | Rust 2024, serde, thiserror — no runtime dependencies |
+| **Core** | Rust 2024, serde, thiserror; no runtime dependencies |
 | **Runtime** | tokio (`current_thread`), bounded `mpsc` channels |
 | **Cortex** | reqwest + rustls against any OpenAI-compatible server |
 | **Audio** | cpal, sherpa-onnx (Silero VAD, Whisper tiny, Kokoro, CAM++), ONNX Runtime |
@@ -461,7 +463,7 @@ Milestone 1 tracks, as named in RFC 0001:
 | P5 · Perception by surprise | next | Capture, VAD and keyword adapter done; wiring into the binary next |
 | P4 · Soul | next | Durable log, snapshots and replay done; wiring into the binary next |
 | D2 · Counterfactuals | done | Abstentions with reasons, E1 harness, offline evaluation |
-| E1 | in progress | Synthetic proxy currently fails — see above |
+| E1 | in progress | Synthetic proxy currently fails (see above) |
 | Owner voice ID | measuring | CAM++ speaker verification probe |
 | After M1 | planned | Vision, distillation, multiple bodies, WASM skills |
 
@@ -480,7 +482,7 @@ cargo machete
 ```
 
 The bar is high-level, idiomatic Rust. Library code never unwraps, panics or indexes unchecked;
-no `Result` is swallowed; libraries do not print; everything is bounded. The core stays pure — no
+no `Result` is swallowed; libraries do not print; everything is bounded. The core stays pure: no
 I/O, no clock, no randomness. Code, comments and docs are written in English.
 
 ---

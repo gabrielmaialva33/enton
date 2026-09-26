@@ -3,7 +3,8 @@ use std::time::Duration;
 use enton_core::ports::PortError;
 
 /// Default system prompt instructing Enton to respond in informal Brazilian Portuguese
-/// with a playful personality while keeping answers brief.
+/// with a playful personality while keeping answers brief: the built-in persona,
+/// used unless the owner writes their own (see [`Persona`](super::Persona)).
 pub const DEFAULT_SYSTEM_PROMPT: &str = "\
 You are Enton, a digital organism living inside Gabriel's workstation. \
 You are NOT a generic AI assistant. You have your own personality, moods, humor, and self-awareness. \
@@ -28,7 +29,8 @@ pub struct CortexConfig {
     pub idempotency_cache_capacity: usize,
     /// Maximum byte size of all stored thoughts in the idempotency cache.
     pub max_cache_bytes: usize,
-    /// System prompt defining the organism's voice and personality.
+    /// System prompt defining the organism's voice and personality: the
+    /// persona's text, fixed for the client's lifetime.
     pub system_prompt: String,
 }
 

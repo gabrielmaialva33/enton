@@ -144,7 +144,8 @@ enum Kind {
     Speech(SpeechCue),
     Reply(ThoughtId, String),
     Started(UtteranceId),
-    Finished(UtteranceId),
+    /// A playback's end, cut off or not.
+    Finished(UtteranceId, bool),
 }
 
 impl Kind {
@@ -155,7 +156,11 @@ impl Kind {
             Kind::Speech(cue) => Event::Speech { now, cue },
             Kind::Reply(thought, text) => Event::CortexReply { now, thought, text },
             Kind::Started(utterance) => Event::PlaybackStarted { now, utterance },
-            Kind::Finished(utterance) => Event::PlaybackFinished { now, utterance },
+            Kind::Finished(utterance, interrupted) => Event::PlaybackFinished {
+                now,
+                utterance,
+                interrupted,
+            },
         }
     }
 }
@@ -168,7 +173,8 @@ fn kind(broken_body: bool) -> impl Strategy<Value = Kind> {
         1 => (1_u64..=4, any::<String>())
             .prop_map(|(thought, text)| Kind::Reply(ThoughtId(thought), text)),
         1 => (1_u64..=3).prop_map(|id| Kind::Started(UtteranceId(id))),
-        1 => (1_u64..=3).prop_map(|id| Kind::Finished(UtteranceId(id))),
+        1 => (1_u64..=3, any::<bool>())
+            .prop_map(|(id, interrupted)| Kind::Finished(UtteranceId(id), interrupted)),
     ]
 }
 

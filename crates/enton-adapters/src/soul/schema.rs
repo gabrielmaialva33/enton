@@ -103,6 +103,27 @@ impl Soul {
                  );",
             )?;
             chain::seal(conn)?;
+            current_version = 4;
+        }
+
+        if current_version == 4 {
+            // Personas (see `persona.rs`): one record per persona a thought was
+            // asked with, and each thought's link to its record. The text is never
+            // stored. Thoughts recorded before this step keep no persona.
+            conn.execute_batch(
+                "CREATE TABLE personas (
+                     id INTEGER PRIMARY KEY,
+                     sha256 BLOB NOT NULL,
+                     bytes INTEGER NOT NULL,
+                     source TEXT NOT NULL CHECK (source IN ('built-in', 'file')),
+                     first_seq INTEGER NOT NULL,
+                     chain BLOB NOT NULL,
+                     checksum BLOB NOT NULL,
+                     UNIQUE (sha256, source)
+                 );
+                 ALTER TABLE actions ADD COLUMN persona INTEGER;
+                 ALTER TABLE actions ADD COLUMN persona_checksum BLOB;",
+            )?;
         }
         Ok(())
     }

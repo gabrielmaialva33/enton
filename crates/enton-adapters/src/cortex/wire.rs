@@ -14,6 +14,16 @@ pub(super) struct ChatCompletionRequest<'a> {
     pub(super) reasoning_effort: &'a str,
 }
 
+/// A one-token, non-streaming completion that only makes the server load the model.
+#[derive(Debug, Serialize)]
+pub(super) struct WarmUpRequest<'a> {
+    pub(super) model: &'a str,
+    pub(super) messages: Vec<OutgoingChatMessage<'a>>,
+    pub(super) max_tokens: u32,
+    pub(super) stream: bool,
+    pub(super) reasoning_effort: &'a str,
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct StreamCompletionChunk {
     pub(super) choices: Vec<StreamChoice>,

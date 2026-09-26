@@ -6,6 +6,7 @@ use enton_core::{Action, Event, ThoughtId};
 use rusqlite::{Connection, OpenFlags};
 
 use super::chain::{self, EVENT_CHECKSUM, EVENT_COLUMNS, StoredEvent, sql_seq};
+use super::persona::{self, PersonaDigest};
 use super::{ActionStatus, Error, SeqNo, Soul, SoulConfig};
 
 /// Size of the header every SQLite database file starts with.
@@ -16,7 +17,8 @@ impl Soul {
     ///
     /// Existing rows are only rewritten by a schema migration, which runs in one
     /// transaction; migrating to schema 4 computes the checksums of the rows
-    /// already stored, trusting them as they stand. Returns
+    /// already stored, trusting them as they stand, and migrating to schema 5
+    /// adds persona records (thoughts recorded before it keep none). Returns
     /// [`Error::UnsupportedSchema`] when the file was written by a newer
     /// version of this code, and [`Error::Truncated`] when events recorded at
     /// the end of the log are gone.
@@ -90,8 +92,8 @@ impl Soul {
     }
 
     /// Reject a log whose latest snapshot (or, without one, latest event) was
-    /// reduced by another reducer version, a pruned log left with no anchor, and
-    /// a log whose last recorded events are gone.
+    /// reduced by another reducer version, a pruned log left with no anchor, a
+    /// log whose last recorded events are gone, and a damaged persona record.
     fn check_history(conn: &Connection, config: &SoulConfig) -> Result<(), Error> {
         let mut stmt =
             conn.prepare("SELECT reducer_version FROM snapshots ORDER BY seq DESC LIMIT 1")?;
@@ -130,7 +132,8 @@ impl Soul {
                 }
             }
         }
-        chain::head(conn)?.check()
+        chain::head(conn)?.check()?;
+        persona::verify(conn)
     }
 
     /// The database file backing this log. The journal keeps `-wal` and
@@ -180,18 +183,39 @@ impl Soul {
         Ok(seq)
     }
 
-    /// Record that a thought is about to run, before its effect, so a crash
-    /// mid-effect leaves a row to reconcile.
-    pub fn record_pending(&self, thought: ThoughtId, created_seq: SeqNo) -> Result<(), Error> {
+    /// Record that a thought, decided at event `created_seq` and asked with
+    /// `persona`, is about to run, before its effect, so a crash mid-effect
+    /// leaves a row to reconcile.
+    ///
+    /// The thought links to the persona's record, which is written, bound to
+    /// `created_seq`, when no thought was asked with that persona before; the
+    /// record and the thought commit together. Returns [`Error::UnknownEvent`]
+    /// when the log does not hold event `created_seq`, and [`Error::Corrupt`]
+    /// when the persona's existing record is damaged.
+    pub fn record_pending(
+        &self,
+        thought: ThoughtId,
+        created_seq: SeqNo,
+        persona: &PersonaDigest,
+    ) -> Result<(), Error> {
         let thought_id = i64::try_from(thought.0)
             .map_err(|_| Error::Storage(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX)))?;
-        let created_seq_i64 = i64::try_from(created_seq)
-            .map_err(|_| Error::Storage(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX)))?;
-        self.conn.execute(
-            "INSERT INTO actions (thought_id, status, created_seq, result_json) \
-             VALUES (?1, ?2, ?3, NULL)",
-            rusqlite::params![thought_id, ActionStatus::Pending.as_str(), created_seq_i64],
+        let created_seq_i64 = sql_seq(created_seq)?;
+        let tx = self.conn.unchecked_transaction()?;
+        let (persona_id, record) = persona::adopt(&tx, persona, created_seq)?;
+        let link = chain::thought_checksum(thought.0, created_seq, &record);
+        tx.execute(
+            "INSERT INTO actions (thought_id, status, created_seq, result_json, persona, persona_checksum) \
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5)",
+            rusqlite::params![
+                thought_id,
+                ActionStatus::Pending.as_str(),
+                created_seq_i64,
+                persona_id,
+                link.as_slice()
+            ],
         )?;
+        tx.commit()?;
         Ok(())
     }
 

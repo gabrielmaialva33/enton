@@ -7,9 +7,11 @@ use enton_core::ports::{Cortex, PortError, ThoughtRequest};
 
 use super::cache::IdempotencyCache;
 use super::chunking::extract_completed_chunks;
-use super::config::CortexConfig;
-use super::prompt::{assemble_messages, prune_history_middle_out};
-use super::wire::{ChatCompletionRequest, StreamCompletionChunk};
+use super::config::{CortexConfig, CortexError};
+use super::prompt::{assemble_messages, prune_history_middle_out, system_prompt_at};
+use super::wire::{
+    ChatCompletionRequest, OutgoingChatMessage, StreamCompletionChunk, WarmUpRequest,
+};
 
 /// Monotonic timestamps recorded across the lifecycle of a cortex deliberation request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +58,57 @@ impl OpenAiCortex {
             cache: Arc::new(tokio::sync::RwLock::new(cache)),
             stage_timings: Arc::new(tokio::sync::RwLock::new(VecDeque::with_capacity(64))),
         }
+    }
+
+    /// Load the model before the first thought needs it.
+    ///
+    /// A local server such as Ollama unloads an idle model after a few minutes, and
+    /// loading a large one again takes longer than the first-token timeout, so the
+    /// first thought after a quiet spell would fail. One minimal completion, under the
+    /// single-flight lock and with its own `timeout`, brings the model back; a thought
+    /// that arrives meanwhile waits for it instead of timing out. Returns how long the
+    /// server took.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CortexError::Unavailable`] when the server cannot be reached or does
+    /// not answer successfully within `timeout`.
+    pub async fn warm_up(&self, timeout: Duration) -> Result<Duration, CortexError> {
+        let _flight = self.in_flight.lock().await;
+        let started = Instant::now();
+        let url = format!(
+            "{}/chat/completions",
+            self.config.base_url.trim_end_matches('/')
+        );
+        let unavailable = |message: String| CortexError::Unavailable {
+            url: url.clone(),
+            message,
+        };
+        let payload = WarmUpRequest {
+            model: &self.config.model,
+            messages: vec![OutgoingChatMessage {
+                role: "user",
+                content: "ok",
+            }],
+            max_tokens: 1,
+            stream: false,
+            reasoning_effort: "none",
+        };
+        let response = self
+            .client
+            .post(&url)
+            .timeout(timeout)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| unavailable(err.to_string()))?
+            .error_for_status()
+            .map_err(|err| unavailable(err.to_string()))?;
+        response
+            .bytes()
+            .await
+            .map_err(|err| unavailable(err.to_string()))?;
+        Ok(started.elapsed())
     }
 
     /// Creates a cortex client targeting a specific base URL and model name.
@@ -163,12 +216,13 @@ impl OpenAiCortex {
             _ => format!("[Trigger reason: {:?}]", request.reason),
         };
 
+        let system_prompt = system_prompt_at(&self.config, &jiff::Zoned::now());
         let fixed_tokens =
-            (self.config.system_prompt.len().div_ceil(4) + 4) + (user_prompt.len().div_ceil(4) + 4);
+            (system_prompt.len().div_ceil(4) + 4) + (user_prompt.len().div_ceil(4) + 4);
         let history_budget = self.config.max_context_tokens.saturating_sub(fixed_tokens);
         let pruned_history = prune_history_middle_out(&request.history, history_budget);
 
-        let messages = assemble_messages(&self.config, &user_prompt, &pruned_history);
+        let messages = assemble_messages(&system_prompt, &user_prompt, &pruned_history);
 
         let endpoint_url = format!(
             "{}/chat/completions",

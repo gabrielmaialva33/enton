@@ -452,7 +452,8 @@ fn a_read_only_soul_audits_without_writing() {
         let soul = Soul::open(&path, SoulConfig::default()).expect("open");
         soul.append_event(&tick(100)).expect("append");
         let asked = soul.append_event(&keyword_speech(300)).expect("append");
-        soul.record_pending(ThoughtId(1), asked).expect("pending");
+        soul.record_pending(ThoughtId(1), asked, &persona(1, PersonaSource::BuiltIn))
+            .expect("pending");
         soul.mark_failed(ThoughtId(1), r#"{"reason":"cortex unavailable"}"#)
             .expect("fail");
         let last = soul.append_event(&tick(1_300)).expect("append");
@@ -633,4 +634,266 @@ fn a_file_shorter_than_a_database_header_is_damaged_not_new() {
     let err = Soul::open(&path, SoulConfig::default()).unwrap_err();
     assert!(matches!(err, Error::Damaged(_)), "{err}");
     assert_eq!(std::fs::metadata(&path).unwrap().len(), 1, "left untouched");
+}
+
+/// A persona whose hash is `id` repeated, `100 + id` bytes long.
+fn persona(id: u8, source: PersonaSource) -> PersonaDigest {
+    PersonaDigest {
+        sha256: [id; 32],
+        bytes: 100 + u64::from(id),
+        source,
+    }
+}
+
+fn persona_rows(soul: &Soul) -> i64 {
+    soul.conn
+        .query_row("SELECT COUNT(*) FROM personas", [], |row| row.get(0))
+        .unwrap()
+}
+
+#[test]
+fn each_persona_is_recorded_once_with_the_first_thought_asked_with_it() {
+    let path = temp_path("persona_once");
+    let soul = Soul::open(&path, SoulConfig::default()).unwrap();
+    let built_in = persona(1, PersonaSource::BuiltIn);
+    let file = persona(2, PersonaSource::File);
+
+    let mut asked = Vec::new();
+    for (thought, speaks) in [(1, built_in), (2, built_in), (3, file), (4, built_in)] {
+        let seq = soul.append_event(&keyword_speech(thought * 1_000)).unwrap();
+        soul.record_pending(ThoughtId(thought), seq, &speaks)
+            .unwrap();
+        asked.push(seq);
+    }
+    assert_eq!(persona_rows(&soul), 2);
+    assert_eq!(
+        soul.personas().unwrap(),
+        [
+            PersonaRecord {
+                digest: built_in,
+                first_seq: asked[0],
+            },
+            PersonaRecord {
+                digest: file,
+                first_seq: asked[2],
+            },
+        ]
+    );
+
+    // Every thought links to the persona it was asked with.
+    let spoke = |thought| soul.thought_persona(ThoughtId(thought)).unwrap();
+    assert_eq!(spoke(1).map(|record| record.digest), Some(built_in));
+    assert_eq!(spoke(3).map(|record| record.digest), Some(file));
+    assert_eq!(spoke(4).map(|record| record.first_seq), Some(asked[0]));
+    assert_eq!(spoke(5), None, "never recorded");
+    assert_eq!(soul.thought_before(ThoughtId(1)).unwrap(), None);
+    assert_eq!(
+        soul.thought_before(ThoughtId(4)).unwrap(),
+        Some((
+            ThoughtId(3),
+            Some(PersonaRecord {
+                digest: file,
+                first_seq: asked[2],
+            })
+        ))
+    );
+
+    // The same text from another origin is another persona: `enton why` must
+    // say which one spoke.
+    let copied = PersonaDigest {
+        source: PersonaSource::File,
+        ..built_in
+    };
+    let seq = soul.append_event(&keyword_speech(9_000)).unwrap();
+    soul.record_pending(ThoughtId(5), seq, &copied).unwrap();
+    assert_eq!(persona_rows(&soul), 3);
+    assert_eq!(spoke(5).map(|record| record.digest), Some(copied));
+
+    // A reopened soul keeps them, and a restart does not record them again.
+    drop(soul);
+    let soul = Soul::open(&path, SoulConfig::default()).unwrap();
+    let seq = soul.append_event(&keyword_speech(10_000)).unwrap();
+    soul.record_pending(ThoughtId(6), seq, &file).unwrap();
+    assert_eq!(persona_rows(&soul), 3);
+    assert_eq!(soul.personas().unwrap().len(), 3);
+    cleanup(&path);
+}
+
+#[test]
+fn a_thought_and_its_persona_record_commit_together() {
+    let path = temp_path("persona_atomic");
+    let soul = Soul::open(&path, SoulConfig::default()).unwrap();
+    let speaks = persona(3, PersonaSource::File);
+    // No event 7: there is nothing to bind the record to, and nothing is written.
+    assert!(matches!(
+        soul.record_pending(ThoughtId(1), 7, &speaks),
+        Err(Error::UnknownEvent(7))
+    ));
+    let seq = soul.append_event(&keyword_speech(1_000)).unwrap();
+    soul.record_pending(ThoughtId(1), seq, &speaks).unwrap();
+    // A thought recorded twice fails, and takes no second persona record with it.
+    assert!(
+        soul.record_pending(ThoughtId(1), seq, &persona(4, PersonaSource::File))
+            .is_err()
+    );
+    assert_eq!(persona_rows(&soul), 1);
+    assert_eq!(soul.pending_actions().unwrap(), [(ThoughtId(1), seq)]);
+    cleanup(&path);
+}
+
+/// Turn a soul written by this code into one as schema 4 left it: the same
+/// tables without the persona records and links.
+fn as_schema_4(path: &Path) {
+    let conn = Connection::open(path).unwrap();
+    conn.execute_batch(
+        "DROP TABLE personas;
+         ALTER TABLE actions DROP COLUMN persona;
+         ALTER TABLE actions DROP COLUMN persona_checksum;
+         PRAGMA user_version = 4;",
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_schema_4_soul_migrates_its_thoughts_without_a_persona() {
+    let path = temp_path("persona_migration");
+    let profile = enton_core::Profile::t1_ref();
+    {
+        let soul = Soul::open(&path, SoulConfig::default()).unwrap();
+        soul.append_event(&tick(100)).unwrap();
+        let asked = soul.append_event(&keyword_speech(300)).unwrap();
+        soul.record_pending(ThoughtId(1), asked, &persona(1, PersonaSource::BuiltIn))
+            .unwrap();
+        soul.mark_done(ThoughtId(1), r#"{"chars":12}"#).unwrap();
+    }
+    as_schema_4(&path);
+    assert!(matches!(
+        Soul::open_read_only(&path, SoulConfig::default()),
+        Err(Error::UnsupportedSchema {
+            found: 4,
+            expected: 5
+        })
+    ));
+
+    let soul = Soul::open(&path, SoulConfig::default()).unwrap();
+    let version: u32 = soul
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 5);
+    // The old thought and its events survive and verify; its persona is unknown.
+    assert_eq!(soul.read_after(0, 16).unwrap().len(), 2);
+    assert_eq!(
+        soul.thought_status(ThoughtId(1)).unwrap(),
+        Some((ActionStatus::Done, Some(r#"{"chars":12}"#.to_owned())))
+    );
+    assert_eq!(soul.thought_persona(ThoughtId(1)).unwrap(), None);
+    assert!(soul.personas().unwrap().is_empty());
+    soul.replay_organism(&profile).unwrap();
+
+    // New thoughts record their persona, and the one before reads as unknown.
+    let file = persona(2, PersonaSource::File);
+    let asked = soul.append_event(&keyword_speech(5_000)).unwrap();
+    soul.record_pending(ThoughtId(2), asked, &file).unwrap();
+    assert_eq!(
+        soul.thought_persona(ThoughtId(2))
+            .unwrap()
+            .map(|record| record.digest),
+        Some(file)
+    );
+    assert_eq!(
+        soul.thought_before(ThoughtId(2)).unwrap(),
+        Some((ThoughtId(1), None))
+    );
+    drop(soul);
+    let read_only = Soul::open_read_only(&path, SoulConfig::default()).unwrap();
+    assert_eq!(read_only.personas().unwrap().len(), 1);
+    cleanup(&path);
+}
+
+#[test]
+fn a_failed_migration_to_schema_5_leaves_schema_4_intact() {
+    let path = temp_path("persona_migration_atomic");
+    {
+        let soul = Soul::open(&path, SoulConfig::default()).unwrap();
+        let asked = soul.append_event(&keyword_speech(300)).unwrap();
+        soul.record_pending(ThoughtId(1), asked, &persona(1, PersonaSource::BuiltIn))
+            .unwrap();
+    }
+    as_schema_4(&path);
+    // A column in the way fails the step at its last statement, after it
+    // created the table and the first column.
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("ALTER TABLE actions ADD COLUMN persona_checksum BLOB;")
+        .unwrap();
+    assert!(matches!(
+        Soul::open(&path, SoulConfig::default()),
+        Err(Error::Storage(_))
+    ));
+    let conn = Connection::open(&path).unwrap();
+    let count = |sql: &str| -> i64 { conn.query_row(sql, [], |row| row.get(0)).unwrap() };
+    assert_eq!(count("PRAGMA user_version"), 4);
+    assert_eq!(
+        count("SELECT COUNT(*) FROM sqlite_master WHERE name = 'personas'"),
+        0,
+        "the table was rolled back"
+    );
+    assert_eq!(
+        count("SELECT COUNT(*) FROM pragma_table_info('actions') WHERE name = 'persona'"),
+        0,
+        "the column was rolled back"
+    );
+    drop(conn);
+    cleanup(&path);
+}
+
+#[test]
+fn a_digest_prints_as_sha256sum_does() {
+    let digest = PersonaDigest {
+        sha256: [0xab; 32],
+        bytes: 1,
+        source: PersonaSource::File,
+    };
+    assert_eq!(digest.hex(), "ab".repeat(32));
+    assert_eq!(digest.short_hex(), "abababababab");
+    assert_eq!(PersonaSource::BuiltIn.as_str(), "built-in");
+}
+
+#[test]
+fn a_persona_record_outlives_the_event_it_was_bound_to() {
+    let path = temp_path("persona_retention");
+    let config = SoulConfig {
+        max_events: Some(3),
+        max_snapshots: Some(1),
+        ..SoulConfig::default()
+    };
+    let profile = enton_core::Profile::t1_ref();
+    let soul = Soul::open(&path, config.clone()).unwrap();
+    let speaks = persona(5, PersonaSource::File);
+    let mut organism = enton_core::Organism::new(profile).unwrap();
+    for now in 1..=8 {
+        let event = if now == 2 {
+            keyword_speech(now * 1_000)
+        } else {
+            tick(now * 1_000)
+        };
+        let seq = soul.append_event(&event).unwrap();
+        organism.step(&event);
+        if seq == 2 {
+            soul.record_pending(ThoughtId(1), seq, &speaks).unwrap();
+        }
+    }
+    soul.save_organism_snapshot(8, &organism).unwrap();
+    assert_eq!(soul.retain().unwrap(), 5);
+    drop(soul);
+
+    // Event 2 is gone; the record still verifies on its own, and is reused.
+    let soul = Soul::open(&path, config).unwrap();
+    let record = soul.thought_persona(ThoughtId(1)).unwrap().unwrap();
+    assert_eq!((record.digest, record.first_seq), (speaks, 2));
+    let seq = soul.append_event(&keyword_speech(9_000)).unwrap();
+    soul.record_pending(ThoughtId(2), seq, &speaks).unwrap();
+    assert_eq!(soul.personas().unwrap(), [record]);
+    cleanup(&path);
 }

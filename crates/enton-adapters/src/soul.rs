@@ -9,7 +9,9 @@
 //! the event tape is replayable, gap-detectable, and bounded by retention and
 //! a database size cap. Every event is chained into a SHA-256 hash chain and
 //! every snapshot carries a checksum, so a damaged or edited record is reported
-//! with its sequence number instead of being replayed (see `chain.rs`).
+//! with its sequence number instead of being replayed (see `chain.rs`). Each
+//! recorded thought links to the persona it was asked with, kept as a hash and
+//! never as text (see `persona.rs`).
 
 use std::path::PathBuf;
 
@@ -67,6 +69,10 @@ pub enum Error {
     /// A thought that was never recorded got resolved.
     #[error("thought {0:?} was never recorded")]
     UnknownAction(ThoughtId),
+    /// A thought was recorded at an event the log does not hold, so its
+    /// persona record has nothing to be bound to.
+    #[error("no event at sequence number {0} to record a thought at")]
+    UnknownEvent(SeqNo),
     /// The database schema was not written by this version of the code.
     #[error("unsupported schema version {found}, expected {expected}")]
     UnsupportedSchema {
@@ -89,10 +95,12 @@ pub enum Error {
     /// an edit). Nothing is replayed from it.
     #[error("damaged soul: the {kind} at sequence number {seq} fails its checksum")]
     Corrupt {
-        /// What failed: "event", "snapshot", or "anchor" (the checksum retention
-        /// keeps for the last event it pruned).
+        /// What failed: "event", "snapshot", "anchor" (the checksum retention
+        /// keeps for the last event it pruned), "persona" (a persona record) or
+        /// "thought" (a thought's link to the persona it was asked with).
         kind: &'static str,
-        /// The event's sequence number, or the one the record was taken at.
+        /// The event's sequence number, the one the record was taken at, or the
+        /// one the (first) thought was decided at.
         seq: SeqNo,
     },
     /// Events the log recorded are gone from its end.
@@ -169,15 +177,18 @@ impl Default for SoulConfig {
 }
 
 impl Soul {
-    const SCHEMA_VERSION: u32 = 4;
+    const SCHEMA_VERSION: u32 = 5;
     const PRUNE_BATCH: usize = 512;
     const REPLAY_PAGE: usize = 1024;
 }
 
 mod chain;
+mod persona;
 mod schema;
 mod snapshot;
 mod store;
+
+pub use persona::{PersonaDigest, PersonaRecord, PersonaSource};
 
 #[cfg(test)]
 mod tests;

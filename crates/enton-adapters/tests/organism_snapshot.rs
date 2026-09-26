@@ -148,6 +148,21 @@ fn every_snapshot_boundary_survives_pruning_restart_and_replay() {
     }
 }
 
+/// Overheard speech in the owner's verified voice: someone is home, so it may buy a
+/// thought of Enton's own.
+fn owner_speech(now: u64) -> Event {
+    let Event::Speech { now, cue } = speech(now, false, 1000) else {
+        unreachable!("speech builds a speech cue")
+    };
+    Event::Speech {
+        now,
+        cue: SpeechCue {
+            speaker_sim: Some(0.9),
+            ..cue
+        },
+    }
+}
+
 #[test]
 fn a_restored_organism_resumes_time_where_it_stopped() {
     let directory = TestDirectory::new();
@@ -161,7 +176,7 @@ fn a_restored_organism_resumes_time_where_it_stopped() {
                 now: Millis(five_hours),
             },
             // A paid thought after the last tick: the resume point must see it.
-            speech(five_hours + 500, false, 1000),
+            owner_speech(five_hours + 500),
         ] {
             last_seq = soul.append_event(&event).unwrap();
             organism.step(&event);
@@ -187,7 +202,7 @@ fn a_restored_organism_resumes_time_where_it_stopped() {
     let mut resumed = restored;
     let now = MonotonicClock::resuming_at(resumed.last_seen()).now();
     assert!(now >= resumed.last_seen());
-    let actions = resumed.step(&speech(now.0 + 60_000, false, 1000));
+    let actions = resumed.step(&owner_speech(now.0 + 60_000));
     assert_eq!(thought_ids(&actions), vec![ThoughtId(2)]);
 
     let before = resumed.discretionary_budget().available;

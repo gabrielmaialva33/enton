@@ -20,11 +20,19 @@
 //! can rewrite the chain too, which only a head checksum kept elsewhere reveals.
 //! Deleting events from the end leaves a valid chain, so it is detected through
 //! the last sequence number SQLite assigned (see [`head`]).
+//!
+//! Persona records and the links from thoughts to them sit beside the chain,
+//! as snapshots do (see `persona.rs`). A persona record's checksum covers its
+//! hash, length and origin, the sequence number of the event its first thought
+//! was decided at and that event's checksum; a thought's link covers the
+//! thought, its event and the checksum of the persona record it names. So an
+//! altered, moved or swapped record or link is reported as damage.
 
 use rusqlite::types::{Value, ValueRef};
 use rusqlite::{Connection, OptionalExtension, Row};
 use sha2::{Digest, Sha256};
 
+use super::persona::PersonaDigest;
 use super::{Error, SeqNo};
 
 /// A SHA-256 digest.
@@ -33,9 +41,12 @@ pub(super) type Checksum = [u8; 32];
 /// The checksum the first event chains from.
 pub(super) const GENESIS: Checksum = [0; 32];
 
-/// Domain tags keep an event checksum from ever equalling a snapshot checksum.
+/// Domain tags keep a checksum of one kind of record from ever equalling one of
+/// another kind.
 const EVENT_DOMAIN: &[u8] = b"enton-soul-event-v1\0";
 const SNAPSHOT_DOMAIN: &[u8] = b"enton-soul-snapshot-v1\0";
+const PERSONA_DOMAIN: &[u8] = b"enton-soul-persona-v1\0";
+const THOUGHT_DOMAIN: &[u8] = b"enton-soul-thought-v1\0";
 
 /// The event columns [`StoredEvent::read`] expects, in order, then the checksum.
 pub(super) const EVENT_COLUMNS: &str =
@@ -79,6 +90,34 @@ pub(super) fn snapshot_checksum(
     hasher.update(reducer_version.to_be_bytes());
     hasher.update(chain);
     hasher.update(blob);
+    hasher.finalize().into()
+}
+
+/// The checksum of a persona record, first used by a thought decided at event
+/// `first_seq`, whose checksum is `chain`. Every field is fixed-width.
+pub(super) fn persona_checksum(
+    first_seq: SeqNo,
+    chain: &Checksum,
+    persona: &PersonaDigest,
+) -> Checksum {
+    let mut hasher = Sha256::new();
+    hasher.update(PERSONA_DOMAIN);
+    hasher.update(first_seq.to_be_bytes());
+    hasher.update(chain);
+    hasher.update(persona.sha256);
+    hasher.update(persona.bytes.to_be_bytes());
+    hasher.update([persona.source.tag()]);
+    hasher.finalize().into()
+}
+
+/// The checksum of the link from `thought`, decided at event `created_seq`, to
+/// the persona record whose checksum is `persona`. Every field is fixed-width.
+pub(super) fn thought_checksum(thought: u64, created_seq: SeqNo, persona: &Checksum) -> Checksum {
+    let mut hasher = Sha256::new();
+    hasher.update(THOUGHT_DOMAIN);
+    hasher.update(thought.to_be_bytes());
+    hasher.update(created_seq.to_be_bytes());
+    hasher.update(persona);
     hasher.finalize().into()
 }
 
@@ -181,7 +220,7 @@ impl StoredSnapshot {
 }
 
 /// A stored checksum: exactly 32 bytes in a blob, or the record is damaged.
-fn checksum_in(value: Value, kind: &'static str, seq: SeqNo) -> Result<Checksum, Error> {
+pub(super) fn checksum_in(value: Value, kind: &'static str, seq: SeqNo) -> Result<Checksum, Error> {
     match value {
         Value::Blob(bytes) => {
             Checksum::try_from(bytes.as_slice()).map_err(|_| Error::Corrupt { kind, seq })
@@ -264,6 +303,24 @@ pub(super) fn link(conn: &Connection, seq: SeqNo) -> Result<Option<Checksum>, Er
         (Some(held), _) => Ok(Some(held)),
         (None, chain) => Ok(chain),
     }
+}
+
+/// Whether event `seq` holds the checksum its place in the chain gives it:
+/// `false` only when the event is stored, the log vouches for the one before,
+/// and the event fails against it.
+pub(super) fn event_verifies(conn: &Connection, seq: SeqNo) -> Result<bool, Error> {
+    let Some(prev) = link(conn, seq.saturating_sub(1))? else {
+        return Ok(true);
+    };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {EVENT_COLUMNS} FROM events WHERE seq = ?1"
+    ))?;
+    let mut rows = stmt.query([sql_seq(seq)?])?;
+    let Some(row) = rows.next()? else {
+        return Ok(true);
+    };
+    let event = StoredEvent::read(row)?;
+    Ok(event.verify(row, EVENT_CHECKSUM, &prev).is_ok())
 }
 
 /// Where the log ends.

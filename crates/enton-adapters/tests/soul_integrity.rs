@@ -3,14 +3,15 @@
 //! or a snapshot, a deleted, renumbered or swapped event and a lost tail are each
 //! reported with the record they hit, never replayed. Logs written before the
 //! checksums migrate and verify, and pruned logs keep verifying from their anchor.
+//! Persona records and the links from thoughts to them are checked the same way.
 #![cfg(feature = "soul")]
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use enton_adapters::soul::Error;
+use enton_adapters::soul::{Error, PersonaDigest, PersonaSource};
 use enton_adapters::{SeqNo, Soul, SoulConfig};
-use enton_core::{Event, Millis, Organism, Profile, SpeechCue};
+use enton_core::{Event, Millis, Organism, Profile, SpeechCue, ThoughtId};
 use rusqlite::Connection;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -587,7 +588,7 @@ fn a_schema_2_soul_migrates_and_verifies() {
     legacy_soul(&directory, 2, 1, 8, &[]).unwrap();
     let soul = Soul::open(directory.database(), SoulConfig::default()).unwrap();
     let version: u32 = soul_version(&directory);
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     let read = soul.read_after(0, 64).unwrap();
     assert_eq!(read.len(), 8);
     for (seq, stored) in &read {
@@ -620,7 +621,7 @@ fn a_pruned_schema_3_soul_migrates_and_verifies() {
     legacy_soul(&directory, 3, 5, 10, &[(4, &at_four), (7, &at_seven)]).unwrap();
     let profile = Profile::t1_ref();
     let soul = Soul::open(directory.database(), SoulConfig::default()).unwrap();
-    assert_eq!(soul_version(&directory), 4);
+    assert_eq!(soul_version(&directory), 5);
 
     // The earliest kept event chains from the anchor the migration left.
     let (mut audited, cursor) = soul.earliest_organism(&profile).unwrap();
@@ -660,4 +661,215 @@ fn the_error_names_the_damaged_record() {
         damaged.to_string(),
         "damaged soul: the event at sequence number 42 fails its checksum"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Personas
+
+/// A persona whose hash is `id` repeated.
+fn persona(id: u8, source: PersonaSource) -> PersonaDigest {
+    PersonaDigest {
+        sha256: [id; 32],
+        bytes: 500 + u64::from(id),
+        source,
+    }
+}
+
+/// A soul holding events `1..=10` in which thought 1, decided at event 2, was
+/// asked with the built-in persona and thought 2, at event 5, with a file.
+fn soul_with_personas(directory: &TestDirectory) -> TestResult<Soul> {
+    let (soul, _) = soul_with(directory, 10, SoulConfig::default(), None)?;
+    soul.record_pending(ThoughtId(1), 2, &persona(1, PersonaSource::BuiltIn))?;
+    soul.record_pending(ThoughtId(2), 5, &persona(2, PersonaSource::File))?;
+    Ok(soul)
+}
+
+/// Overwrite a column of the file persona's record, first used at event 5.
+fn set_persona<T: rusqlite::ToSql>(conn: &Connection, column: &str, value: T) -> TestResult {
+    conn.execute(
+        &format!("UPDATE personas SET {column} = ?1 WHERE source = 'file'"),
+        [value],
+    )?;
+    Ok(())
+}
+
+/// Opening the soul, listing its personas and reading thought 2's persona all
+/// fail on the persona record at `seq`, while its events still read.
+fn refused(directory: &TestDirectory, soul: &Soul, seq: SeqNo) -> bool {
+    let config = SoulConfig::default;
+    is_corrupt(&Soul::open(directory.database(), config()), "persona", seq)
+        && is_corrupt(
+            &Soul::open_read_only(directory.database(), config()),
+            "persona",
+            seq,
+        )
+        && is_corrupt(&soul.personas(), "persona", seq)
+        && is_corrupt(&soul.thought_persona(ThoughtId(2)), "persona", seq)
+        && soul
+            .read_after(0, 64)
+            .is_ok_and(|events| events.len() == 10)
+}
+
+#[test]
+fn a_tampered_persona_record_is_reported_with_the_event_it_was_first_used_at() {
+    let directory = TestDirectory::new().unwrap();
+    let soul = soul_with_personas(&directory).unwrap();
+    let tamper = directory.tamper().unwrap();
+    for column in ["sha256", "chain", "checksum"] {
+        let original: Vec<u8> = tamper
+            .query_row(
+                &format!("SELECT {column} FROM personas WHERE source = 'file'"),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(original.len(), 32);
+        for at in 0..original.len() {
+            set_persona(&tamper, column, flipped(&original, at, 0x01)).unwrap();
+            assert!(refused(&directory, &soul, 5), "{column}/{at}");
+        }
+        set_persona(&tamper, column, original).unwrap();
+    }
+
+    // Its length, its origin (a file passed off as the built-in persona) and
+    // the event it was first used at are covered too.
+    set_persona(&tamper, "bytes", 503).unwrap();
+    assert!(refused(&directory, &soul, 5));
+    set_persona(&tamper, "bytes", 502).unwrap();
+    tamper
+        .execute(
+            "UPDATE personas SET source = 'built-in' WHERE first_seq = 5",
+            [],
+        )
+        .unwrap();
+    assert!(is_corrupt(&soul.personas(), "persona", 5));
+    tamper
+        .execute(
+            "UPDATE personas SET source = 'file' WHERE first_seq = 5",
+            [],
+        )
+        .unwrap();
+    set_persona(&tamper, "first_seq", 6).unwrap();
+    assert!(refused(&directory, &soul, 6));
+    set_persona(&tamper, "first_seq", 5).unwrap();
+
+    // Put back, everything reads again.
+    assert_eq!(soul.personas().unwrap().len(), 2);
+    assert!(soul.thought_persona(ThoughtId(2)).unwrap().is_some());
+    Soul::open(directory.database(), SoulConfig::default()).unwrap();
+}
+
+#[test]
+fn a_persona_record_from_another_history_is_refused() {
+    let ours = TestDirectory::new().unwrap();
+    let soul = soul_with_personas(&ours).unwrap();
+    // Another soul, where the same persona spoke at the same event of another life.
+    let theirs = TestDirectory::new().unwrap();
+    let other = Soul::open(theirs.database(), SoulConfig::default()).unwrap();
+    for index in 11..=20 {
+        other.append_event(&event(index)).unwrap();
+    }
+    other
+        .record_pending(ThoughtId(9), 5, &persona(2, PersonaSource::File))
+        .unwrap();
+    let (chain, checksum): (Vec<u8>, Vec<u8>) = theirs
+        .tamper()
+        .unwrap()
+        .query_row("SELECT chain, checksum FROM personas", [], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .unwrap();
+
+    // Copied in, the record is valid on its own but bound to an event this log
+    // never held, and the event it names is intact: the record is to blame.
+    let tamper = ours.tamper().unwrap();
+    set_persona(&tamper, "chain", chain).unwrap();
+    set_persona(&tamper, "checksum", checksum).unwrap();
+    assert!(refused(&ours, &soul, 5));
+}
+
+#[test]
+fn a_damaged_event_under_a_persona_record_is_named_as_the_event() {
+    let directory = TestDirectory::new().unwrap();
+    let soul = soul_with_personas(&directory).unwrap();
+    let tamper = directory.tamper().unwrap();
+    let original = event_bytes(&tamper, "checksum", 5).unwrap();
+    set_blob(
+        &tamper,
+        "events",
+        "checksum",
+        5,
+        &flipped(&original, 0, 0x01),
+    )
+    .unwrap();
+    assert!(is_corrupt(&soul.personas(), "event", 5));
+    assert!(is_corrupt(&soul.read_after(0, 64), "event", 5));
+    assert!(is_corrupt(
+        &Soul::open(directory.database(), SoulConfig::default()),
+        "event",
+        5
+    ));
+}
+
+#[test]
+fn a_tampered_link_from_a_thought_to_its_persona_is_reported() {
+    let directory = TestDirectory::new().unwrap();
+    let soul = soul_with_personas(&directory).unwrap();
+    let tamper = directory.tamper().unwrap();
+    tamper
+        .execute_batch("CREATE TEMP TABLE kept AS SELECT * FROM actions;")
+        .unwrap();
+    let put_back = || {
+        tamper
+            .execute_batch("DELETE FROM actions; INSERT INTO actions SELECT * FROM kept;")
+            .unwrap();
+        assert!(soul.thought_persona(ThoughtId(2)).unwrap().is_some());
+    };
+
+    for (edit, seq) in [
+        // The file persona's thought relinked to the built-in persona's record.
+        (
+            "UPDATE actions SET persona = (SELECT persona FROM kept WHERE thought_id = 1) \
+             WHERE thought_id = 2",
+            5,
+        ),
+        ("UPDATE actions SET persona = 99 WHERE thought_id = 2", 5),
+        ("UPDATE actions SET persona = NULL WHERE thought_id = 2", 5),
+        (
+            "UPDATE actions SET persona_checksum = zeroblob(32) WHERE thought_id = 2",
+            5,
+        ),
+        (
+            "UPDATE actions SET persona_checksum = zeroblob(31) WHERE thought_id = 2",
+            5,
+        ),
+        // Moved to another event, or given another thought's number and link.
+        ("UPDATE actions SET created_seq = 6 WHERE thought_id = 2", 6),
+        (
+            "DELETE FROM actions WHERE thought_id = 2; \
+             UPDATE actions SET thought_id = 2 WHERE thought_id = 1",
+            2,
+        ),
+    ] {
+        tamper.execute_batch(edit).unwrap();
+        assert!(
+            is_corrupt(&soul.thought_persona(ThoughtId(2)), "thought", seq),
+            "{edit}"
+        );
+        assert!(
+            is_corrupt(&soul.thought_before(ThoughtId(3)), "thought", seq),
+            "{edit}"
+        );
+        put_back();
+    }
+
+    // A deleted record leaves its thought's link pointing at nothing.
+    tamper
+        .execute("DELETE FROM personas WHERE source = 'file'", [])
+        .unwrap();
+    assert!(is_corrupt(
+        &soul.thought_persona(ThoughtId(2)),
+        "thought",
+        5
+    ));
 }

@@ -58,15 +58,32 @@ pub fn prune_history_middle_out(
         .collect()
 }
 
+/// The system prompt with the local date and time appended: the core has no wall
+/// clock, so without this the model cannot answer "what time is it?".
+pub(super) fn system_prompt_at(config: &CortexConfig, now: &jiff::Zoned) -> String {
+    format!("{}\n\n{}", config.system_prompt, clock_line(now))
+}
+
+/// One line naming the local date, time and time zone, for example
+/// `Current local date and time: Saturday, 2026-09-26 16:42 (America/Sao_Paulo, UTC-03:00).`
+pub(super) fn clock_line(now: &jiff::Zoned) -> String {
+    let zone = now.time_zone().iana_name().unwrap_or("local time");
+    format!(
+        "Current local date and time: {} ({zone}, UTC{}).",
+        now.strftime("%A, %Y-%m-%d %H:%M"),
+        now.strftime("%:z"),
+    )
+}
+
 pub(super) fn assemble_messages<'a>(
-    config: &'a CortexConfig,
+    system_prompt: &'a str,
     user_prompt: &'a str,
     pruned_history: &'a [ConversationTurn],
 ) -> Vec<OutgoingChatMessage<'a>> {
     let mut messages = Vec::with_capacity(pruned_history.len() + 2);
     messages.push(OutgoingChatMessage {
         role: "system",
-        content: &config.system_prompt,
+        content: system_prompt,
     });
 
     for turn in pruned_history {
@@ -90,6 +107,22 @@ pub(super) fn assemble_messages<'a>(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_clock_line_names_date_time_and_zone() {
+        let now: jiff::Zoned = "2026-09-26T16:42:00-03:00[America/Sao_Paulo]"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            clock_line(&now),
+            "Current local date and time: Saturday, 2026-09-26 16:42 (America/Sao_Paulo, UTC-03:00)."
+        );
+        let config = CortexConfig::default();
+        let prompt = system_prompt_at(&config, &now);
+        assert!(prompt.starts_with(&config.system_prompt));
+        assert!(prompt.ends_with("UTC-03:00)."));
+    }
+
     use super::*;
 
     #[test]

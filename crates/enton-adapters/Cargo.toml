@@ -12,7 +12,7 @@ repository.workspace = true
 default = []
 # Each I/O module is feature-gated so a lean profile (T1) builds only what it runs.
 soul = ["dep:rusqlite", "dep:serde_json", "dep:sha2"]
-cortex = ["dep:tokio", "dep:reqwest", "dep:serde_json"]
+cortex = ["dep:tokio", "dep:reqwest", "dep:serde_json", "dep:jiff", "dep:sha2"]
 audio = ["dep:cpal", "dep:sherpa-onnx"]
 voice = ["dep:cpal", "dep:sherpa-onnx"]
 voice-id = ["dep:sherpa-onnx", "dep:sha2"]
@@ -31,6 +31,9 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 cpal = { version = "0.18", optional = true }
 sherpa-onnx = { version = "1.13", optional = true, default-features = false }
 sha2 = { version = "0.11.0", optional = true }
+# The cortex tells the model the local date and time; jiff reads the system time zone
+# safely in a multi-threaded process.
+jiff = { version = "0.2", optional = true }
 
 [dev-dependencies]
 proptest.workspace = true

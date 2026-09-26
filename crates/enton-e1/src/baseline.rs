@@ -59,6 +59,7 @@ impl Baseline {
                 reason,
                 salience: cue.vad_confidence,
                 why,
+                propensity: None,
             }];
         }
         let thought = ThoughtId(self.next_thought);
@@ -71,6 +72,7 @@ impl Baseline {
             thought,
             reason,
             salience: cue.vad_confidence,
+            propensity: None,
         }]
     }
 }

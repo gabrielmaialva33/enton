@@ -2,7 +2,7 @@
 //! the `TigerBeetle` VOPR: the synthetic tapes explore, the watch asserts, and a
 //! violation stops the run naming the step and the event that broke it.
 
-use enton_core::{Action, Event, Millis, Organism, Reason, ThoughtId};
+use enton_core::{Action, Budget, Event, Millis, Organism, Reason, ThoughtId};
 
 use crate::Error;
 
@@ -20,6 +20,9 @@ pub(crate) struct Watch {
     last_thought: Option<ThoughtId>,
     last_seen: Millis,
     shadow: Option<Box<Organism>>,
+    /// Obligation and discretionary budgets after the previous step. Only ticks refill,
+    /// so a speech cue finds exactly these.
+    budgets: Option<(Budget, Budget)>,
 }
 
 impl Watch {
@@ -35,6 +38,7 @@ impl Watch {
         self.check_thought_ids(event, actions)?;
         self.check_time(organism, event)?;
         self.check_bounds(organism, event)?;
+        self.check_exploration(organism, event, actions)?;
         self.check_shadow(organism, event, actions)
     }
 
@@ -135,6 +139,57 @@ impl Watch {
         Ok(())
     }
 
+    /// A coin flip is logged only at a speech cue, with the profile's applied probability
+    /// (a thought) or its complement (an abstention), and an explored thought is paid by
+    /// the discretionary account alone.
+    fn check_exploration(
+        &mut self,
+        organism: &Organism,
+        event: &Event,
+        actions: &[Action],
+    ) -> Result<(), Error> {
+        let before = self.budgets.replace((
+            *organism.obligation_budget(),
+            *organism.discretionary_budget(),
+        ));
+        let explore = organism.profile().exploration.applied_probability();
+        for action in actions {
+            let (logged, expected, explored) = match action {
+                Action::Think {
+                    propensity: Some(logged),
+                    ..
+                } => (*logged, explore, true),
+                Action::Abstain {
+                    propensity: Some(logged),
+                    ..
+                } => (*logged, 1.0 - explore, false),
+                _ => continue,
+            };
+            if !matches!(event, Event::Speech { .. }) {
+                return Err(self.violation(event, "only a speech cue flips the exploration coin"));
+            }
+            if logged.to_bits() != expected.to_bits() {
+                return Err(self.violation(
+                    event,
+                    "a logged propensity is the applied exploration probability or its complement",
+                ));
+            }
+            let cost = organism.profile().budgets.think_cost;
+            let paid_alone = before.is_none_or(|(obligation, discretionary)| {
+                organism.obligation_budget().available.to_bits() == obligation.available.to_bits()
+                    && organism.discretionary_budget().available.to_bits()
+                        == (discretionary.available - cost).to_bits()
+            });
+            if explored && !paid_alone {
+                return Err(self.violation(
+                    event,
+                    "an explored thought is paid by the discretionary account alone",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn check_shadow(
         &mut self,
         organism: &Organism,
@@ -208,6 +263,7 @@ mod tests {
             reason: Reason::Speech,
             salience: 0.1,
             why: Abstention::BelowThreshold,
+            propensity: None,
         }
     }
 
@@ -216,6 +272,7 @@ mod tests {
             thought: ThoughtId(id),
             reason: Reason::Keyword,
             salience: 1.5,
+            propensity: None,
         }
     }
 
@@ -275,6 +332,55 @@ mod tests {
             .after_step(&organism, &second, &[think(3)])
             .unwrap_err();
         assert!(err.to_string().contains("increase by exactly one"), "{err}");
+    }
+
+    #[test]
+    fn a_coin_flip_the_profile_did_not_make_is_a_violation() {
+        // Exploration is off: a thought would log probability zero, an abstention one.
+        let mut organism = organism();
+        let first = cue(100);
+        let mut watch = Watch::default();
+        let actions = organism.step(&first);
+        watch.after_step(&organism, &first, &actions).unwrap();
+        let second = cue(200);
+        organism.step(&second);
+        let halved = Action::Abstain {
+            reason: Reason::Speech,
+            salience: 0.1,
+            why: Abstention::BelowThreshold,
+            propensity: Some(0.5),
+        };
+        let err = watch.after_step(&organism, &second, &[halved]).unwrap_err();
+        assert!(
+            err.to_string().contains("applied exploration probability"),
+            "{err}"
+        );
+
+        // A thought logged as explored that the discretionary account did not pay for.
+        let free = Action::Think {
+            thought: ThoughtId(1),
+            reason: Reason::FollowUp,
+            salience: 1.0,
+            propensity: Some(0.0),
+        };
+        let err = watch.after_step(&organism, &second, &[free]).unwrap_err();
+        assert!(
+            err.to_string().contains("discretionary account alone"),
+            "{err}"
+        );
+
+        let tick = Event::Tick { now: Millis(300) };
+        organism.step(&tick);
+        let on_a_tick = Action::Abstain {
+            reason: Reason::Drive("social".into()),
+            salience: 0.1,
+            why: Abstention::Cooldown,
+            propensity: Some(1.0),
+        };
+        let err = Watch::default()
+            .after_step(&organism, &tick, &[on_a_tick])
+            .unwrap_err();
+        assert!(err.to_string().contains("only a speech cue"), "{err}");
     }
 
     #[test]

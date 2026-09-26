@@ -8,6 +8,7 @@ use crate::{
     baseline::Baseline,
     economy::Account,
     invariants::Watch,
+    offpolicy::{Decision, DecisionLog},
     report::{
         NoiseBreakdown, NoiseReason, NoiseStimulus, WasteBreakdown, WasteReason, WasteStimulus,
     },
@@ -509,6 +510,9 @@ struct Execution<'a> {
     tape: &'a Tape,
     segment_sources: BTreeMap<SegmentId, Stimulus>,
     sensors: Sensors,
+    /// Every decision with its propensity and each candidate's choice, when the run is a
+    /// logging policy for off-policy evaluation.
+    log: Option<DecisionLog<'a>>,
 }
 impl<'a> Execution<'a> {
     fn new(
@@ -538,6 +542,7 @@ impl<'a> Execution<'a> {
             tape,
             segment_sources,
             sensors,
+            log: None,
         })
     }
 
@@ -596,6 +601,11 @@ impl<'a> Execution<'a> {
         // Only Event crosses the policy boundary. No labels, segment IDs or turns, and
         // no reading of a sensor that is off.
         let event = self.sensors.perceive(&record.event);
+        // Each candidate's choice is asked of the state the cue found, before it moves.
+        let asked = match (&self.log, &self.machine) {
+            (Some(log), Machine::Core(organism, _)) => log.ask(organism, &event)?,
+            _ => None,
+        };
         let actions = self.machine.step(&event, self.account.can_pay())?;
         let attending = self.machine.attending();
         if record.annotation.turn().is_some() {
@@ -607,20 +617,25 @@ impl<'a> Execution<'a> {
         {
             self.feedback.supersede(now)?;
         }
-        for action in actions {
+        let paid_before = self.result.thoughts.len();
+        for action in &actions {
             match action {
                 Action::Think {
                     thought, reason, ..
-                } => self.paid_thought(record, thought, reason, attending)?,
+                } => self.paid_thought(record, *thought, reason.clone(), attending)?,
                 Action::Abstain { reason, why, .. } => {
                     if matches!(reason, Reason::Keyword | Reason::FollowUp) {
                         self.result.rejected_obligations += 1;
-                    } else if why == Abstention::OutOfEnergy {
+                    } else if *why == Abstention::OutOfEnergy {
                         self.result.discretionary_exhaustion += 1;
                     }
                 }
-                other => self.scorer.observe_non_think(record, &other),
+                other => self.scorer.observe_non_think(record, other),
             }
+        }
+        if let Some(log) = self.log.as_mut() {
+            let paid = self.result.thoughts.get(paid_before..).unwrap_or(&[]);
+            log.record(record, &actions, asked.as_ref(), paid)?;
         }
         self.scorer.finish_event(now, attending);
         Ok(())
@@ -732,7 +747,52 @@ fn run_controller(
     economy: Economy,
     sensors: Sensors,
 ) -> Result<ControllerResult, Error> {
-    let horizon = Millis(tape.duration().0 + 12_000);
+    let execution = Execution::new(controller, profile, economy, tape, horizon(tape), sensors)?;
+    Ok(drive(execution, tape)?.result)
+}
+
+/// Run the organism alone on one tape, with the shared account of every E1 run.
+pub(crate) fn run_organism(
+    tape: &Tape,
+    profile: &Profile,
+    sensors: Sensors,
+) -> Result<ControllerResult, Error> {
+    let economy = Economy::from_profile(&Profile::t1_ref())?;
+    run_controller(tape, Controller::Organism, profile, economy, sensors)
+}
+
+/// Run the organism as a logging policy: alongside its result, every decision it took,
+/// with its propensity, its outcome, and what each candidate profile would have chosen
+/// in the same state.
+pub(crate) fn run_logged(
+    tape: &Tape,
+    profile: &Profile,
+    sensors: Sensors,
+    candidates: &[Profile],
+) -> Result<(ControllerResult, Vec<Decision>), Error> {
+    let economy = Economy::from_profile(&Profile::t1_ref())?;
+    let mut execution = Execution::new(
+        Controller::Organism,
+        profile,
+        economy,
+        tape,
+        horizon(tape),
+        sensors,
+    )?;
+    execution.log = Some(DecisionLog::new(tape, candidates));
+    let execution = drive(execution, tape)?;
+    let decisions = execution.log.map(DecisionLog::finish).unwrap_or_default();
+    Ok((execution.result, decisions))
+}
+
+/// Feedback is observed for 12 s past the tape's end.
+fn horizon(tape: &Tape) -> Millis {
+    Millis(tape.duration().0 + 12_000)
+}
+
+/// Feed the tape, the 12 s drain and the closed-loop feedback to one controller, in time
+/// order, and settle its result.
+fn drive<'a>(mut execution: Execution<'a>, tape: &'a Tape) -> Result<Execution<'a>, Error> {
     let drain = (1..=12).map(|second| Record {
         event: Event::Tick {
             now: Millis(tape.duration().0 + second * 1000),
@@ -740,7 +800,6 @@ fn run_controller(
         annotation: Annotation::Clock,
     });
     let mut events = tape.records().iter().cloned().chain(drain).peekable();
-    let mut execution = Execution::new(controller, profile, economy, tape, horizon, sensors)?;
     let mut processed = 0;
     loop {
         let endogenous = match (events.peek(), execution.feedback.pending.first_key_value()) {
@@ -775,7 +834,7 @@ fn run_controller(
     execution.result.credited_refill = execution.account.credited_refill;
     execution.result.rounding_credit = execution.account.rounding_credit;
     execution.result.feedback_after_horizon = execution.feedback.censored;
-    Ok(execution.result)
+    Ok(execution)
 }
 
 #[cfg(test)]

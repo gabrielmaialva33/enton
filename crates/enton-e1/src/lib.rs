@@ -3,6 +3,7 @@
 pub mod baseline;
 mod economy;
 mod invariants;
+pub mod offpolicy;
 pub mod report;
 pub mod run;
 mod scoring;
@@ -27,7 +28,10 @@ pub use tape::{
 /// sensor readings follow measured models with per-tape, per-block and per-turn correlated errors.
 /// Version 3.1.0 adds a simulated device-directedness reading to every speech cue, drawn on its
 /// own random stream so no other reading moved; runs withhold it unless asked (see [`Sensors`]).
-pub const BENCHMARK_VERSION: &str = "3.1.0";
+/// Version 3.2.0 adds off-policy evaluation ([`offpolicy`]): the organism as an exploring
+/// logging policy and a family of threshold candidates estimated from its log. Tapes and
+/// the default runs are unchanged.
+pub const BENCHMARK_VERSION: &str = "3.2.0";
 
 /// Invalid experiments fail explicitly rather than dropping stimuli or granting free calls.
 #[derive(Debug, thiserror::Error)]

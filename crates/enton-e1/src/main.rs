@@ -2,14 +2,17 @@
 // A binary owns its terminal output; only libraries must not print.
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 use enton_core::Profile;
+use enton_e1::offpolicy::{Exploration, evaluate};
 use enton_e1::{BENCHMARK_VERSION, Error, Report, Sensors, Summary, e1a, e1b, run_tape_with};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 struct Cli {
     seeds: Vec<u64>,
     sensors: Sensors,
     json: bool,
     summary: bool,
+    /// Exploration settings of the logging policy, when estimating candidates off policy.
+    off_policy: Option<Exploration>,
     help: bool,
 }
 fn parse_seeds(value: &str) -> Result<Vec<u64>, Error> {
@@ -34,6 +37,14 @@ fn parse_seeds(value: &str) -> Result<Vec<u64>, Error> {
         parts.into_iter().map(parse).collect()
     }
 }
+fn parse_fraction(value: Option<String>, what: &str) -> Result<f32, Error> {
+    let value = value.ok_or_else(|| Error::Invalid(format!("missing {what} value")))?;
+    value
+        .parse::<f32>()
+        .ok()
+        .filter(|parsed| parsed.is_finite() && *parsed >= 0.0)
+        .ok_or_else(|| Error::Invalid(format!("invalid {what}: {value}")))
+}
 fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, Error> {
     let mut args = args.into_iter();
     let mut seeds = vec![42];
@@ -41,9 +52,18 @@ fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, Error> {
     let mut sensors = Sensors::DEFAULT;
     let mut json = false;
     let mut summary = false;
+    let mut off_policy = false;
+    let mut exploration = Exploration::CALIBRATED;
     let mut help = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--off-policy" => off_policy = true,
+            "--explore-probability" => {
+                exploration.probability = parse_fraction(args.next(), "exploration probability")?;
+            }
+            "--explore-margin" => {
+                exploration.margin_nats = parse_fraction(args.next(), "exploration margin")?;
+            }
             "--seed" | "--seeds" => {
                 let value = args
                     .next()
@@ -75,6 +95,7 @@ fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, Error> {
         sensors,
         json,
         summary,
+        off_policy: off_policy.then_some(exploration),
         help,
     })
 }
@@ -82,11 +103,22 @@ fn execute() -> Result<(), Error> {
     let cli = parse_cli(std::env::args().skip(1))?;
     if cli.help {
         println!(
-            "E1 benchmark {BENCHMARK_VERSION}\nUsage: e1-sim [--seed N | --seeds A..=B | --seeds A,B] [--with-directed] [--json] [--summary] [--held-out]\nRanges are inclusive, at most 32 seeds. Calibration seeds: 0 to 999. Held-out mode is reserved for the frozen-manifest owner.\nSensors: speaker verification, media tagger and end of turn; --with-directed adds the simulated device-directedness detector."
+            "E1 benchmark {BENCHMARK_VERSION}\nUsage: e1-sim [--seed N | --seeds A..=B | --seeds A,B] [--with-directed] [--json] [--summary] [--held-out]\n       e1-sim --off-policy [--explore-probability P] [--explore-margin NATS] [--seeds ...] [--with-directed] [--json]\nRanges are inclusive, at most 32 seeds. Calibration seeds: 0 to 999. Held-out mode is reserved for the frozen-manifest owner.\nSensors: speaker verification, media tagger and end of turn; --with-directed adds the simulated device-directedness detector.\nOff policy: run t1-ref as an exploring logging policy (default probability {}, margin {} nats), estimate a family of threshold candidates from that log, and run each for real to measure the estimates.",
+            Exploration::CALIBRATED.probability,
+            Exploration::CALIBRATED.margin_nats,
         );
         return Ok(());
     }
     let profile = Profile::t1_ref();
+    if let Some(exploration) = cli.off_policy {
+        let report = evaluate(&cli.seeds, &profile, exploration, cli.sensors)?;
+        if cli.json {
+            println!("{}", serde_json::to_string(&report)?);
+        } else {
+            print!("{report}");
+        }
+        return Ok(());
+    }
     let report = |seed| {
         Report::new(
             run_tape_with(&e1a(seed)?, &profile, cli.sensors)?,
@@ -149,6 +181,32 @@ mod tests {
         let cli_json_summary = parse_cli(["--summary".into(), "--json".into()]).unwrap();
         assert!(cli_json_summary.summary);
         assert!(cli_json_summary.json);
+    }
+
+    #[test]
+    fn off_policy_runs_with_the_calibrated_exploration_unless_told_otherwise() {
+        assert_eq!(parse_cli(["--seed=1".into()]).unwrap().off_policy, None);
+        let cli = parse_cli(["--off-policy".into(), "--seeds=100..=103".into()]).unwrap();
+        assert_eq!(cli.off_policy, Some(Exploration::CALIBRATED));
+        let cli = parse_cli([
+            "--off-policy".into(),
+            "--explore-probability".into(),
+            "0.2".into(),
+            "--explore-margin".into(),
+            "0.5".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.off_policy,
+            Some(Exploration {
+                probability: 0.2,
+                margin_nats: 0.5,
+            })
+        );
+        for broken in ["-0.1", "nan", "inf", "x"] {
+            assert!(parse_cli(["--explore-probability".into(), broken.into()]).is_err());
+        }
+        assert!(parse_cli(["--explore-margin".into()]).is_err());
     }
 
     #[test]

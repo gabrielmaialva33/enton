@@ -195,6 +195,8 @@ fn keyword_speech(now: u64) -> Event {
             vad_confidence: 0.9,
             keyword: true,
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         },
     }
 }

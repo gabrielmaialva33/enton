@@ -128,6 +128,8 @@ impl EndpointDetector {
                 vad_confidence: self.voiced_frames as f32 / speech_span_frames as f32,
                 keyword: false,
                 speaker_sim: None,
+                media: None,
+                turn_complete: None,
             },
             accepted: self.voiced_frames >= MIN_SPEECH_FRAMES || was_continuing,
             forced,

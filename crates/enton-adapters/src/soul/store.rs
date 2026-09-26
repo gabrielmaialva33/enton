@@ -90,7 +90,9 @@ impl Soul {
     pub fn append_event(&self, event: &Event) -> Result<SeqNo, Error> {
         let at_ms = i64::try_from(event.now().0)
             .map_err(|_| Error::Storage(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX)))?;
-        let payload = serde_json::to_string(event)?;
+        // Canonical cues only: a non-finite measurement would serialize as `null` and
+        // make the event unreadable (or read back differently) on replay.
+        let payload = serde_json::to_string(&event.clone().canonical())?;
         let reducer_version = i64::from(self.config.reducer_version);
         let config_version = i64::from(self.config.config_version);
         self.conn.execute(

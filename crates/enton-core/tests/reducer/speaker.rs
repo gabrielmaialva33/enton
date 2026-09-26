@@ -1,12 +1,12 @@
 use enton_core::{
-    Abstention, Action, Event, Millis, Organism, Profile, Reason, SpeechCue, ThoughtId, UtteranceId,
+    Abstention, Action, Event, Millis, Organism, Reason, SpeechCue, ThoughtId, UtteranceId,
 };
 
-use super::support::{assert_abstention, assert_thought, voice};
+use super::support::{assert_abstention, assert_thought, lab_profile, voice};
 
 #[test]
 fn another_voice_inside_the_window_is_not_a_follow_up() {
-    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+    let mut organism = Organism::new(lab_profile()).unwrap();
     assert_thought(
         &organism.step(&voice(1_000, true, 1_500, 0.9)),
         1,
@@ -36,7 +36,7 @@ fn another_voice_inside_the_window_is_not_a_follow_up() {
 
 #[test]
 fn a_pending_name_call_waits_for_its_own_speaker() {
-    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+    let mut organism = Organism::new(lab_profile()).unwrap();
     assert!(matches!(
         organism.step(&voice(1_000, true, 400, 0.9)).as_slice(),
         [Action::Attend { .. }]
@@ -60,7 +60,7 @@ fn a_pending_name_call_waits_for_its_own_speaker() {
 
 #[test]
 fn only_the_addressed_voice_barges_in_without_saying_the_name() {
-    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+    let mut organism = Organism::new(lab_profile()).unwrap();
     assert_thought(
         &organism.step(&voice(1_000, true, 1_500, 0.9)),
         1,
@@ -92,7 +92,7 @@ fn only_the_addressed_voice_barges_in_without_saying_the_name() {
 #[test]
 fn only_the_verified_voice_keeps_a_conversation_through_a_long_pause() {
     let converse = || {
-        let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+        let mut organism = Organism::new(lab_profile()).unwrap();
         assert_thought(
             &organism.step(&voice(1_000, true, 1_500, 0.9)),
             1,

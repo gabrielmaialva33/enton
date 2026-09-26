@@ -159,8 +159,8 @@ pub struct SpeechCue {
     pub vad_confidence: f32,
     /// Whether the keyword (Enton's name) was detected.
     pub keyword: bool,
-    /// Similarity of this voice to whoever last addressed Enton by name, from
-    /// zero to one; `None` when no speaker verification ran.
+    /// Similarity of this voice to the owner's enrolled voiceprint, from zero to
+    /// one; `None` when no speaker verification ran.
     #[serde(default)]
     pub speaker_sim: Option<f32>,
     /// Likelihood, from zero to one, that the segment is reproduced media (TV, radio,

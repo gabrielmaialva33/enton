@@ -1,9 +1,9 @@
 //! An end-of-turn signal, when present, decides whether a keyword cue is a whole
 //! request or the start of one.
 
-use enton_core::{Action, Event, Millis, Organism, Profile, Reason, SpeechCue};
+use enton_core::{Action, Event, Millis, Organism, Reason, SpeechCue};
 
-use super::support::assert_thought;
+use super::support::{assert_thought, lab_profile};
 
 fn called(duration_ms: u32, turn_complete: Option<f32>) -> Event {
     Event::Speech {
@@ -27,23 +27,23 @@ fn attends(actions: &[Action]) -> bool {
 #[test]
 fn a_short_complete_command_is_answered_at_once() {
     // "Enton, para!" is under 900 ms, but it is a whole request.
-    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+    let mut organism = Organism::new(lab_profile()).unwrap();
     assert_thought(&organism.step(&called(500, Some(0.9))), 1, &Reason::Keyword);
 }
 
 #[test]
 fn a_long_unfinished_call_waits_for_the_rest() {
     // "Enton, você pode..." followed by a pause is not a request yet.
-    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+    let mut organism = Organism::new(lab_profile()).unwrap();
     assert!(attends(&organism.step(&called(1_400, Some(0.2)))));
     assert!(organism.is_attending());
 }
 
 #[test]
 fn without_an_end_of_turn_model_duration_decides_as_before() {
-    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+    let mut organism = Organism::new(lab_profile()).unwrap();
     assert!(attends(&organism.step(&called(500, None))));
-    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+    let mut organism = Organism::new(lab_profile()).unwrap();
     assert_thought(&organism.step(&called(1_400, None)), 1, &Reason::Keyword);
 }
 
@@ -51,7 +51,7 @@ fn without_an_end_of_turn_model_duration_decides_as_before() {
 fn another_voice_saying_the_name_does_not_get_the_shortcut() {
     // Someone else says "Enton" in passing: even if the end-of-turn model calls it
     // complete, the voice is known not to be the caller's, so the name waits.
-    let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+    let mut organism = Organism::new(lab_profile()).unwrap();
     let passing = Event::Speech {
         now: Millis(1_000),
         cue: SpeechCue {
@@ -94,7 +94,7 @@ fn unfinished_name(mut organism: Organism) -> Organism {
 fn closeness_to_an_unfinished_name_excuses_one_sensor_error_not_two() {
     // Each cue starts 300 ms after the name and finishes the turn.
     let continuation = |sim, media| cue_at(2_200, false, 900, sim, media, 0.9);
-    let fresh = || unfinished_name(Organism::new(Profile::t1_ref()).unwrap());
+    let fresh = || unfinished_name(Organism::new(lab_profile()).unwrap());
 
     // The voice check misfired once: still the caller going on.
     assert_thought(&fresh().step(&continuation(0.3, 0.1)), 1, &Reason::Keyword);
@@ -111,7 +111,7 @@ fn closeness_to_an_unfinished_name_excuses_one_sensor_error_not_two() {
 
 #[test]
 fn an_unfinished_continuation_keeps_the_request_open() {
-    let mut organism = unfinished_name(Organism::new(Profile::t1_ref()).unwrap());
+    let mut organism = unfinished_name(Organism::new(lab_profile()).unwrap());
     // "... você pode..." is still unfinished: wait again, from its end.
     assert!(attends(
         &organism.step(&cue_at(2_200, false, 900, 0.9, 0.1, 0.2))
@@ -128,7 +128,7 @@ fn an_unfinished_continuation_keeps_the_request_open() {
 #[test]
 fn a_distant_cue_gets_no_such_benefit() {
     // Starts 2 s after the name: the per-segment vetoes apply again.
-    let mut organism = unfinished_name(Organism::new(Profile::t1_ref()).unwrap());
+    let mut organism = unfinished_name(Organism::new(lab_profile()).unwrap());
     assert!(matches!(
         organism
             .step(&cue_at(3_900, false, 900, 0.3, 0.8, 0.9))
@@ -140,7 +140,7 @@ fn a_distant_cue_gets_no_such_benefit() {
 
 #[test]
 fn another_voice_saying_the_name_does_not_take_over_a_pending_turn() {
-    let mut organism = unfinished_name(Organism::new(Profile::t1_ref()).unwrap());
+    let mut organism = unfinished_name(Organism::new(lab_profile()).unwrap());
     // Someone else says "Enton" in passing, 400 ms later.
     assert!(matches!(
         organism

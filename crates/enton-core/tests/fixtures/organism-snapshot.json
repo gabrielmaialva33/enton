@@ -14,9 +14,10 @@
     "attention_ms": 5000,
     "keyword_only_ms": 900,
     "follow_up_min_vad": 0.5,
-    "follow_up_min_speaker_sim": 0.6,
+    "verified_voice_llr": 0.1,
+    "other_voice_llr": 1.0,
     "verified_attention_ms": 10000,
-    "turn_complete_threshold": 0.5,
+    "whole_request_llr_per_s": 3.0,
     "continuation_gap_ms": 1000,
     "salience_vad_weight": 0.6,
     "salience_energy_weight": 0.25,
@@ -37,7 +38,68 @@
     "keyword_barge_in_margin": 0.0,
     "echo_learning_rate": 0.2,
     "max_playback_ms": 15000,
-    "media_threshold": 0.5
+    "media_llr": 1.0,
+    "tv_line_llr": 1.0,
+    "tv_line_weight": 0.3,
+    "tv_half_life_ms": 30000,
+    "tv_on_level": 0.5,
+    "tv_caution_llr": 2.0,
+    "senses": {
+      "voice": {
+        "owner": [
+          0.38,
+          0.54,
+          0.61
+        ],
+        "other": [
+          0.33,
+          0.44,
+          0.5
+        ],
+        "reproduced": [
+          0.24,
+          0.34,
+          0.38
+        ],
+        "sd": 0.16
+      },
+      "source": {
+        "live": [
+          0.37,
+          0.33,
+          0.29
+        ],
+        "reproduced": [
+          0.58,
+          0.63,
+          0.67
+        ],
+        "sd": 0.2
+      },
+      "turn": {
+        "llr": [
+          [
+            -1.06,
+            0.02,
+            0.51,
+            1.45
+          ],
+          [
+            -1.64,
+            -0.69,
+            -0.18,
+            1.02
+          ],
+          [
+            -1.28,
+            -0.61,
+            -0.23,
+            0.67
+          ]
+        ]
+      },
+      "max_llr": 3.0
+    }
   },
   "drives": [
     {
@@ -89,19 +151,21 @@
     "until": 3605500,
     "salience": 1.825,
     "name_ended_at": 3600500,
-    "name_complete": 0.2
+    "name_finished": -1.48
   },
   "cue_expectation": {
     "energy": 0.8,
     "vad": 0.9,
     "dur": 1.0
   },
-  "habituation": 3.0092677e-36,
-  "slow_habituation": 0.024458136,
+  "habituation": 0.0,
+  "slow_habituation": 0.024458135,
   "conversation_thought": null,
   "playback_status": "Idle",
   "self_speech_has_keyword": false,
   "echo_energy_expectation": 0.69,
   "consecutive_barge_ins": 0,
-  "speaking_for_obligation": true
+  "speaking_for_obligation": true,
+  "tv_presence": 0.8199052,
+  "tv_heard_at": 106000
 }

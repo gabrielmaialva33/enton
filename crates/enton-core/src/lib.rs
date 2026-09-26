@@ -13,6 +13,7 @@ pub mod action;
 pub mod drive;
 pub mod energy;
 pub mod event;
+pub mod evidence;
 pub mod ignition;
 pub mod organism;
 pub mod ports;
@@ -22,9 +23,10 @@ pub use action::{Abstention, Action, Reason, ThoughtId};
 pub use drive::{Drive, DriveTable};
 pub use energy::{Budget, PriceTable};
 pub use event::{BodySignals, Event, Millis, SpeechCue, UtteranceId};
+pub use evidence::{Evidence, Senses, SourceModel, TurnModel, VoiceModel};
 pub use ignition::Ignition;
 pub use organism::{Organism, PlaybackStatus, REDUCER_VERSION, contains_keyword_word};
 pub use profile::{
     AttentionPolicy, BodyLimits, BudgetPolicy, EchoPolicy, HabituationPolicy, IgnitionPolicy,
-    InvalidProfile, Profile, SaliencePolicy,
+    InvalidProfile, Profile, SaliencePolicy, SourcePolicy,
 };

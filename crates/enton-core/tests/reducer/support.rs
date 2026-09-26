@@ -1,5 +1,6 @@
 use enton_core::{
-    Abstention, Action, BodySignals, Event, Millis, Profile, Reason, SpeechCue, ThoughtId,
+    Abstention, Action, BodySignals, Event, Millis, Profile, Reason, Senses, SourceModel,
+    SpeechCue, ThoughtId, TurnModel, VoiceModel,
 };
 
 pub(crate) fn speech(now: u64, keyword: bool) -> Event {
@@ -56,6 +57,31 @@ pub(crate) fn tv_cue(now: u64) -> Event {
             turn_complete: None,
         },
     }
+}
+
+/// A clean lab calibration: every sensor tells its classes apart decisively, so
+/// tests about the reducer's mechanics do not depend on what a far-field
+/// microphone can or cannot tell apart.
+pub(crate) fn lab_profile() -> Profile {
+    let mut profile = Profile::t1_ref();
+    profile.senses = Senses {
+        voice: VoiceModel {
+            owner: [0.85; 3],
+            other: [0.25; 3],
+            reproduced: [0.2; 3],
+            sd: 0.1,
+        },
+        source: SourceModel {
+            live: [0.1; 3],
+            reproduced: [0.9; 3],
+            sd: 0.1,
+        },
+        turn: TurnModel {
+            llr: [[-4.0, -2.0, 2.0, 4.0]; 3],
+        },
+        max_llr: 6.0,
+    };
+    profile
 }
 
 pub(crate) fn sensitive_profile() -> Profile {

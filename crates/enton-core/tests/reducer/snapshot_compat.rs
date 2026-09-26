@@ -10,7 +10,7 @@ use enton_core::{
 /// Reducer version that wrote the fixture. After bumping `REDUCER_VERSION`, regenerate it
 /// with `cargo test -p enton-core --test reducer -- --ignored regenerate_the_snapshot_fixture`
 /// and review the diff: it shows exactly how the organism's state changed.
-const FIXTURE_REDUCER_VERSION: u32 = 8;
+const FIXTURE_REDUCER_VERSION: u32 = 9;
 
 /// State after `run_tape`, as the soul would store it.
 const FIXTURE: &str = include_str!("../fixtures/organism-snapshot.json");

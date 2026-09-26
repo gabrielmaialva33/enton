@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::Senses;
+
 /// Hardware-specific scaffold policy. Prices are provisional budget units.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Profile {
@@ -34,16 +36,40 @@ pub struct Profile {
     /// Which sounds count as a live voice at all.
     #[serde(flatten)]
     pub source: SourcePolicy,
+    /// What each sensor's reading is worth: the calibration of this body's
+    /// microphone and models.
+    #[serde(default)]
+    pub senses: Senses,
 }
 
 /// Which sounds count as a live voice in the room.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SourcePolicy {
-    /// Cues whose media likelihood reaches this are reproduced media (TV, radio,
-    /// music): never a follow-up, a barge-in or overheard speech worth a thought.
-    /// Saying Enton's name is always heard. Cues without an audio tagger pass.
-    #[serde(default = "default_media_threshold")]
-    pub media_threshold: f32,
+    /// Evidence for a loudspeaker over a live voice, in nats, at or beyond which a
+    /// cue is reproduced media (TV, radio, music): never a follow-up, a barge-in or
+    /// overheard speech worth a thought. Saying Enton's name is always heard. Cues
+    /// without an audio tagger pass.
+    #[serde(default = "default_media_llr")]
+    pub media_llr: f32,
+    /// Evidence for a loudspeaker voice over the owner's, in nats, at or beyond
+    /// which an overheard line counts as the TV (or radio) talking.
+    #[serde(default = "default_tv_line_llr")]
+    pub tv_line_llr: f32,
+    /// How far one such line moves the belief that a TV is on toward certainty,
+    /// from zero to one.
+    #[serde(default = "default_tv_line_weight")]
+    pub tv_line_weight: f32,
+    /// Half-life, in milliseconds, of the belief that a TV is on.
+    #[serde(default = "default_tv_half_life_ms")]
+    pub tv_half_life_ms: u64,
+    /// Belief at or above which the TV counts as on.
+    #[serde(default = "default_tv_on_level")]
+    pub tv_on_level: f32,
+    /// While the TV is on, a window is stricter by this many nats: another voice
+    /// or a loudspeaker needs that much less evidence to be turned away. With the
+    /// TV on, most voices in a window are the TV's.
+    #[serde(default = "default_tv_caution_llr")]
+    pub tv_caution_llr: f32,
 }
 
 /// Body signals that force torpor.
@@ -90,21 +116,28 @@ pub struct AttentionPolicy {
     pub keyword_only_ms: u32,
     /// Minimal VAD confidence required to trigger a follow-up inside attention window.
     pub follow_up_min_vad: f32,
-    /// Minimum voice similarity for a follow-up, continuation or non-keyword barge-in
-    /// to count as the addressed speaker. Cues without speaker verification pass.
-    #[serde(default = "default_follow_up_min_speaker_sim")]
-    pub follow_up_min_speaker_sim: f32,
-    /// Longer attention window, in milliseconds, for the verified voice of whoever
-    /// addressed Enton: other voices cannot use it, so a pause to think does not end
+    /// Evidence that the owner is speaking live, in nats, at or above which a cue is
+    /// the owner's verified voice: it may use the longer window and interrupt with a
+    /// smaller margin.
+    #[serde(default = "default_verified_voice_llr")]
+    pub verified_voice_llr: f32,
+    /// Evidence against the owner speaking live, in nats, at or beyond which a cue
+    /// is someone else's (or a loudspeaker's): it neither continues nor interrupts a
+    /// turn. Cues without speaker verification or a tagger say nothing and pass.
+    #[serde(default = "default_other_voice_llr")]
+    pub other_voice_llr: f32,
+    /// Longer attention window, in milliseconds, for the owner's verified voice:
+    /// other voices cannot use it, so a pause to think does not end
     /// the conversation. Counted from the end of Enton's reply, 10 s covers an answer
     /// given about 12 s after the previous turn; longer only gives impostors more chances.
     #[serde(default = "default_verified_attention_ms")]
     pub verified_attention_ms: u64,
-    /// A keyword cue whose end-of-turn likelihood reaches this is a whole request
-    /// and is answered at once, however short; below it Enton waits for the rest.
-    /// Without an end-of-turn model the `keyword_only_ms` duration rule decides.
-    #[serde(default = "default_turn_complete_threshold")]
-    pub turn_complete_threshold: f32,
+    /// How much a keyword cue's length says about holding a whole request, in nats
+    /// per second away from `keyword_only_ms`. Added to the end-of-turn evidence, a
+    /// positive sum is answered at once and a negative one waits for the rest.
+    /// Without an end-of-turn model this is the `keyword_only_ms` duration rule.
+    #[serde(default = "default_whole_request_llr_per_s")]
+    pub whole_request_llr_per_s: f32,
     /// Longest silence, in milliseconds, between an unfinished "Enton..." and a finished
     /// turn that starts right after it for the two to be one request: that closeness is
     /// stronger evidence than a single segment's voice or media score.
@@ -178,16 +211,20 @@ pub struct EchoPolicy {
     pub max_playback_ms: u64,
 }
 
-fn default_follow_up_min_speaker_sim() -> f32 {
-    0.6
+fn default_verified_voice_llr() -> f32 {
+    0.1
+}
+
+fn default_other_voice_llr() -> f32 {
+    1.0
 }
 
 fn default_verified_attention_ms() -> u64 {
     10_000
 }
 
-fn default_turn_complete_threshold() -> f32 {
-    0.5
+fn default_whole_request_llr_per_s() -> f32 {
+    3.0
 }
 
 fn default_continuation_gap_ms() -> u32 {
@@ -198,8 +235,28 @@ fn default_verified_barge_in_margin() -> f32 {
     0.05
 }
 
-fn default_media_threshold() -> f32 {
+fn default_media_llr() -> f32 {
+    1.0
+}
+
+fn default_tv_line_llr() -> f32 {
+    1.0
+}
+
+fn default_tv_line_weight() -> f32 {
+    0.3
+}
+
+fn default_tv_half_life_ms() -> u64 {
+    30_000
+}
+
+fn default_tv_on_level() -> f32 {
     0.5
+}
+
+fn default_tv_caution_llr() -> f32 {
+    2.0
 }
 
 fn default_similarity_cutoff() -> f32 {
@@ -269,9 +326,10 @@ impl Profile {
                 attention_ms: 5_000,
                 keyword_only_ms: 900,
                 follow_up_min_vad: 0.5,
-                follow_up_min_speaker_sim: 0.6,
+                verified_voice_llr: default_verified_voice_llr(),
+                other_voice_llr: default_other_voice_llr(),
                 verified_attention_ms: 10_000,
-                turn_complete_threshold: 0.5,
+                whole_request_llr_per_s: default_whole_request_llr_per_s(),
                 continuation_gap_ms: 1_000,
             },
             salience: SaliencePolicy {
@@ -300,8 +358,14 @@ impl Profile {
                 max_playback_ms: 15_000,
             },
             source: SourcePolicy {
-                media_threshold: 0.5,
+                media_llr: default_media_llr(),
+                tv_line_llr: default_tv_line_llr(),
+                tv_line_weight: default_tv_line_weight(),
+                tv_half_life_ms: default_tv_half_life_ms(),
+                tv_on_level: default_tv_on_level(),
+                tv_caution_llr: default_tv_caution_llr(),
             },
+            senses: Senses::calibrated(),
         }
     }
 
@@ -330,9 +394,10 @@ impl Profile {
                 attention_ms: 5_000,
                 keyword_only_ms: 900,
                 follow_up_min_vad: 0.45,
-                follow_up_min_speaker_sim: 0.6,
+                verified_voice_llr: default_verified_voice_llr(),
+                other_voice_llr: default_other_voice_llr(),
                 verified_attention_ms: 10_000,
-                turn_complete_threshold: 0.5,
+                whole_request_llr_per_s: default_whole_request_llr_per_s(),
                 continuation_gap_ms: 1_000,
             },
             salience: SaliencePolicy {
@@ -361,8 +426,14 @@ impl Profile {
                 max_playback_ms: 20_000,
             },
             source: SourcePolicy {
-                media_threshold: 0.5,
+                media_llr: default_media_llr(),
+                tv_line_llr: default_tv_line_llr(),
+                tv_line_weight: default_tv_line_weight(),
+                tv_half_life_ms: default_tv_half_life_ms(),
+                tv_on_level: default_tv_on_level(),
+                tv_caution_llr: default_tv_caution_llr(),
             },
+            senses: Senses::calibrated(),
         }
     }
 
@@ -379,7 +450,8 @@ impl Profile {
             && self.salience.is_valid()
             && self.habituation.is_valid()
             && self.echo.is_valid()
-            && (0.0..=1.0).contains(&self.source.media_threshold);
+            && self.source.is_valid()
+            && self.senses.is_valid();
         if valid {
             Ok(())
         } else {
@@ -387,6 +459,21 @@ impl Profile {
                 name: self.name.clone(),
             })
         }
+    }
+}
+
+impl SourcePolicy {
+    fn is_valid(&self) -> bool {
+        [self.media_llr, self.tv_line_llr]
+            .iter()
+            .all(|llr| llr.is_finite() && *llr > 0.0)
+            && self.tv_line_weight > 0.0
+            && self.tv_line_weight <= 1.0
+            && self.tv_half_life_ms > 0
+            && self.tv_on_level > 0.0
+            && self.tv_on_level < 1.0
+            && self.tv_caution_llr.is_finite()
+            && self.tv_caution_llr >= 0.0
     }
 }
 
@@ -425,9 +512,12 @@ impl AttentionPolicy {
         self.attention_ms > 0
             && self.keyword_only_ms > 0
             && (0.0..=1.0).contains(&self.follow_up_min_vad)
-            && (0.0..=1.0).contains(&self.follow_up_min_speaker_sim)
+            && [self.verified_voice_llr, self.other_voice_llr]
+                .iter()
+                .all(|llr| llr.is_finite() && *llr > 0.0)
             && self.verified_attention_ms >= self.attention_ms
-            && (0.0..=1.0).contains(&self.turn_complete_threshold)
+            && self.whole_request_llr_per_s.is_finite()
+            && self.whole_request_llr_per_s > 0.0
             && self.continuation_gap_ms > 0
     }
 }

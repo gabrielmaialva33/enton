@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::profile::{InvalidProfile, Profile};
 use crate::{
-    Abstention, Action, Budget, DriveTable, Event, Ignition, Millis, PriceTable, Reason, SpeechCue,
-    ThoughtId, UtteranceId,
+    Abstention, Action, Budget, DriveTable, Event, Evidence, Ignition, Millis, PriceTable, Reason,
+    SpeechCue, ThoughtId, UtteranceId,
 };
 
 fn default_echo_energy_expectation() -> f32 {
@@ -28,16 +28,28 @@ struct PendingAttend {
     /// When the name segment ended, to tell a continuation that follows right after it.
     #[serde(default)]
     name_ended_at: Millis,
-    /// End-of-turn likelihood of the name segment, when an end-of-turn model ran.
+    /// The evidence, finished over unfinished in nats, by which the name was judged
+    /// unfinished, when an end-of-turn model ran.
     #[serde(default)]
-    name_complete: Option<f32>,
+    name_finished: Option<f32>,
+}
+
+/// What stands against a cue continuing the owner's turn.
+struct Vetoes {
+    /// The tagger heard a loudspeaker.
+    media: bool,
+    /// Voice and source together rule out the owner speaking live.
+    other_voice: bool,
+    /// The voice alone rules out the owner: an objection independent of the
+    /// tagger's, so closeness to an unfinished name excuses one sensor, never two.
+    voice_alone: bool,
 }
 
 /// A continuation may start this much before the name's recorded end: endpoint jitter.
 const CONTINUATION_JITTER_MS: u64 = 50;
 
 /// The version of the brainstem reducer and snapshot schema.
-pub const REDUCER_VERSION: u32 = 8;
+pub const REDUCER_VERSION: u32 = 9;
 
 /// The physical playback / vocalization state of the organism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -96,6 +108,11 @@ pub struct Organism {
     consecutive_barge_ins: u32,
     #[serde(default)]
     speaking_for_obligation: bool,
+    /// Belief, from zero to one, that a TV (or radio) is playing, as of `tv_heard_at`.
+    #[serde(default)]
+    tv_presence: f32,
+    #[serde(default)]
+    tv_heard_at: Millis,
 }
 
 impl Organism {
@@ -137,6 +154,8 @@ impl Organism {
             echo_energy_expectation: echo_initial_energy,
             consecutive_barge_ins: 0,
             speaking_for_obligation: false,
+            tv_presence: 0.0,
+            tv_heard_at: Millis(0),
         })
     }
 
@@ -194,6 +213,12 @@ impl Organism {
     #[must_use]
     pub fn conversation_thought(&self) -> Option<ThoughtId> {
         self.conversation_thought
+    }
+
+    /// Belief, from zero to one, that a TV is playing, as of the last overheard line.
+    #[must_use]
+    pub fn tv_presence(&self) -> f32 {
+        self.tv_presence
     }
 
     /// Returns the current playback status.
@@ -440,9 +465,10 @@ impl Organism {
         // enough, and a voice allowed to interrupt. Only loudness says anything about the
         // echo path, so only a cue that failed it may train the echo model.
         let (loud_enough, speech_like, voice_allowed) = if cue.keyword {
-            let loud = if self.self_speech_has_keyword || self.is_known_other_speaker(cue) {
-                // Predicted keyword in self-speech, or a voice verified as not the caller
-                // (Enton's own echo, the TV): requires full double-talk margin
+            let loud = if self.self_speech_has_keyword || self.is_unverified_voice(cue) {
+                // Predicted keyword in self-speech, or a voice that verification did not
+                // confirm as the owner's (while Enton talks, its own echo is the likeliest
+                // voice): requires full double-talk margin
                 norm_energy > self.echo_energy_expectation + echo.echo_barge_in_margin
             } else {
                 // Unpredicted keyword: requires reduced margin over expected echo to reject TTS phonetic false positives
@@ -461,7 +487,7 @@ impl Organism {
             (
                 norm_energy > self.echo_energy_expectation + margin,
                 norm_vad >= self.profile.attention.follow_up_min_vad,
-                self.is_addressed_speaker(cue),
+                !self.is_unverified_voice(cue),
             )
         };
         let is_barge_in = loud_enough && speech_like && voice_allowed;
@@ -557,6 +583,11 @@ impl Organism {
 
         // Quiet period (outside playback and hangover): user speech resets consecutive barge-in ratchet
         self.consecutive_barge_ins = 0;
+        // Outside Enton's own playback, a loudspeaker voice is someone else's: the TV.
+        // Only speech says so; a click or a hum carries no voice to judge.
+        if !cue.keyword && norm_vad >= self.profile.attention.follow_up_min_vad {
+            self.track_tv(now, cue);
+        }
 
         if cue.keyword {
             return self.speech_addressed(now, cue, norm_energy, norm_vad, norm_dur);
@@ -565,8 +596,9 @@ impl Organism {
             return self.speech_in_window(now, cue, norm_energy, norm_vad, norm_dur);
         }
 
-        // Overheard speech, outside any attention window
-        let media = self.is_media(cue);
+        // Overheard speech, outside any attention window: the TV makes a loudspeaker
+        // likelier here too.
+        let media = self.window_vetoes(now, cue).media;
         self.speech_unaddressed(now, media, norm_energy, norm_vad, norm_dur)
     }
 
@@ -599,7 +631,7 @@ impl Organism {
                 until,
                 salience: base_salience,
                 name_ended_at: now,
-                name_complete: cue.turn_complete,
+                name_finished: cue.turn_complete.map(|_| self.whole_request_log_odds(cue)),
             });
             self.conversation_thought = None;
             return Action::Attend { until };
@@ -636,9 +668,12 @@ impl Organism {
     ) -> Action {
         // Closeness to an unfinished name outweighs one sensor's veto, never both: a cue
         // that the media tagger and the speaker check both reject is someone else.
-        let media = self.is_media(cue);
-        let other_voice = !self.is_addressed_speaker(cue);
-        let excused = self.is_adjacent_continuation(now, cue, norm_vad) && !(media && other_voice);
+        let Vetoes {
+            media,
+            other_voice,
+            voice_alone,
+        } = self.window_vetoes(now, cue);
+        let excused = self.is_adjacent_continuation(now, cue, norm_vad) && !(media && voice_alone);
         if !excused && media {
             // Reproduced media inside the window neither continues nor extends it.
             return Action::Abstain {
@@ -673,11 +708,8 @@ impl Organism {
             let continuation_salience =
                 self.calculate_base_salience(norm_energy, norm_vad, norm_dur);
             let combined_salience = pending.salience.max(continuation_salience + 1.0);
-            let threshold = self.profile.attention.turn_complete_threshold;
-            if cue
-                .turn_complete
-                .is_some_and(|complete| complete < threshold)
-            {
+            let turn = self.turn_evidence(cue);
+            if turn.is_some_and(|finished| finished < 0.0) {
                 // The request is still going ("Enton, você pode... hã..."): keep waiting,
                 // now anchored at this segment's end.
                 let until = Millis(now.0.saturating_add(self.profile.attention.attention_ms));
@@ -686,7 +718,7 @@ impl Organism {
                     until,
                     salience: combined_salience,
                     name_ended_at: now,
-                    name_complete: cue.turn_complete,
+                    name_finished: turn,
                 });
                 return Action::Attend { until };
             }
@@ -819,40 +851,59 @@ impl Organism {
             Some(Millis(from.0.saturating_add(policy.verified_attention_ms)));
     }
 
-    /// Whether the cue's voice was verified as whoever addressed Enton (not merely unknown).
-    fn is_verified_speaker(&self, cue: &SpeechCue) -> bool {
-        cue.speaker_sim
-            .is_some_and(|sim| sim >= self.profile.attention.follow_up_min_speaker_sim)
+    /// What the calibrated sensors say about a cue.
+    fn evidence(&self, cue: &SpeechCue) -> Evidence {
+        self.profile.senses.read(cue)
     }
 
-    /// Whether a keyword cue already carries a whole request. An end-of-turn model
-    /// decides for the caller's voice (or an unverified one); a voice known to be
-    /// someone else falls back to the duration rule, so a name dropped mid-sentence
-    /// by another person waits instead of buying a thought. Without the model, a cue
-    /// shorter than `keyword_only_ms` is the name alone ("Enton?") and Enton waits.
+    /// End-of-turn evidence, finished over unfinished, when an end-of-turn model ran.
+    fn turn_evidence(&self, cue: &SpeechCue) -> Option<f32> {
+        cue.turn_complete
+            .map(|_| self.evidence(cue).finished_over_unfinished)
+    }
+
+    /// Whether the evidence verifies the owner speaking live (not merely unknown).
+    fn is_verified_speaker(&self, cue: &SpeechCue) -> bool {
+        self.evidence(cue).owner_live() >= self.profile.attention.verified_voice_llr
+    }
+
+    /// Whether a keyword cue already carries a whole request. Its length says how
+    /// likely that is (the name alone is short) and an end-of-turn model adds its
+    /// evidence, except for a voice known to be someone else or reproduced media,
+    /// whose turn is not Enton's to judge: then length alone decides, so a name
+    /// dropped mid-sentence by another person waits instead of buying a thought.
+    /// Without the model, a cue shorter than `keyword_only_ms` is the name alone
+    /// ("Enton?") and Enton waits.
     fn is_whole_request(&self, cue: &SpeechCue) -> bool {
+        self.whole_request_log_odds(cue) >= 0.0
+    }
+
+    /// Log-odds, in nats, that a keyword cue holds a whole request: its length,
+    /// plus the end-of-turn evidence when the voice is the owner's to judge.
+    fn whole_request_log_odds(&self, cue: &SpeechCue) -> f32 {
         let attention = self.profile.attention;
-        match cue.turn_complete {
-            Some(complete) if !self.is_known_other_speaker(cue) && !self.is_media(cue) => {
-                complete >= attention.turn_complete_threshold
-            }
-            _ => cue.duration_ms >= attention.keyword_only_ms,
-        }
+        let beyond_name_s = (cue.duration_ms as f32 - attention.keyword_only_ms as f32) / 1_000.0;
+        let length = attention.whole_request_llr_per_s * beyond_name_s;
+        let turn = if self.is_known_other_speaker(cue) || self.is_media(cue) {
+            0.0
+        } else {
+            self.evidence(cue).finished_over_unfinished
+        };
+        length + turn
     }
 
     /// Whether the cue is the rest of a name left unfinished just before: the name
-    /// scored incomplete, this cue scores complete, and it starts within
+    /// read as unfinished, this cue reads as finished, and it starts within
     /// `continuation_gap_ms` of the name's end (allowing endpointing jitter).
     fn is_adjacent_continuation(&self, now: Millis, cue: &SpeechCue, norm_vad: f32) -> bool {
         let attention = self.profile.attention;
         let Some(pending) = &self.pending_attend else {
             return false;
         };
-        let threshold = attention.turn_complete_threshold;
-        let name_unfinished = pending.name_complete.is_some_and(|name| name < threshold);
-        let finishes = cue
-            .turn_complete
-            .is_some_and(|complete| complete >= threshold);
+        let name_unfinished = pending.name_finished.is_some_and(|name| name < 0.0);
+        let finishes = self
+            .turn_evidence(cue)
+            .is_some_and(|finished| finished > 0.0);
         let started = now.0.saturating_sub(u64::from(cue.duration_ms));
         let name_end = pending.name_ended_at.0;
         let close = started.saturating_add(CONTINUATION_JITTER_MS) >= name_end
@@ -860,22 +911,67 @@ impl Organism {
         name_unfinished && finishes && close && norm_vad >= attention.follow_up_min_vad
     }
 
-    /// Whether an audio tagger scored the cue as reproduced media (TV, radio, music).
+    /// Whether verification ran and did not confirm the owner. While Enton talks its
+    /// own echo is the likeliest voice, so interrupting it takes positive evidence;
+    /// without verification, loudness alone decides, as it always did.
+    fn is_unverified_voice(&self, cue: &SpeechCue) -> bool {
+        cue.speaker_sim.is_some() && !self.is_verified_speaker(cue)
+    }
+
+    /// The TV belief at `now`, decayed since the last line that fed it.
+    fn tv_presence_at(&self, now: Millis) -> f32 {
+        decay(
+            self.tv_presence,
+            now.since(self.tv_heard_at),
+            self.profile.source.tv_half_life_ms,
+        )
+    }
+
+    /// Feed the TV belief with an overheard line: a voice that sounds like a
+    /// loudspeaker rather than the owner moves it toward certainty.
+    fn track_tv(&mut self, now: Millis, cue: &SpeechCue) {
+        let source = self.profile.source;
+        let evidence = self.evidence(cue);
+        let loudspeaker = evidence.owner_over_reproduced + evidence.live_over_reproduced;
+        let mut presence = self.tv_presence_at(now);
+        if loudspeaker <= -source.tv_line_llr {
+            presence += source.tv_line_weight * (1.0 - presence);
+        }
+        self.tv_presence = presence.clamp(0.0, 1.0);
+        self.tv_heard_at = now;
+    }
+
+    /// Whether a cue is reproduced media, and whether it is someone else's voice.
+    /// While the TV is on, both take `tv_caution_llr` less evidence, but only for a
+    /// sensor that ran: a cue without one is never turned away for the TV.
+    fn window_vetoes(&self, now: Millis, cue: &SpeechCue) -> Vetoes {
+        let source = self.profile.source;
+        let caution = if self.tv_presence_at(now) >= source.tv_on_level {
+            source.tv_caution_llr
+        } else {
+            0.0
+        };
+        let evidence = self.evidence(cue);
+        let other_llr = -(self.profile.attention.other_voice_llr - caution);
+        let voice = evidence
+            .owner_over_other
+            .min(evidence.owner_over_reproduced);
+        Vetoes {
+            media: cue.media.is_some()
+                && evidence.live_over_reproduced <= -(source.media_llr - caution),
+            other_voice: cue.speaker_sim.is_some() && evidence.owner_live() <= other_llr,
+            voice_alone: cue.speaker_sim.is_some() && voice <= other_llr,
+        }
+    }
+
+    /// Whether the evidence says the cue came from a loudspeaker (TV, radio, music).
     fn is_media(&self, cue: &SpeechCue) -> bool {
-        cue.media
-            .is_some_and(|media| media >= self.profile.source.media_threshold)
+        self.evidence(cue).live_over_reproduced <= -self.profile.source.media_llr
     }
 
-    /// Whether verification says the cue's voice is not whoever addressed Enton.
+    /// Whether the evidence says the cue is not the owner speaking live.
     fn is_known_other_speaker(&self, cue: &SpeechCue) -> bool {
-        cue.speaker_sim
-            .is_some_and(|sim| sim < self.profile.attention.follow_up_min_speaker_sim)
-    }
-
-    /// Whether a cue may speak for the current turn: a matching voice, or no verification.
-    fn is_addressed_speaker(&self, cue: &SpeechCue) -> bool {
-        cue.speaker_sim
-            .is_none_or(|sim| sim >= self.profile.attention.follow_up_min_speaker_sim)
+        self.evidence(cue).owner_live() <= -self.profile.attention.other_voice_llr
     }
 
     fn calculate_base_salience(&self, norm_energy: f32, norm_vad: f32, norm_dur: f32) -> f32 {
@@ -959,13 +1055,31 @@ impl Organism {
     }
 }
 
-/// Exponential decay of `level` over `dt_ms` with the given half-life.
+/// Exponential decay of `level` over `dt_ms` with the given half-life, in IEEE
+/// arithmetic only: whole half-lives halve exactly and the fraction left uses a
+/// fixed polynomial, so every platform computes the same bits (a library `exp`
+/// is not specified to).
 fn decay(level: f32, dt_ms: u64, half_life_ms: u64) -> f32 {
-    if level <= 0.0 {
+    if level <= 0.0 || half_life_ms == 0 {
         return 0.0;
     }
-    let factor = (-std::f32::consts::LN_2 * (dt_ms as f32) / half_life_ms as f32).exp();
-    (level * factor).clamp(0.0, 1.0)
+    let halvings = dt_ms / half_life_ms;
+    if halvings >= 64 {
+        return 0.0;
+    }
+    // 2^-halvings, exactly: the biased exponent of a power of two.
+    let whole = u32::try_from((127 - halvings) << 23).map_or(0.0, f32::from_bits);
+    let fraction = (dt_ms % half_life_ms) as f32 / half_life_ms as f32;
+    (level * whole * exp2_neg(fraction)).clamp(0.0, 1.0)
+}
+
+/// 2^-x for x in [0, 1): the Taylor series of e^t at t = -x ln 2, to degree 10
+/// in Horner form, within a few units in the last place.
+fn exp2_neg(x: f32) -> f32 {
+    let t = -x * std::f32::consts::LN_2;
+    (1..=10u8)
+        .rev()
+        .fold(1.0, |acc, k| 1.0 + t * acc / f32::from(k))
 }
 
 fn normalized(value: f32) -> f32 {
@@ -986,6 +1100,23 @@ pub fn contains_keyword_word(text: &str, keyword: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decay_halves_exactly_at_each_half_life() {
+        assert_eq!(decay(1.0, 30_000, 30_000).to_bits(), 0.5_f32.to_bits());
+        assert_eq!(decay(0.8, 60_000, 30_000).to_bits(), 0.2_f32.to_bits());
+        assert_eq!(decay(0.8, 0, 30_000).to_bits(), 0.8_f32.to_bits());
+        assert_eq!(decay(1.0, 64 * 30_000, 30_000).to_bits(), 0);
+    }
+
+    #[test]
+    fn decay_follows_the_exponential_between_half_lives() {
+        for dt in [1_u64, 250, 7_500, 15_000, 29_999, 45_000, 1_234_567] {
+            let exact = (-(dt as f64) / 30_000.0 * std::f64::consts::LN_2).exp();
+            let got = f64::from(decay(1.0, dt, 30_000));
+            assert!((got - exact).abs() < 1e-6, "{dt} ms: {got} vs {exact}");
+        }
+    }
 
     #[test]
     fn profile_validation() {

@@ -13,7 +13,7 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-dea584?style=for-the-badge&logo=rust&logoColor=white)](./Cargo.toml)
 [![unsafe](https://img.shields.io/badge/unsafe-forbidden-991b1b?style=for-the-badge)](./Cargo.toml)
 [![Binary](https://img.shields.io/badge/core_binary-7.0_MiB-15803d?style=for-the-badge)](#build-profiles)
-[![Tests](https://img.shields.io/badge/tests-182_passing-00C853?style=for-the-badge)](./crates)
+[![Tests](https://img.shields.io/badge/tests-211_passing-00C853?style=for-the-badge)](./crates)
 [![License](https://img.shields.io/badge/license-MIT-dc2626?style=for-the-badge)](./LICENSE)
 
 ---
@@ -93,7 +93,7 @@ flowchart LR
 | **Runtime** | tokio `current_thread`: one event loop, bounded channels |
 | **Crates** | 4: core, adapters, binary, E1 harness |
 | **Source** | 13,049 lines + 4,474 lines of tests and examples |
-| **Tests** | 182 passing with default features, 248 with all features |
+| **Tests** | 211 passing with default features, 277 with all features |
 | **Lean binary** | 7.0 MiB (5.3 MiB on aarch64), no shared libraries |
 | **Cortex** | Any OpenAI-compatible server, local Ollama by default |
 
@@ -206,16 +206,16 @@ and whether the keyword was heard:
 %%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#fecaca', 'primaryTextColor': '#450a0a', 'primaryBorderColor': '#991b1b', 'secondaryColor': '#bbf7d0', 'secondaryTextColor': '#052e16', 'secondaryBorderColor': '#166534', 'tertiaryColor': '#fee2e2', 'tertiaryTextColor': '#450a0a', 'lineColor': '#991b1b', 'textColor': '#1c1917'}}}%%
 flowchart TD
     CUE(["Speech cue<br/>energy · VAD · duration · keyword"]) --> ECHO{"Enton speaking<br/>or in hangover?"}
-    ECHO -- yes --> BARGE{"Louder than expected echo,<br/>in the caller's voice or saying the name?"}
+    ECHO -- yes --> BARGE{"Louder than expected echo,<br/>in the owner's verified voice or saying the name?"}
     BARGE -- no --> A_ECHO[["Abstain · SelfEcho"]]
     BARGE -- yes --> CANCEL["Cancel playback"] --> OBL
     ECHO -- no --> KW{"Keyword?"}
     KW -- "yes · unfinished (or under 900 ms)" --> ATTEND[["Attend · wait 5 s for the rest"]]
     KW -- yes --> OBL["Obligation budget"]
-    KW -- no --> WIN{"Inside attention window?<br/>5 s, or 10 s for the caller's verified voice"}
-    WIN -- yes --> SPK{"Same voice as<br/>whoever called Enton?"}
-    SPK -- no --> A_O[["Abstain · OtherSpeaker"]]
-    SPK -- "yes · follow-up" --> OBL
+    KW -- no --> WIN{"Inside attention window?<br/>5 s, or 10 s with evidence for the owner's voice"}
+    WIN -- yes --> SPK{"Evidence rules out<br/>the owner speaking live?<br/>(stricter while the TV is on)"}
+    SPK -- yes --> A_O[["Abstain · OtherSpeaker or Media"]]
+    SPK -- "no · follow-up" --> OBL
     WIN -- no --> MED{"Sounds like<br/>TV or radio?"}
     MED -- yes --> A_M[["Abstain · Media"]]
     MED -- no --> SAL["Salience = 0.60·VAD + 0.25·energy + 0.15·duration<br/>+ novelty − habituation"]
@@ -251,7 +251,7 @@ audited later to find false negatives.
 | `Torpor` | The body has a fever or a critical battery |
 | `Habituation` | Suppressed by repetition of similar stimuli |
 | `SelfEcho` | Coincided with its own voice and showed no barge-in evidence |
-| `OtherSpeaker` | Inside an attention window, the voice was not the one that called Enton |
+| `OtherSpeaker` | Inside an attention window, the evidence ruled out the owner speaking live |
 | `Media` | The sound was reproduced media (TV, radio, music), not a live voice |
 
 ---
@@ -361,10 +361,11 @@ combined pressure is still below both profiles' thresholds. Enton is quiet by de
 | Thought cooldown | 10 s | 5 s |
 | Drive EMA α | 0.1 | 0.2 |
 | Attention window | 5 s | 5 s |
-| Follow-up speaker similarity | ≥ 0.6 | ≥ 0.6 |
-| Attention window for the verified caller | 10 s | 10 s |
-| Media likelihood treated as TV/radio | ≥ 0.5 | ≥ 0.5 |
-| End-of-turn likelihood for a finished request | ≥ 0.5 | ≥ 0.5 |
+| Evidence that rules out the owner's live voice | 1 nat | 1 nat |
+| Attention window for the owner's verified voice (≥ 0.1 nat) | 10 s | 10 s |
+| Evidence treated as TV/radio | 1 nat | 1 nat |
+| Extra strictness while the TV is on | 2 nats | 2 nats |
+| Whole request: length (3 nats/s from 900 ms) plus end-of-turn evidence | ≥ 0 | ≥ 0 |
 | Gap that joins an unfinished name to its continuation | 1 s | 1 s |
 | Habituation half-life | 30 s | 15 s |
 | Slow habituation half-life | 20 min | 10 min |
@@ -389,31 +390,44 @@ cargo run --release -p enton-e1 -- --seed 42               # one seed, full repo
 cargo run --release -p enton-e1 -- --seeds 0..=31 --summary # pooled over 32 seeds
 ```
 
-**Current status** (synthetic proxy, benchmark 2.5.0, calibration seeds 0 to 31, measured
+**Current status** (synthetic proxy, benchmark 3.0.0, reducer v9, report seeds 0 to 31, measured
 2026-09-26). One seed is an anecdote, so the table pools 32:
 
 | Criterion (RFC 0001 §7) | Target | Pooled result | Seeds passing | Status |
 |:------------------------|:------:|:--------------|:-------------:|:------:|
-| Fewer cortex calls than the simple controller | ≥ 50 % | 54.2 % (6476 vs 14126) | 32 / 32 | ✅ |
-| Relevant requests served (E1a) | ≥ 99 / 100 | 2974 / 3200 | 0 / 32 | ❌ |
+| Fewer cortex calls than the simple controller | ≥ 50 % | 53.6 % (6020 vs 12968) | 27 / 32 | ⚠️ |
+| Relevant requests served (E1a) | ≥ 99 / 100 | 1769 / 3200 | 0 / 32 | ❌ |
 | Commands served (E1b) | 10 / 10 | 320 / 320 | 32 / 32 | ✅ |
-| Cortex calls during 50 min of noise (E1b) | 0 | 26 (0.8 per seed, at most 2) | 9 / 32 | ❌ |
+| Cortex calls during 50 min of noise (E1b) | 0 | 29 (0.9 per seed, at most 2) | 6 / 32 | ❌ |
 | Self-ignitions | 0 | needs physical measurement (synthetic proxy: 0) | | pending |
 | Added p95 latency | ≤ 100 ms | needs physical measurement | | pending |
 | Core RSS over 24 h | stable | needs physical measurement | | pending |
 
 The summary also reports a 95% Clopper-Pearson upper bound on the request miss rate (now
-7.9%): a "99 / 100" claim is only worth making once that bound, not a single seed, is below 1%.
+46.2%): a "99 / 100" claim is only worth making once that bound, not a single seed, is below 1%.
 
-Benchmark 2.5.0 simulates three imperfect sensors: a speaker verifier (3% of voices confused either
-way), a media tagger (5% of TV missed, 3% of live voices flagged) and an end-of-turn model (2 to 3%
-wrong). The organism only accepts follow-ups from the voice that called it, keeps a 10 s window
-open for that voice alone, never treats reproduced media as a live voice, answers a finished
-request at once and waits for an unfinished one, and lets closeness in time to an unfinished
-"Enton..." excuse one sensor error (never two). What still loses requests is the per-segment
-sensor error rate compounding over a conversation: judging the caller's voice across the whole
-conversation, not segment by segment, is the next step. The simulated sensors have clean class
-separation and independent errors; empirically calibrated, correlated errors are still to come.
+Benchmark 3.0.0 replaces idealized sensors with measured ones. Speaker similarity follows CAM++
+scores measured on simulated rooms (across the room, the owner scores 0.57 ± 0.13 on a 1.5 s line
+and a relative in the same room 0.46 ± 0.15), the media tagger follows published single-microphone
+detectors (about a third of TV dialogue missed) and the end-of-turn model follows Smart Turn v3.2 on
+real Portuguese pauses (the name alone reads as finished about 20% of the time, confidently). Errors
+are correlated: distance and background TV are drawn per three-minute block, the owner's voice has
+its own offset, and pause style is shared within a turn. The tapes also add what the organism's
+rules could get wrong: the owner talking to someone else inside the window, another person talking
+right after a short request, and a distractor right after an unfinished "Enton...". Under these
+sensors reducer v8, which read each sensor against a fixed threshold, vetoed 89% of the owner's
+follow-ups as someone else's voice and served 1432 / 3200 requests.
+
+Reducer v9 reads sensors as evidence: calibrated log-likelihood ratios in nats, linear in each
+reading so replay stays bit-identical, capped at 3 nats and weighed against the owner speaking live.
+It also tracks whether a TV is on and is stricter while it is. That serves 1769 / 3200 requests and
+a third more turns. With the TV off it serves 72% (far) to 86% (near) of turns; with the TV on, 43
+to 47%. With these three sensors one segment tells the owner from a relative with d' of about 0.6
+and from a TV voice with d' of about 1.3, so no threshold keeps 99% of the owner's follow-ups and
+turns most TV lines away. Closing the gap takes another kind of evidence: whether speech is addressed
+to Enton (text-based detection, about 14% equal error rate in published work) or where it comes
+from (a microphone array; the TV does not move). Thresholds were chosen on calibration seeds 100 to
+131 and are reported here on seeds 0 to 31.
 
 Every run also watches the reducer at each step, in the spirit of TigerBeetle's VOPR: one
 decision per speech cue, thought IDs in order, time never running backward, budgets and
@@ -435,7 +449,7 @@ for the freeze owner.
 | **Senses** | YOLO, Whisper, CLAP, InsightFace, FER | Body signals, VAD and keyword before any transcription |
 | **Memory** | Qdrant episodes | Durable, replayable event log |
 | **Voice** | Kokoro in Python | Kokoro via sherpa-onnx, with barge-in |
-| **Proof** | 136 unit tests | 182 tests plus a refutation experiment |
+| **Proof** | 136 unit tests | 211 tests plus a refutation experiment |
 | **Footprint** | CUDA + PyTorch | 7.0 MiB binary, no native runtime in the lean build |
 
 Vision is deliberately out of scope for milestone 1.

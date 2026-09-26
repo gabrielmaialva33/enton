@@ -32,7 +32,7 @@ Out of scope for M1: vision, distillation, multiple bodies, WASM skills.
 
 | Crate                   | Responsibility                                                                                                                                                                                                                                                                                               |
 |-------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `crates/enton-core`     | The pure cognitive core: `(state, event) → (state, actions)`. **No I/O, no clock, no randomness, fully deterministic**: time and coin flips enter as data. Drive tables, budgets, ignition, and the port traits for inference (`Cortex`, `SpeechToText`, `TextToSpeech`) live here with no implementations. |
+| `crates/enton-core`     | The pure cognitive core: `(state, event) → (state, actions)`. **No I/O, no clock, no randomness, fully deterministic**: time and coin flips enter as data. Drive tables, budgets, ignition, calibrated sensor evidence (`evidence.rs`: log-likelihood ratios in nats, IEEE arithmetic only, no transcendental functions, so replay is bit-identical everywhere), and the port traits for inference (`Cortex`, `SpeechToText`, `TextToSpeech`) live here with no implementations. |
 | `crates/enton-adapters` | All I/O: body signals (sysfs/procfs), clock, audio, voice, voice identity, soul (log), cortex client.                                                                                                                                                                                                                    |
 | `crates/enton`          | The binary: composes core + adapters according to the hardware profile (`--profile t1-ref\|desktop`).                                                                                                                                                                                                        |
 | `crates/enton-e1`       | Experiment E1: synthetic cue tapes, the simple-controller baselines, the per-step reducer invariants and the pass/fail report (`e1-sim`). Depends only on `enton-core`.|
@@ -141,6 +141,11 @@ The implementation of the thesis is refuted if it fails any of these:
 - zero cortex calls during the 50 min of noise in E1b;
 - ≤ 100 ms additional p95 latency;
 - stable core RSS (no sustained growth over 24 h).
+
+Calibration discipline: report on seeds 0 to 31 and tune on other calibration
+seeds (for example 100 to 131, through `enton_e1::run_tape_with`), choosing by a
+rule stated before looking at the report seeds. Never regress one criterion to
+gain on another. Seeds from 1000 up are held out for the freeze owner.
 
 ## Git
 

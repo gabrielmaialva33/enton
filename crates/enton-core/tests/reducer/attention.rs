@@ -17,6 +17,8 @@ fn keyword_only_turn_attends_and_merges_continuation() {
             vad_confidence: 0.95,
             keyword: true,
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         },
     });
     assert_eq!(
@@ -42,6 +44,8 @@ fn keyword_only_turn_attends_and_merges_continuation() {
             vad_confidence: 0.9,
             keyword: false,
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         },
     });
 
@@ -74,6 +78,8 @@ fn keyword_only_turn_thinks_on_timeout_when_no_continuation_arrives() {
             vad_confidence: 0.9,
             keyword: true,
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         },
     });
     assert_eq!(
@@ -124,6 +130,8 @@ fn attention_window_follow_up_bypasses_cooldown_and_pays_normal_energy() {
             vad_confidence: 0.95,
             keyword: true,
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         },
     });
     assert_thought(&actions1, 1, &Reason::Keyword);
@@ -138,6 +146,8 @@ fn attention_window_follow_up_bypasses_cooldown_and_pays_normal_energy() {
             vad_confidence: 0.6, // meets minimal VAD (0.5)
             keyword: false,
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         },
     });
     // Bypasses cooldown! Becomes Reason::FollowUp
@@ -155,6 +165,8 @@ fn attention_window_follow_up_bypasses_cooldown_and_pays_normal_energy() {
             vad_confidence: 0.6,
             keyword: false,
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         },
     });
     assert_abstention(&actions3, Abstention::OutOfEnergy);
@@ -194,6 +206,8 @@ fn a8_slow_reply_anchors_attention_independent_of_tick_interleaving() {
         vad_confidence: 0.9,
         keyword: false,
         speaker_sim: None,
+        media: None,
+        turn_complete: None,
     };
     let follow_up = org_with_tick.step(&Event::Speech {
         now: Millis(7_000),
@@ -296,6 +310,8 @@ fn dual_mode_attention_anchoring() {
             vad_confidence: 0.95,
             keyword: true,
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         },
     });
     text_org.step(&Event::CortexReply {
@@ -314,6 +330,8 @@ fn dual_mode_attention_anchoring() {
             vad_confidence: 0.95,
             keyword: true,
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         },
     });
     voice_org.step(&Event::CortexReply {

@@ -1,5 +1,5 @@
 use enton_core::{
-    Abstention, Action, Event, Millis, Organism, Profile, Reason, ThoughtId, UtteranceId,
+    Abstention, Action, Event, Millis, Organism, Profile, Reason, SpeechCue, ThoughtId, UtteranceId,
 };
 
 use super::support::{assert_abstention, assert_thought, voice};
@@ -71,12 +71,15 @@ fn only_the_addressed_voice_barges_in_without_saying_the_name() {
         utterance: UtteranceId(1),
     });
 
-    // A loud other voice over Enton's playback is not an interruption.
+    // A loud other voice over Enton's playback is not an interruption, and it is
+    // named for what it is: loud enough, wrong voice. It must not teach the echo model.
+    let expectation = organism.echo_energy_expectation();
     assert_abstention(
         &organism.step(&voice(2_000, false, 1_000, 0.2)),
-        Abstention::SelfEcho,
+        Abstention::OtherSpeaker,
     );
     assert!(organism.is_speaking());
+    assert!((organism.echo_energy_expectation() - expectation).abs() < f32::EPSILON);
 
     // The same loudness in the addressed voice is a barge-in.
     assert_thought(
@@ -84,4 +87,63 @@ fn only_the_addressed_voice_barges_in_without_saying_the_name() {
         2,
         &Reason::FollowUp,
     );
+}
+
+#[test]
+fn only_the_verified_voice_keeps_a_conversation_through_a_long_pause() {
+    let converse = || {
+        let mut organism = Organism::new(Profile::t1_ref()).unwrap();
+        assert_thought(
+            &organism.step(&voice(1_000, true, 1_500, 0.9)),
+            1,
+            &Reason::Keyword,
+        );
+        organism.step(&Event::CortexReply {
+            now: Millis(2_000),
+            thought: ThoughtId(1),
+            text: "Oi!".into(),
+        });
+        organism
+    };
+    // Nine seconds later the short window has closed, the verified one has not.
+    let late = 11_000;
+
+    let mut organism = converse();
+    assert_thought(
+        &organism.step(&voice(late, false, 1_200, 0.9)),
+        2,
+        &Reason::FollowUp,
+    );
+
+    // Without speaker verification the pause ends the conversation, as before.
+    let mut organism = converse();
+    let unverified = Event::Speech {
+        now: Millis(late),
+        cue: SpeechCue {
+            energy: 1.0,
+            duration_ms: 1_200,
+            vad_confidence: 1.0,
+            keyword: false,
+            speaker_sim: None,
+            media: None,
+            turn_complete: None,
+        },
+    };
+    assert!(!matches!(
+        organism.step(&unverified).as_slice(),
+        [Action::Think {
+            reason: Reason::FollowUp,
+            ..
+        }]
+    ));
+
+    // Nor can anyone else step into the long window.
+    let mut organism = converse();
+    assert!(!matches!(
+        organism.step(&voice(late, false, 1_200, 0.2)).as_slice(),
+        [Action::Think {
+            reason: Reason::FollowUp,
+            ..
+        }]
+    ));
 }

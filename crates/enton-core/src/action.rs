@@ -41,6 +41,8 @@ pub enum Abstention {
     SelfEcho,
     /// Inside an attention window, the voice did not match whoever addressed Enton.
     OtherSpeaker,
+    /// The cue sounded like reproduced media (TV, radio, music), not a live voice.
+    Media,
 }
 
 /// A brainstem decision.

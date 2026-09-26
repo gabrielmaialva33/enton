@@ -37,3 +37,29 @@ fn identical_tapes_reproduce_actions_and_final_state() {
         }]
     );
 }
+
+#[test]
+fn a_cue_with_broken_measurements_replays_exactly_like_it_ran_live() {
+    use enton_core::SpeechCue;
+    let broken = Event::Speech {
+        now: Millis(1_000),
+        cue: SpeechCue {
+            energy: f32::NAN,
+            duration_ms: 1_500,
+            vad_confidence: f32::INFINITY,
+            keyword: true,
+            speaker_sim: Some(f32::NAN),
+            media: Some(f32::NEG_INFINITY),
+            turn_complete: Some(f32::NAN),
+        },
+    };
+    let mut live = Organism::new(Profile::t1_ref()).unwrap();
+    let live_actions = live.step(&broken);
+
+    // What a durable log stores, and what replay reads back.
+    let stored = serde_json::to_string(&broken.clone().canonical()).unwrap();
+    let replayed_event: Event = serde_json::from_str(&stored).unwrap();
+    let mut replayed = Organism::new(Profile::t1_ref()).unwrap();
+    assert_eq!(replayed.step(&replayed_event), live_actions);
+    assert_eq!(replayed, live);
+}

@@ -31,6 +31,19 @@ pub struct Profile {
     /// How Enton tells its own voice from someone interrupting it.
     #[serde(flatten)]
     pub echo: EchoPolicy,
+    /// Which sounds count as a live voice at all.
+    #[serde(flatten)]
+    pub source: SourcePolicy,
+}
+
+/// Which sounds count as a live voice in the room.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SourcePolicy {
+    /// Cues whose media likelihood reaches this are reproduced media (TV, radio,
+    /// music): never a follow-up, a barge-in or overheard speech worth a thought.
+    /// Saying Enton's name is always heard. Cues without an audio tagger pass.
+    #[serde(default = "default_media_threshold")]
+    pub media_threshold: f32,
 }
 
 /// Body signals that force torpor.
@@ -81,6 +94,22 @@ pub struct AttentionPolicy {
     /// to count as the addressed speaker. Cues without speaker verification pass.
     #[serde(default = "default_follow_up_min_speaker_sim")]
     pub follow_up_min_speaker_sim: f32,
+    /// Longer attention window, in milliseconds, for the verified voice of whoever
+    /// addressed Enton: other voices cannot use it, so a pause to think does not end
+    /// the conversation. Counted from the end of Enton's reply, 10 s covers an answer
+    /// given about 12 s after the previous turn; longer only gives impostors more chances.
+    #[serde(default = "default_verified_attention_ms")]
+    pub verified_attention_ms: u64,
+    /// A keyword cue whose end-of-turn likelihood reaches this is a whole request
+    /// and is answered at once, however short; below it Enton waits for the rest.
+    /// Without an end-of-turn model the `keyword_only_ms` duration rule decides.
+    #[serde(default = "default_turn_complete_threshold")]
+    pub turn_complete_threshold: f32,
+    /// Longest silence, in milliseconds, between an unfinished "Enton..." and a finished
+    /// turn that starts right after it for the two to be one request: that closeness is
+    /// stronger evidence than a single segment's voice or media score.
+    #[serde(default = "default_continuation_gap_ms")]
+    pub continuation_gap_ms: u32,
 }
 
 /// Weights that turn a speech cue into salience, plus the novelty bonus.
@@ -134,6 +163,10 @@ pub struct EchoPolicy {
     /// Required energy excess (near-end acoustic dominance) for double-talk detection over loudspeaker output.
     #[serde(default = "default_echo_barge_in_margin")]
     pub echo_barge_in_margin: f32,
+    /// Smaller energy margin for a barge-in in the caller's verified, live voice: the
+    /// verification already tells it from Enton's own echo.
+    #[serde(default = "default_verified_barge_in_margin")]
+    pub verified_barge_in_margin: f32,
     /// Minimum energy margin over expected echo for unpredicted keywords, rejecting TTS phonetic false positives.
     #[serde(default = "default_keyword_barge_in_margin")]
     pub keyword_barge_in_margin: f32,
@@ -147,6 +180,26 @@ pub struct EchoPolicy {
 
 fn default_follow_up_min_speaker_sim() -> f32 {
     0.6
+}
+
+fn default_verified_attention_ms() -> u64 {
+    10_000
+}
+
+fn default_turn_complete_threshold() -> f32 {
+    0.5
+}
+
+fn default_continuation_gap_ms() -> u32 {
+    1_000
+}
+
+fn default_verified_barge_in_margin() -> f32 {
+    0.05
+}
+
+fn default_media_threshold() -> f32 {
+    0.5
 }
 
 fn default_similarity_cutoff() -> f32 {
@@ -217,6 +270,9 @@ impl Profile {
                 keyword_only_ms: 900,
                 follow_up_min_vad: 0.5,
                 follow_up_min_speaker_sim: 0.6,
+                verified_attention_ms: 10_000,
+                turn_complete_threshold: 0.5,
+                continuation_gap_ms: 1_000,
             },
             salience: SaliencePolicy {
                 salience_vad_weight: 0.60,
@@ -238,9 +294,13 @@ impl Profile {
                 echo_hangover_ms: 200,
                 echo_initial_energy: 0.75,
                 echo_barge_in_margin: 0.15,
+                verified_barge_in_margin: 0.05,
                 keyword_barge_in_margin: 0.0,
                 echo_learning_rate: 0.20,
                 max_playback_ms: 15_000,
+            },
+            source: SourcePolicy {
+                media_threshold: 0.5,
             },
         }
     }
@@ -271,6 +331,9 @@ impl Profile {
                 keyword_only_ms: 900,
                 follow_up_min_vad: 0.45,
                 follow_up_min_speaker_sim: 0.6,
+                verified_attention_ms: 10_000,
+                turn_complete_threshold: 0.5,
+                continuation_gap_ms: 1_000,
             },
             salience: SaliencePolicy {
                 salience_vad_weight: 0.60,
@@ -292,9 +355,13 @@ impl Profile {
                 echo_hangover_ms: 150,
                 echo_initial_energy: 0.70,
                 echo_barge_in_margin: 0.15,
+                verified_barge_in_margin: 0.05,
                 keyword_barge_in_margin: 0.0,
                 echo_learning_rate: 0.20,
                 max_playback_ms: 20_000,
+            },
+            source: SourcePolicy {
+                media_threshold: 0.5,
             },
         }
     }
@@ -311,7 +378,8 @@ impl Profile {
             && self.attention.is_valid()
             && self.salience.is_valid()
             && self.habituation.is_valid()
-            && self.echo.is_valid();
+            && self.echo.is_valid()
+            && (0.0..=1.0).contains(&self.source.media_threshold);
         if valid {
             Ok(())
         } else {
@@ -358,6 +426,9 @@ impl AttentionPolicy {
             && self.keyword_only_ms > 0
             && (0.0..=1.0).contains(&self.follow_up_min_vad)
             && (0.0..=1.0).contains(&self.follow_up_min_speaker_sim)
+            && self.verified_attention_ms >= self.attention_ms
+            && (0.0..=1.0).contains(&self.turn_complete_threshold)
+            && self.continuation_gap_ms > 0
     }
 }
 
@@ -396,6 +467,7 @@ impl EchoPolicy {
             && (0.0..=1.0).contains(&self.echo_initial_energy)
             && self.echo_barge_in_margin.is_finite()
             && self.echo_barge_in_margin >= 0.0
+            && (0.0..=self.echo_barge_in_margin).contains(&self.verified_barge_in_margin)
             && self.keyword_barge_in_margin.is_finite()
             && self.keyword_barge_in_margin >= 0.0
             && (0.0..=1.0).contains(&self.echo_learning_rate)

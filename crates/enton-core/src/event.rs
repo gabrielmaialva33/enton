@@ -79,6 +79,19 @@ pub enum Event {
 }
 
 impl Event {
+    /// The event with any speech cue in canonical form (see [`SpeechCue::canonical`]):
+    /// what the reducer decides on and what a durable log should store.
+    #[must_use]
+    pub fn canonical(self) -> Self {
+        match self {
+            Event::Speech { now, cue } => Event::Speech {
+                now,
+                cue: cue.canonical(),
+            },
+            other => other,
+        }
+    }
+
     /// The instant at which the event occurred.
     #[must_use]
     pub fn now(&self) -> Millis {
@@ -105,6 +118,36 @@ pub struct BodySignals {
     pub cpu_load: f32,
 }
 
+impl SpeechCue {
+    /// The cue with every measurement safe to reduce and to serialize. Non-finite
+    /// energy or VAD become zero and non-finite likelihoods become unknown (`None`),
+    /// which is also what JSON reads back for them, so a replayed cue decides exactly
+    /// like the live one. Finite values are clamped to the unit interval.
+    #[must_use]
+    pub fn canonical(self) -> Self {
+        let level = |value: f32| {
+            if value.is_finite() {
+                value.clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        let likelihood = |value: Option<f32>| {
+            value
+                .filter(|value| value.is_finite())
+                .map(|value| value.clamp(0.0, 1.0))
+        };
+        Self {
+            energy: level(self.energy),
+            vad_confidence: level(self.vad_confidence),
+            speaker_sim: likelihood(self.speaker_sim),
+            media: likelihood(self.media),
+            turn_complete: likelihood(self.turn_complete),
+            ..self
+        }
+    }
+}
+
 /// Cues from voice activity detection, without a transcript.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct SpeechCue {
@@ -120,4 +163,12 @@ pub struct SpeechCue {
     /// zero to one; `None` when no speaker verification ran.
     #[serde(default)]
     pub speaker_sim: Option<f32>,
+    /// Likelihood, from zero to one, that the segment is reproduced media (TV, radio,
+    /// music) rather than a live voice in the room; `None` when no audio tagger ran.
+    #[serde(default)]
+    pub media: Option<f32>,
+    /// Likelihood, from zero to one, that the speaker finished their turn with this
+    /// segment (an end-of-turn model such as Smart Turn); `None` when none ran.
+    #[serde(default)]
+    pub turn_complete: Option<f32>,
 }

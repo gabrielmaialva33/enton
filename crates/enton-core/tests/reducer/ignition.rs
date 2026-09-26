@@ -46,6 +46,8 @@ fn weak_speech_records_below_threshold() {
                 vad_confidence: 0.2,
                 keyword: false,
                 speaker_sim: None,
+                media: None,
+                turn_complete: None,
             },
         }),
         Abstention::BelowThreshold,
@@ -102,6 +104,8 @@ fn speech_salience_uses_the_specified_weights_and_caps_duration() {
             vad_confidence: 1.0,
             keyword: true,
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         },
     });
     let [Action::Think { salience, .. }] = actions.as_slice() else {
@@ -141,6 +145,8 @@ fn salience_short_clear_direct_speech_passes_and_low_vad_never_passes() {
             vad_confidence: 0.8,
             keyword: false,
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         },
     });
     let [
@@ -170,6 +176,8 @@ fn salience_short_clear_direct_speech_passes_and_low_vad_never_passes() {
                         vad_confidence: vad,
                         keyword: false,
                         speaker_sim: None,
+                        media: None,
+                        turn_complete: None,
                     },
                 });
                 assert!(

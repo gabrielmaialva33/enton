@@ -11,6 +11,8 @@ pub(crate) fn speech(now: u64, keyword: bool) -> Event {
             vad_confidence: 1.0,
             keyword,
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         },
     }
 }
@@ -35,6 +37,8 @@ pub(crate) fn voice(now: u64, keyword: bool, duration_ms: u32, speaker_sim: f32)
             vad_confidence: 1.0,
             keyword,
             speaker_sim: Some(speaker_sim),
+            media: None,
+            turn_complete: None,
         },
     }
 }
@@ -48,6 +52,8 @@ pub(crate) fn tv_cue(now: u64) -> Event {
             vad_confidence: 0.9,
             keyword: false,
             speaker_sim: None,
+            media: None,
+            turn_complete: None,
         },
     }
 }

@@ -25,10 +25,19 @@ struct CueFeatures {
 struct PendingAttend {
     until: Millis,
     salience: f32,
+    /// When the name segment ended, to tell a continuation that follows right after it.
+    #[serde(default)]
+    name_ended_at: Millis,
+    /// End-of-turn likelihood of the name segment, when an end-of-turn model ran.
+    #[serde(default)]
+    name_complete: Option<f32>,
 }
 
+/// A continuation may start this much before the name's recorded end: endpoint jitter.
+const CONTINUATION_JITTER_MS: u64 = 50;
+
 /// The version of the brainstem reducer and snapshot schema.
-pub const REDUCER_VERSION: u32 = 5;
+pub const REDUCER_VERSION: u32 = 8;
 
 /// The physical playback / vocalization state of the organism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -68,6 +77,8 @@ pub struct Organism {
     torpor: bool,
     next_thought: u64,
     attention_until: Option<Millis>,
+    #[serde(default)]
+    verified_attention_until: Option<Millis>,
     pending_attend: Option<PendingAttend>,
     cue_expectation: Option<CueFeatures>,
     habituation: f32,
@@ -115,6 +126,7 @@ impl Organism {
             torpor: false,
             next_thought: 1,
             attention_until: None,
+            verified_attention_until: None,
             pending_attend: None,
             cue_expectation: None,
             habituation: 0.0,
@@ -150,6 +162,13 @@ impl Organism {
     #[must_use]
     pub fn attention_until(&self) -> Option<Millis> {
         self.attention_until
+    }
+
+    /// Deadline of the longer window open only to the verified voice of whoever
+    /// addressed Enton, if one is open.
+    #[must_use]
+    pub fn verified_attention_until(&self) -> Option<Millis> {
+        self.verified_attention_until
     }
 
     /// Current habituation level to repeated non-addressed cues, from 0 to 1.
@@ -238,7 +257,7 @@ impl Organism {
                         .is_some_and(|value| value <= self.profile.body.lethargy_battery);
                 Vec::new()
             }
-            Event::Speech { now, cue } => vec![self.speech(*now, cue)],
+            Event::Speech { now, cue } => vec![self.speech(*now, &cue.canonical())],
             Event::CortexReply { now, text, thought } => {
                 self.drives.satisfy("social", 0.3);
                 self.self_speech_has_keyword = contains_keyword_word(text, "enton");
@@ -251,6 +270,14 @@ impl Organism {
                             Some(current) => current.max(new_until),
                             None => new_until,
                         });
+                        let verified = Millis(
+                            now.0
+                                .saturating_add(self.profile.attention.verified_attention_ms),
+                        );
+                        self.verified_attention_until = Some(
+                            self.verified_attention_until
+                                .map_or(verified, |current| current.max(verified)),
+                        );
                     }
                 }
                 vec![Action::Speak { text: text.clone() }]
@@ -260,8 +287,9 @@ impl Organism {
                     utterance: *utterance,
                     started_at: *now,
                 };
-                // Voice mode precedence: playback supersedes text anchor and suspends the window
+                // Voice mode precedence: playback supersedes text anchor and suspends the windows
                 self.attention_until = None;
+                self.verified_attention_until = None;
                 Vec::new()
             }
             Event::PlaybackFinished { now, utterance } => {
@@ -277,11 +305,7 @@ impl Organism {
                         until: hangover_until,
                     };
                     if self.speaking_for_obligation {
-                        self.attention_until = Some(Millis(
-                            hangover_until
-                                .0
-                                .saturating_add(self.profile.attention.attention_ms),
-                        ));
+                        self.open_attention(hangover_until);
                     }
                 }
                 Vec::new()
@@ -366,6 +390,12 @@ impl Organism {
         if self.attention_until.is_some_and(|until| now >= until) {
             self.attention_until = None;
         }
+        if self
+            .verified_attention_until
+            .is_some_and(|until| now >= until)
+        {
+            self.verified_attention_until = None;
+        }
 
         if !self.ignition.drive_ready(now) {
             return actions;
@@ -396,27 +426,52 @@ impl Organism {
         norm_vad: f32,
         norm_dur: f32,
     ) -> Action {
-        let is_barge_in = if cue.keyword {
-            if self.self_speech_has_keyword {
-                // Predicted keyword in self-speech: requires full double-talk margin
-                norm_energy > self.echo_energy_expectation + self.profile.echo.echo_barge_in_margin
+        if !cue.keyword && self.is_media(cue) {
+            // Media over Enton's playback is neither a barge-in nor evidence about
+            // the echo path: the forward model must not learn the TV's loudness.
+            return Action::Abstain {
+                reason: Reason::FollowUp,
+                salience: self.calculate_base_salience(norm_energy, norm_vad, norm_dur),
+                why: Abstention::Media,
+            };
+        }
+        let echo = self.profile.echo;
+        // Three separate pieces of evidence: loud enough over the expected echo, speech-like
+        // enough, and a voice allowed to interrupt. Only loudness says anything about the
+        // echo path, so only a cue that failed it may train the echo model.
+        let (loud_enough, speech_like, voice_allowed) = if cue.keyword {
+            let loud = if self.self_speech_has_keyword || self.is_known_other_speaker(cue) {
+                // Predicted keyword in self-speech, or a voice verified as not the caller
+                // (Enton's own echo, the TV): requires full double-talk margin
+                norm_energy > self.echo_energy_expectation + echo.echo_barge_in_margin
             } else {
                 // Unpredicted keyword: requires reduced margin over expected echo to reject TTS phonetic false positives
-                norm_energy
-                    >= self.echo_energy_expectation + self.profile.echo.keyword_barge_in_margin
-            }
+                norm_energy >= self.echo_energy_expectation + echo.keyword_barge_in_margin
+            };
+            // Anyone may interrupt by name.
+            (loud, true, true)
         } else {
-            // Non-keyword speech cue: requires full double-talk margin, minimal follow-up VAD
-            // and the addressed speaker's voice (anyone may still interrupt by name)
-            norm_energy > self.echo_energy_expectation + self.profile.echo.echo_barge_in_margin
-                && norm_vad >= self.profile.attention.follow_up_min_vad
-                && self.is_addressed_speaker(cue)
+            // Non-keyword speech cue: double-talk margin (smaller for the caller's verified
+            // voice), minimal follow-up VAD, and the addressed speaker's voice
+            let margin = if self.is_verified_speaker(cue) {
+                echo.verified_barge_in_margin
+            } else {
+                echo.echo_barge_in_margin
+            };
+            (
+                norm_energy > self.echo_energy_expectation + margin,
+                norm_vad >= self.profile.attention.follow_up_min_vad,
+                self.is_addressed_speaker(cue),
+            )
         };
+        let is_barge_in = loud_enough && speech_like && voice_allowed;
 
         if !is_barge_in {
-            // Stimulus rejected as self-echo: adapt forward model on rejected cues only,
-            // guarding against non-finite (NaN, inf) values from upstream audio bugs.
-            if cue.energy.is_finite() {
+            // Only a cue that failed the loudness test is evidence about the echo path;
+            // one rejected for its voice must not teach the model the caller's loudness.
+            // A zero reading (including a non-finite one, canonicalized to zero so replay
+            // decides the same) carries no evidence either.
+            if !loud_enough && norm_energy > 0.0 {
                 let alpha = self.profile.echo.echo_learning_rate;
                 self.echo_energy_expectation = (self.echo_energy_expectation
                     + alpha * (norm_energy - self.echo_energy_expectation))
@@ -434,10 +489,15 @@ impl Organism {
             } else {
                 Reason::FollowUp
             };
+            let why = if loud_enough && speech_like {
+                Abstention::OtherSpeaker
+            } else {
+                Abstention::SelfEcho
+            };
             return Action::Abstain {
                 reason,
                 salience,
-                why: Abstention::SelfEcho,
+                why,
             };
         }
 
@@ -460,15 +520,9 @@ impl Organism {
         }
 
         if cue.keyword {
-            let base_salience = self.calculate_base_salience(norm_energy, norm_vad, norm_dur) + 1.0;
-            self.attention_until = Some(Millis(
-                now.0.saturating_add(self.profile.attention.attention_ms),
-            ));
-            let action = self.pay_and_think_obligation(now, Reason::Keyword, base_salience);
-            if let Action::Think { thought, .. } = action {
-                self.conversation_thought = Some(thought);
-            }
-            return action;
+            // The playback is cut; the name itself is judged as it would be in silence:
+            // a whole request is answered, an unfinished "Enton..." waits for the rest.
+            return self.speech_addressed(now, cue, norm_energy, norm_vad, norm_dur);
         }
 
         let salience = self.calculate_base_salience(norm_energy, norm_vad, norm_dur);
@@ -479,9 +533,7 @@ impl Organism {
                 why: Abstention::Torpor,
             };
         }
-        self.attention_until = Some(Millis(
-            now.0.saturating_add(self.profile.attention.attention_ms),
-        ));
+        self.open_attention(now);
         let action = self.pay_and_think_obligation(now, Reason::FollowUp, salience);
         if let Action::Think { thought, .. } = action {
             self.conversation_thought = Some(thought);
@@ -506,82 +558,110 @@ impl Organism {
         // Quiet period (outside playback and hangover): user speech resets consecutive barge-in ratchet
         self.consecutive_barge_ins = 0;
 
-        // Case 1: Addressed by keyword
         if cue.keyword {
-            let base_salience = self.calculate_base_salience(norm_energy, norm_vad, norm_dur) + 1.0;
-            // Addressed speech is never habituated
-            if cue.duration_ms < self.profile.attention.keyword_only_ms {
-                let until = Millis(now.0.saturating_add(self.profile.attention.attention_ms));
-                self.attention_until = Some(until);
-                self.pending_attend = Some(PendingAttend {
-                    until,
-                    salience: base_salience,
-                });
-                self.conversation_thought = None;
-                return Action::Attend { until };
-            }
-
-            self.pending_attend = None;
-            self.attention_until = Some(Millis(
-                now.0.saturating_add(self.profile.attention.attention_ms),
-            ));
-            // Keyword bypasses torpor and non-keyword cooldown; spends obligation_budget
-            let action = self.pay_and_think_obligation(now, Reason::Keyword, base_salience);
-            if let Action::Think { thought, .. } = action {
-                self.conversation_thought = Some(thought);
-            }
-            return action;
+            return self.speech_addressed(now, cue, norm_energy, norm_vad, norm_dur);
+        }
+        if self.is_in_attention_window(now, cue) {
+            return self.speech_in_window(now, cue, norm_energy, norm_vad, norm_dur);
         }
 
-        // Case 2: Inside active attention window
-        let in_attention_window = self.attention_until.is_some_and(|until| now < until);
-        if in_attention_window {
-            if !self.is_addressed_speaker(cue) {
-                // Someone else talking inside the window neither continues the turn nor
-                // extends the window; a pending "Enton?" keeps waiting for its speaker.
-                return Action::Abstain {
-                    reason: Reason::FollowUp,
-                    salience: self.calculate_base_salience(norm_energy, norm_vad, norm_dur),
-                    why: Abstention::OtherSpeaker,
-                };
-            }
-            // Addressed speech is never habituated
-            if let Some(pending) = self.pending_attend.take() {
-                if norm_vad < self.profile.attention.follow_up_min_vad {
-                    // Not valid continuation: restore pending attend and record abstention
-                    self.pending_attend = Some(pending);
-                    let salience = self.calculate_base_salience(norm_energy, norm_vad, norm_dur);
-                    return Action::Abstain {
-                        reason: Reason::FollowUp,
-                        salience,
-                        why: Abstention::BelowThreshold,
-                    };
-                }
+        // Overheard speech, outside any attention window
+        let media = self.is_media(cue);
+        self.speech_unaddressed(now, media, norm_energy, norm_vad, norm_dur)
+    }
 
-                // Valid continuation: produces a single Think with Reason::Keyword covering both segments
-                let continuation_salience =
-                    self.calculate_base_salience(norm_energy, norm_vad, norm_dur);
-                let combined_salience = pending.salience.max(continuation_salience + 1.0);
-                self.attention_until = Some(Millis(
-                    now.0.saturating_add(self.profile.attention.attention_ms),
-                ));
-                let action = self.pay_and_think_obligation(now, Reason::Keyword, combined_salience);
-                if let Action::Think { thought, .. } = action {
-                    self.conversation_thought = Some(thought);
-                }
-                return action;
-            }
+    /// Enton was called by name: answer now, or wait for the rest of the request.
+    fn speech_addressed(
+        &mut self,
+        now: Millis,
+        cue: &SpeechCue,
+        norm_energy: f32,
+        norm_vad: f32,
+        norm_dur: f32,
+    ) -> Action {
+        let base_salience = self.calculate_base_salience(norm_energy, norm_vad, norm_dur) + 1.0;
+        if self.pending_attend.is_some()
+            && self.is_known_other_speaker(cue)
+            && !self.is_whole_request(cue)
+        {
+            // Someone else saying the name does not take over a caller's unfinished turn.
+            return Action::Abstain {
+                reason: Reason::Keyword,
+                salience: base_salience,
+                why: Abstention::OtherSpeaker,
+            };
+        }
+        // Addressed speech is never habituated
+        if !self.is_whole_request(cue) {
+            let until = Millis(now.0.saturating_add(self.profile.attention.attention_ms));
+            self.open_attention(now);
+            self.pending_attend = Some(PendingAttend {
+                until,
+                salience: base_salience,
+                name_ended_at: now,
+                name_complete: cue.turn_complete,
+            });
+            self.conversation_thought = None;
+            return Action::Attend { until };
+        }
 
-            // Normal follow-up in an ongoing conversation
-            let salience = self.calculate_base_salience(norm_energy, norm_vad, norm_dur);
-            if self.torpor {
-                return Action::Abstain {
-                    reason: Reason::FollowUp,
-                    salience,
-                    why: Abstention::Torpor,
-                };
-            }
+        self.pending_attend = None;
+        self.open_attention(now);
+        // Keyword bypasses torpor and non-keyword cooldown; spends obligation_budget
+        let action = self.pay_and_think_obligation(now, Reason::Keyword, base_salience);
+        if let Action::Think { thought, .. } = action {
+            self.conversation_thought = Some(thought);
+        }
+        action
+    }
+
+    /// Whether a cue falls inside an attention window: the short one for any voice,
+    /// the long one only for the caller's verified voice.
+    fn is_in_attention_window(&self, now: Millis, cue: &SpeechCue) -> bool {
+        self.attention_until.is_some_and(|until| now < until)
+            || (self
+                .verified_attention_until
+                .is_some_and(|until| now < until)
+                && self.is_verified_speaker(cue))
+    }
+
+    /// Speech inside an attention window: a continuation, a follow-up, or someone else.
+    fn speech_in_window(
+        &mut self,
+        now: Millis,
+        cue: &SpeechCue,
+        norm_energy: f32,
+        norm_vad: f32,
+        norm_dur: f32,
+    ) -> Action {
+        // Closeness to an unfinished name outweighs one sensor's veto, never both: a cue
+        // that the media tagger and the speaker check both reject is someone else.
+        let media = self.is_media(cue);
+        let other_voice = !self.is_addressed_speaker(cue);
+        let excused = self.is_adjacent_continuation(now, cue, norm_vad) && !(media && other_voice);
+        if !excused && media {
+            // Reproduced media inside the window neither continues nor extends it.
+            return Action::Abstain {
+                reason: Reason::FollowUp,
+                salience: self.calculate_base_salience(norm_energy, norm_vad, norm_dur),
+                why: Abstention::Media,
+            };
+        }
+        if !excused && other_voice {
+            // Someone else talking inside the window neither continues the turn nor
+            // extends the window; a pending "Enton?" keeps waiting for its speaker.
+            return Action::Abstain {
+                reason: Reason::FollowUp,
+                salience: self.calculate_base_salience(norm_energy, norm_vad, norm_dur),
+                why: Abstention::OtherSpeaker,
+            };
+        }
+        // Addressed speech is never habituated
+        if let Some(pending) = self.pending_attend.take() {
             if norm_vad < self.profile.attention.follow_up_min_vad {
+                // Not valid continuation: restore pending attend and record abstention
+                self.pending_attend = Some(pending);
+                let salience = self.calculate_base_salience(norm_energy, norm_vad, norm_dur);
                 return Action::Abstain {
                     reason: Reason::FollowUp,
                     salience,
@@ -589,24 +669,65 @@ impl Organism {
                 };
             }
 
-            // Follow-up needs only minimal VAD, bypasses non-keyword cooldown, pays obligation_budget
-            let action = self.pay_and_think_obligation(now, Reason::FollowUp, salience);
+            // Valid continuation: produces a single Think with Reason::Keyword covering both segments
+            let continuation_salience =
+                self.calculate_base_salience(norm_energy, norm_vad, norm_dur);
+            let combined_salience = pending.salience.max(continuation_salience + 1.0);
+            let threshold = self.profile.attention.turn_complete_threshold;
+            if cue
+                .turn_complete
+                .is_some_and(|complete| complete < threshold)
+            {
+                // The request is still going ("Enton, você pode... hã..."): keep waiting,
+                // now anchored at this segment's end.
+                let until = Millis(now.0.saturating_add(self.profile.attention.attention_ms));
+                self.open_attention(now);
+                self.pending_attend = Some(PendingAttend {
+                    until,
+                    salience: combined_salience,
+                    name_ended_at: now,
+                    name_complete: cue.turn_complete,
+                });
+                return Action::Attend { until };
+            }
+            self.open_attention(now);
+            let action = self.pay_and_think_obligation(now, Reason::Keyword, combined_salience);
             if let Action::Think { thought, .. } = action {
                 self.conversation_thought = Some(thought);
-                self.attention_until = Some(Millis(
-                    now.0.saturating_add(self.profile.attention.attention_ms),
-                ));
             }
             return action;
         }
 
-        // Case 3: Non-addressed speech outside attention window
-        self.speech_unaddressed(now, norm_energy, norm_vad, norm_dur)
+        // Normal follow-up in an ongoing conversation
+        let salience = self.calculate_base_salience(norm_energy, norm_vad, norm_dur);
+        if self.torpor {
+            return Action::Abstain {
+                reason: Reason::FollowUp,
+                salience,
+                why: Abstention::Torpor,
+            };
+        }
+        if norm_vad < self.profile.attention.follow_up_min_vad {
+            return Action::Abstain {
+                reason: Reason::FollowUp,
+                salience,
+                why: Abstention::BelowThreshold,
+            };
+        }
+
+        // Follow-up needs only minimal VAD, bypasses non-keyword cooldown, pays obligation_budget
+        let action = self.pay_and_think_obligation(now, Reason::FollowUp, salience);
+        if let Action::Think { thought, .. } = action {
+            self.conversation_thought = Some(thought);
+            self.open_attention(now);
+        }
+        action
     }
 
     fn speech_unaddressed(
         &mut self,
         now: Millis,
+        media: bool,
         norm_energy: f32,
         norm_vad: f32,
         norm_dur: f32,
@@ -644,6 +765,16 @@ impl Organism {
                 .clamp(0.0, 1.0);
         }
 
+        // Media still trains habituation above, so the few TV cues the tagger misses
+        // arrive already familiar; tagged ones never buy a thought.
+        if media {
+            return Action::Abstain {
+                reason: Reason::Speech,
+                salience: effective_salience,
+                why: Abstention::Media,
+            };
+        }
+
         if self.torpor {
             return Action::Abstain {
                 reason: Reason::Speech,
@@ -677,6 +808,68 @@ impl Organism {
         }
 
         self.pay_and_think_discretionary(now, Reason::Speech, effective_salience)
+    }
+
+    /// Open (or reopen) the attention windows at `from`: the short one for any cue,
+    /// the long one for the verified voice of whoever addressed Enton.
+    fn open_attention(&mut self, from: Millis) {
+        let policy = self.profile.attention;
+        self.attention_until = Some(Millis(from.0.saturating_add(policy.attention_ms)));
+        self.verified_attention_until =
+            Some(Millis(from.0.saturating_add(policy.verified_attention_ms)));
+    }
+
+    /// Whether the cue's voice was verified as whoever addressed Enton (not merely unknown).
+    fn is_verified_speaker(&self, cue: &SpeechCue) -> bool {
+        cue.speaker_sim
+            .is_some_and(|sim| sim >= self.profile.attention.follow_up_min_speaker_sim)
+    }
+
+    /// Whether a keyword cue already carries a whole request. An end-of-turn model
+    /// decides for the caller's voice (or an unverified one); a voice known to be
+    /// someone else falls back to the duration rule, so a name dropped mid-sentence
+    /// by another person waits instead of buying a thought. Without the model, a cue
+    /// shorter than `keyword_only_ms` is the name alone ("Enton?") and Enton waits.
+    fn is_whole_request(&self, cue: &SpeechCue) -> bool {
+        let attention = self.profile.attention;
+        match cue.turn_complete {
+            Some(complete) if !self.is_known_other_speaker(cue) && !self.is_media(cue) => {
+                complete >= attention.turn_complete_threshold
+            }
+            _ => cue.duration_ms >= attention.keyword_only_ms,
+        }
+    }
+
+    /// Whether the cue is the rest of a name left unfinished just before: the name
+    /// scored incomplete, this cue scores complete, and it starts within
+    /// `continuation_gap_ms` of the name's end (allowing endpointing jitter).
+    fn is_adjacent_continuation(&self, now: Millis, cue: &SpeechCue, norm_vad: f32) -> bool {
+        let attention = self.profile.attention;
+        let Some(pending) = &self.pending_attend else {
+            return false;
+        };
+        let threshold = attention.turn_complete_threshold;
+        let name_unfinished = pending.name_complete.is_some_and(|name| name < threshold);
+        let finishes = cue
+            .turn_complete
+            .is_some_and(|complete| complete >= threshold);
+        let started = now.0.saturating_sub(u64::from(cue.duration_ms));
+        let name_end = pending.name_ended_at.0;
+        let close = started.saturating_add(CONTINUATION_JITTER_MS) >= name_end
+            && started <= name_end.saturating_add(u64::from(attention.continuation_gap_ms));
+        name_unfinished && finishes && close && norm_vad >= attention.follow_up_min_vad
+    }
+
+    /// Whether an audio tagger scored the cue as reproduced media (TV, radio, music).
+    fn is_media(&self, cue: &SpeechCue) -> bool {
+        cue.media
+            .is_some_and(|media| media >= self.profile.source.media_threshold)
+    }
+
+    /// Whether verification says the cue's voice is not whoever addressed Enton.
+    fn is_known_other_speaker(&self, cue: &SpeechCue) -> bool {
+        cue.speaker_sim
+            .is_some_and(|sim| sim < self.profile.attention.follow_up_min_speaker_sim)
     }
 
     /// Whether a cue may speak for the current turn: a matching voice, or no verification.

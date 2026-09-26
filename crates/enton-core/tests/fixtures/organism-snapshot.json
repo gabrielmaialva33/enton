@@ -4,8 +4,6 @@
     "fever_c": 80.0,
     "lethargy_battery": 0.1,
     "think_cost": 1.0,
-    "budget_per_hour": 12.0,
-    "reserve_fraction": 0.25,
     "obligation_budget_per_hour": 120.0,
     "discretionary_budget_per_hour": 12.0,
     "threshold": 0.7,
@@ -17,14 +15,17 @@
     "keyword_only_ms": 900,
     "follow_up_min_vad": 0.5,
     "follow_up_min_speaker_sim": 0.6,
+    "verified_attention_ms": 10000,
+    "turn_complete_threshold": 0.5,
+    "continuation_gap_ms": 1000,
     "salience_vad_weight": 0.6,
     "salience_energy_weight": 0.25,
     "salience_duration_weight": 0.15,
     "salience_duration_max_ms": 1000,
-    "habituation_decay_half_life_ms": 30000,
-    "habituation_step": 0.35,
     "novelty_weight": 0.1,
     "novelty_max": 0.05,
+    "habituation_decay_half_life_ms": 30000,
+    "habituation_step": 0.35,
     "similarity_cutoff": 0.4,
     "expectation_coefficient": 0.25,
     "slow_habituation_half_life_ms": 1200000,
@@ -32,9 +33,11 @@
     "echo_hangover_ms": 200,
     "echo_initial_energy": 0.75,
     "echo_barge_in_margin": 0.15,
+    "verified_barge_in_margin": 0.05,
     "keyword_barge_in_margin": 0.0,
     "echo_learning_rate": 0.2,
-    "max_playback_ms": 15000
+    "max_playback_ms": 15000,
+    "media_threshold": 0.5
   },
   "drives": [
     {
@@ -61,13 +64,11 @@
   },
   "obligation_budget": {
     "capacity": 120.0,
-    "available": 120.0,
-    "reserve": 0.0
+    "available": 120.0
   },
   "discretionary_budget": {
     "capacity": 12.0,
-    "available": 12.0,
-    "reserve": 0.0
+    "available": 12.0
   },
   "ignition": {
     "threshold": 0.7,
@@ -76,16 +77,19 @@
     "ema_alpha": 0.1,
     "smoothed": 0.0056894226,
     "armed": true,
-    "last_fire": 70000
+    "last_fire": 3600
   },
   "last_tick": 3600000,
   "last_seen": 3600500,
   "torpor": false,
-  "next_thought": 4,
+  "next_thought": 3,
   "attention_until": 3605500,
+  "verified_attention_until": 3610500,
   "pending_attend": {
     "until": 3605500,
-    "salience": 1.825
+    "salience": 1.825,
+    "name_ended_at": 3600500,
+    "name_complete": 0.2
   },
   "cue_expectation": {
     "energy": 0.8,
@@ -99,5 +103,5 @@
   "self_speech_has_keyword": false,
   "echo_energy_expectation": 0.69,
   "consecutive_barge_ins": 0,
-  "speaking_for_obligation": false
+  "speaking_for_obligation": true
 }

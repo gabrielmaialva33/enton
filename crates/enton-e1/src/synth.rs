@@ -1,8 +1,9 @@
-//! Protocol 2.0.0 populations. Deliberately does not import the cognitive Profile.
+//! Protocol 3.0.0 populations. Deliberately does not import the cognitive Profile.
 
-use crate::{
-    Annotation, EpisodeId, Error, Interval, Record, SegmentId, Stimulus, Tape, TapeKind, Turn,
-    TurnId,
+use crate::Error;
+use crate::tape::{
+    Annotation, Distance, EpisodeId, Interval, Record, RoomCondition, SegmentId, Stimulus, Tape,
+    TapeKind, Turn, TurnId, TvBackground, TvContent,
 };
 use enton_core::{Event, Millis, SpeechCue};
 
@@ -39,44 +40,28 @@ impl SplitMix64 {
         let unit = (self.next_u64() >> 40) as f32 / 16_777_216.0;
         low + (high - low) * unit
     }
+    /// Box-Muller standard normal sampler scaled to the requested mean and standard deviation.
+    pub fn normal(&mut self, mean: f32, sd: f32) -> f32 {
+        let u1 = loop {
+            let val = self.real(0.0, 1.0);
+            if val > 0.0 {
+                break val;
+            }
+        };
+        let u2 = self.real(0.0, 1.0);
+        let r = (-2.0 * u1.ln()).sqrt();
+        let theta = 2.0 * std::f32::consts::PI * u2;
+        mean + sd * (r * theta.cos())
+    }
 }
-
-/// Lower bound of the nominal speaker similarity range for legitimate user speech.
-pub const USER_SPEAKER_SIM_MIN: f32 = 0.62;
-/// Upper bound of the nominal speaker similarity range for legitimate user speech.
-pub const USER_SPEAKER_SIM_MAX: f32 = 0.95;
-
-/// Lower bound of the nominal speaker similarity range for impostor speech.
-pub const IMPOSTOR_SPEAKER_SIM_MIN: f32 = 0.05;
-/// Upper bound of the nominal speaker similarity range for impostor speech.
-pub const IMPOSTOR_SPEAKER_SIM_MAX: f32 = 0.55;
 
 /// Lower bound of the speaker similarity range for non-speech acoustic segments.
 pub const NON_SPEECH_SPEAKER_SIM_MIN: f32 = 0.0;
 /// Upper bound of the speaker similarity range for non-speech acoustic segments.
 pub const NON_SPEECH_SPEAKER_SIM_MAX: f32 = 0.3;
 
-/// Probability of crossover error in speaker verification (bad audio for user, confusable voices for impostor).
-pub const SPEAKER_SIM_CROSSOVER_RATE: f32 = 0.03;
-
 /// Stream salt for the independent speaker-similarity RNG stream.
 const SPEAKER_STREAM_SALT: u64 = 0x5350_4541_4b45_5231;
-
-/// Lower bound of the nominal media likelihood range for television and reproduced media.
-pub const TV_MEDIA_MIN: f32 = 0.6;
-/// Upper bound of the nominal media likelihood range for television and reproduced media.
-pub const TV_MEDIA_MAX: f32 = 0.98;
-
-/// Probability that the audio tagger misses a TV segment and tags it within the live range.
-pub const TV_MEDIA_MISS_RATE: f32 = 0.05;
-
-/// Lower bound of the media likelihood range for live voices.
-pub const LIVE_VOICE_MEDIA_MIN: f32 = 0.0;
-/// Upper bound of the media likelihood range for live voices.
-pub const LIVE_VOICE_MEDIA_MAX: f32 = 0.35;
-
-/// Probability of a false alarm where a live voice is tagged in the media range.
-pub const LIVE_VOICE_MEDIA_FALSE_ALARM_RATE: f32 = 0.03;
 
 /// Lower bound of the media likelihood range for non-speech acoustic segments.
 pub const NON_SPEECH_MEDIA_MIN: f32 = 0.0;
@@ -86,27 +71,64 @@ pub const NON_SPEECH_MEDIA_MAX: f32 = 0.3;
 /// Stream salt for the independent media-tagger RNG stream.
 const MEDIA_STREAM_SALT: u64 = 0x4d45_4449_415f_5331;
 
-/// Lower bound of the nominal turn-completion score for complete user turns.
-pub const COMPLETE_USER_TURN_MIN: f32 = 0.6;
-/// Upper bound of the nominal turn-completion score for complete user turns.
-pub const COMPLETE_USER_TURN_MAX: f32 = 0.99;
-/// Probability that an acoustic end-of-turn model misses a complete user turn.
-pub const COMPLETE_USER_TURN_MISS_RATE: f32 = 0.02;
-
-/// Lower bound of the nominal turn-completion score for incomplete user segments.
-pub const INCOMPLETE_USER_TURN_MIN: f32 = 0.01;
-/// Upper bound of the nominal turn-completion score for incomplete user segments.
-pub const INCOMPLETE_USER_TURN_MAX: f32 = 0.4;
-/// Probability that an acoustic end-of-turn model prematurely signals completion on an incomplete turn.
-pub const INCOMPLETE_USER_TURN_PREMATURE_RATE: f32 = 0.03;
-
-/// Lower bound of the turn-completion score for non-user acoustic segments.
-pub const NON_USER_TURN_MIN: f32 = 0.2;
-/// Upper bound of the turn-completion score for non-user acoustic segments.
-pub const NON_USER_TURN_MAX: f32 = 0.9;
-
 /// Stream salt for the independent turn-completion RNG stream.
 const TURN_STREAM_SALT: u64 = 0x5455_524e_5f53_3130;
+
+/// Spread of a TV line's energy around its show's level.
+pub const TV_ENERGY_JITTER: f32 = 0.08;
+/// Spread of a TV line's voice activity confidence around its show's level.
+pub const TV_VAD_JITTER: f32 = 0.05;
+
+/// Stream salt for the independent environmental and talker condition RNG stream.
+const CONDITION_STREAM_SALT: u64 = 0x434f_4e44_5f53_3130;
+
+/// Linearly interpolate in `log2(duration_ms)` between anchors at 750, 1500 and 3000 ms,
+/// holding end values outside [750, 3000].
+#[must_use]
+pub fn interpolate_log2(duration_ms: u32, y: [f32; 3]) -> f32 {
+    let d = duration_ms as f32;
+    if d <= 750.0 {
+        y[0]
+    } else if d <= 1500.0 {
+        let w = (d / 750.0).log2();
+        y[0] + w * (y[1] - y[0])
+    } else if d <= 3000.0 {
+        let w = (d / 1500.0).log2();
+        y[1] + w * (y[2] - y[1])
+    } else {
+        y[2]
+    }
+}
+
+fn draw_block_condition(rng: &mut SplitMix64) -> RoomCondition {
+    let distance = if rng.real(0.0, 1.0) < 0.25 {
+        Distance::Near
+    } else {
+        Distance::Far
+    };
+    let tv_roll = rng.real(0.0, 1.0);
+    let tv = if tv_roll < 0.50 {
+        TvBackground::Off
+    } else if tv_roll < 0.85 {
+        TvBackground::Moderate
+    } else {
+        TvBackground::Loud
+    };
+    let tv_content = if rng.real(0.0, 1.0) < 0.60 {
+        TvContent::Dialogue
+    } else {
+        TvContent::Music
+    };
+    let acoustics = rng.normal(0.0, 1.0);
+    let show = rng.normal(0.0, 0.08);
+    RoomCondition {
+        distance,
+        tv,
+        tv_content,
+        acoustics,
+        show,
+    }
+}
 
 /// Synthesized turn role classifying segment completion expectations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,99 +143,186 @@ pub enum TurnRole {
 
 struct Builder {
     rng: SplitMix64,
+    condition_rng: SplitMix64,
     speaker_rng: SplitMix64,
     media_rng: SplitMix64,
     turn_rng: SplitMix64,
+    owner_offset: f32,
+    conditions: Vec<RoomCondition>,
     records: Vec<Record>,
     turns: Vec<Turn>,
     next_segment: u32,
     next_turn: u32,
 }
 impl Builder {
-    fn new(seed: u64) -> Self {
+    fn new(seed: u64, duration_ms: u64) -> Self {
+        let mut condition_rng = SplitMix64::with_seed(seed ^ CONDITION_STREAM_SALT);
+        let owner_offset = condition_rng.normal(0.0, 0.05);
+        let num_blocks = usize::try_from(duration_ms.div_ceil(180_000)).unwrap_or(0);
+        let mut conditions = Vec::with_capacity(num_blocks);
+        for _ in 0..num_blocks {
+            conditions.push(draw_block_condition(&mut condition_rng));
+        }
         Self {
             rng: SplitMix64::with_seed(seed),
+            condition_rng,
             speaker_rng: SplitMix64::with_seed(seed ^ SPEAKER_STREAM_SALT),
             media_rng: SplitMix64::with_seed(seed ^ MEDIA_STREAM_SALT),
             turn_rng: SplitMix64::with_seed(seed ^ TURN_STREAM_SALT),
+            owner_offset,
+            conditions,
             records: Vec::new(),
             turns: Vec::new(),
             next_segment: 0,
             next_turn: 0,
         }
     }
-    fn draw_speaker_sim(&mut self, source: Stimulus) -> f32 {
+    fn draw_speaker_sim(&mut self, source: Stimulus, duration_ms: u32, cond: RoomCondition) -> f32 {
         match source {
-            Stimulus::Request(_) | Stimulus::BargeIn(_) => {
-                if self.speaker_rng.real(0.0, 1.0) < SPEAKER_SIM_CROSSOVER_RATE {
-                    self.speaker_rng
-                        .real(IMPOSTOR_SPEAKER_SIM_MIN, IMPOSTOR_SPEAKER_SIM_MAX)
-                } else {
-                    self.speaker_rng
-                        .real(USER_SPEAKER_SIM_MIN, USER_SPEAKER_SIM_MAX)
-                }
-            }
-            Stimulus::Tv | Stimulus::OtherSpeech | Stimulus::FalseKeyword => {
-                if self.speaker_rng.real(0.0, 1.0) < SPEAKER_SIM_CROSSOVER_RATE {
-                    self.speaker_rng
-                        .real(USER_SPEAKER_SIM_MIN, USER_SPEAKER_SIM_MAX)
-                } else {
-                    self.speaker_rng
-                        .real(IMPOSTOR_SPEAKER_SIM_MIN, IMPOSTOR_SPEAKER_SIM_MAX)
-                }
-            }
             Stimulus::Noise | Stimulus::Motor | Stimulus::Ventilation | Stimulus::SelfEcho => self
                 .speaker_rng
                 .real(NON_SPEECH_SPEAKER_SIM_MIN, NON_SPEECH_SPEAKER_SIM_MAX),
+            Stimulus::Request(_) | Stimulus::BargeIn(_) | Stimulus::Aside => {
+                let (means, sds) = match (cond.distance, cond.tv) {
+                    (Distance::Near, TvBackground::Off) => ([0.53, 0.72, 0.80], [0.10, 0.08, 0.06]),
+                    (Distance::Near, TvBackground::Moderate) => {
+                        ([0.53 - 0.08, 0.72 - 0.10, 0.80 - 0.10], [0.11, 0.11, 0.11])
+                    }
+                    (Distance::Near, TvBackground::Loud) => {
+                        ([0.53 - 0.14, 0.72 - 0.20, 0.80 - 0.20], [0.12, 0.12, 0.12])
+                    }
+                    (Distance::Far, TvBackground::Off) => ([0.40, 0.57, 0.63], [0.11, 0.11, 0.10]),
+                    (Distance::Far, TvBackground::Moderate) => {
+                        ([0.32, 0.47, 0.53], [0.11, 0.11, 0.11])
+                    }
+                    (Distance::Far, TvBackground::Loud) => ([0.26, 0.37, 0.43], [0.12, 0.12, 0.12]),
+                };
+                let mean = interpolate_log2(duration_ms, means);
+                let row_sd = interpolate_log2(duration_ms, sds);
+                let correlated = self.owner_offset - 0.04 * cond.acoustics;
+                let total_sd = row_sd + 0.02;
+                let latent_var = 0.05_f32.powi(2) + 0.04_f32.powi(2);
+                let residual_sd = (total_sd.powi(2) - latent_var).max(0.02_f32.powi(2)).sqrt();
+                let residual = self.speaker_rng.normal(0.0, residual_sd);
+                (mean + correlated + residual).clamp(0.0, 1.0)
+            }
+            Stimulus::OtherSpeech | Stimulus::FalseKeyword => {
+                let (means, sds) = match (cond.distance, cond.tv) {
+                    (Distance::Near, TvBackground::Off) => ([0.43, 0.56, 0.64], [0.12, 0.11, 0.10]),
+                    (Distance::Near, TvBackground::Moderate) => {
+                        ([0.43 - 0.05, 0.56 - 0.08, 0.64 - 0.06], [0.12, 0.12, 0.12])
+                    }
+                    (Distance::Near, TvBackground::Loud) => {
+                        ([0.43 - 0.08, 0.56 - 0.11, 0.64 - 0.13], [0.12, 0.12, 0.12])
+                    }
+                    (Distance::Far, TvBackground::Off) => ([0.34, 0.46, 0.51], [0.13, 0.13, 0.13]),
+                    (Distance::Far, TvBackground::Moderate) => {
+                        ([0.29, 0.38, 0.45], [0.12, 0.12, 0.12])
+                    }
+                    (Distance::Far, TvBackground::Loud) => ([0.26, 0.35, 0.38], [0.12, 0.12, 0.12]),
+                };
+                let mean = interpolate_log2(duration_ms, means);
+                let row_sd = interpolate_log2(duration_ms, sds);
+                let correlated = -0.02 * cond.acoustics;
+                let total_sd = row_sd + 0.02;
+                let latent_var = 0.02_f32.powi(2);
+                let residual_sd = (total_sd.powi(2) - latent_var).max(0.02_f32.powi(2)).sqrt();
+                let residual = self.speaker_rng.normal(0.0, residual_sd);
+                (mean + correlated + residual).clamp(0.0, 1.0)
+            }
+            Stimulus::Tv => {
+                let means = [0.24, 0.34, 0.38];
+                let sds = [0.12, 0.13, 0.13];
+                let mean = interpolate_log2(duration_ms, means);
+                let row_sd = interpolate_log2(duration_ms, sds);
+                let correlated = -0.02 * cond.acoustics;
+                let total_sd = row_sd + 0.02;
+                let latent_var = 0.02_f32.powi(2);
+                let residual_sd = (total_sd.powi(2) - latent_var).max(0.02_f32.powi(2)).sqrt();
+                let residual = self.speaker_rng.normal(0.0, residual_sd);
+                (mean + correlated + residual).clamp(0.0, 1.0)
+            }
         }
     }
-    fn draw_media(&mut self, source: Stimulus) -> f32 {
+    fn draw_media(&mut self, source: Stimulus, duration_ms: u32, cond: RoomCondition) -> f32 {
         match source {
-            Stimulus::Tv => {
-                if self.media_rng.real(0.0, 1.0) < TV_MEDIA_MISS_RATE {
-                    self.media_rng
-                        .real(LIVE_VOICE_MEDIA_MIN, LIVE_VOICE_MEDIA_MAX)
-                } else {
-                    self.media_rng.real(TV_MEDIA_MIN, TV_MEDIA_MAX)
-                }
-            }
-            Stimulus::Request(_)
-            | Stimulus::BargeIn(_)
-            | Stimulus::OtherSpeech
-            | Stimulus::FalseKeyword => {
-                if self.media_rng.real(0.0, 1.0) < LIVE_VOICE_MEDIA_FALSE_ALARM_RATE {
-                    self.media_rng.real(TV_MEDIA_MIN, TV_MEDIA_MAX)
-                } else {
-                    self.media_rng
-                        .real(LIVE_VOICE_MEDIA_MIN, LIVE_VOICE_MEDIA_MAX)
-                }
-            }
             Stimulus::Noise | Stimulus::Motor | Stimulus::Ventilation | Stimulus::SelfEcho => self
                 .media_rng
                 .real(NON_SPEECH_MEDIA_MIN, NON_SPEECH_MEDIA_MAX),
+            Stimulus::Request(_)
+            | Stimulus::BargeIn(_)
+            | Stimulus::Aside
+            | Stimulus::OtherSpeech
+            | Stimulus::FalseKeyword => {
+                let means = match (cond.distance, cond.tv) {
+                    (Distance::Near, TvBackground::Off) => [0.28, 0.24, 0.20],
+                    (Distance::Far, TvBackground::Off) => [0.32, 0.28, 0.24],
+                    (_, TvBackground::Moderate | TvBackground::Loud) => [0.42, 0.38, 0.34],
+                };
+                let mean = interpolate_log2(duration_ms, means);
+                let correlated = 0.05 * cond.acoustics;
+                let latent_var = 0.05_f32.powi(2);
+                let residual_sd = (0.20_f32.powi(2) - latent_var).max(0.0).sqrt();
+                let residual = self.media_rng.normal(0.0, residual_sd);
+                (mean + correlated + residual).clamp(0.0, 1.0)
+            }
+            Stimulus::Tv => {
+                let means = match cond.tv_content {
+                    TvContent::Dialogue => [0.52, 0.56, 0.60],
+                    TvContent::Music => [0.68, 0.75, 0.80],
+                };
+                let mean = interpolate_log2(duration_ms, means);
+                let correlated = -0.05 * cond.acoustics + cond.show;
+                let latent_var = 0.05_f32.powi(2) + 0.08_f32.powi(2);
+                let residual_sd = (0.20_f32.powi(2) - latent_var).max(0.0).sqrt();
+                let residual = self.media_rng.normal(0.0, residual_sd);
+                (mean + correlated + residual).clamp(0.0, 1.0)
+            }
         }
     }
-    fn draw_turn_complete(&mut self, role: TurnRole) -> f32 {
-        match role {
-            TurnRole::Complete => {
-                if self.turn_rng.real(0.0, 1.0) < COMPLETE_USER_TURN_MISS_RATE {
-                    self.turn_rng
-                        .real(INCOMPLETE_USER_TURN_MIN, INCOMPLETE_USER_TURN_MAX)
+    fn draw_turn_complete(
+        &mut self,
+        role: TurnRole,
+        duration_ms: u32,
+        cond: RoomCondition,
+        pause_style: Option<f32>,
+    ) -> f32 {
+        let q_prime = if cond.tv == TvBackground::Off {
+            cond.acoustics
+        } else {
+            cond.acoustics.max(1.0)
+        };
+        match (role, pause_style) {
+            (TurnRole::Incomplete, Some(a)) => {
+                let m = if duration_ms < 1000 {
+                    -4.3
+                } else if duration_ms <= 2000 {
+                    -1.4
                 } else {
-                    self.turn_rng
-                        .real(COMPLETE_USER_TURN_MIN, COMPLETE_USER_TURN_MAX)
-                }
+                    0.0
+                };
+                let shift = 0.5 * q_prime;
+                let e = self.turn_rng.normal(0.0, 4.2);
+                let l = m + a + shift + e;
+                (1.0 / (1.0 + (-l).exp())).clamp(0.0, 1.0)
             }
-            TurnRole::Incomplete => {
-                if self.turn_rng.real(0.0, 1.0) < INCOMPLETE_USER_TURN_PREMATURE_RATE {
-                    self.turn_rng
-                        .real(COMPLETE_USER_TURN_MIN, COMPLETE_USER_TURN_MAX)
+            (TurnRole::Complete, Some(a)) => {
+                let m = if duration_ms < 1000 {
+                    1.9
+                } else if duration_ms <= 2000 {
+                    5.1
                 } else {
-                    self.turn_rng
-                        .real(INCOMPLETE_USER_TURN_MIN, INCOMPLETE_USER_TURN_MAX)
-                }
+                    4.9
+                };
+                let shift = -0.5 * q_prime;
+                let e = self.turn_rng.normal(0.0, 4.2);
+                let l = m + a + shift + e;
+                (1.0 / (1.0 + (-l).exp())).clamp(0.0, 1.0)
             }
-            TurnRole::Other => self.turn_rng.real(NON_USER_TURN_MIN, NON_USER_TURN_MAX),
+            _ => {
+                let l = self.turn_rng.normal(0.9, 5.0);
+                (1.0 / (1.0 + (-l).exp())).clamp(0.0, 1.0)
+            }
         }
     }
     fn segment(
@@ -223,10 +332,15 @@ impl Builder {
         episode: EpisodeId,
         source: Stimulus,
         role: TurnRole,
+        pause_style: Option<f32>,
     ) -> SegmentId {
-        cue.speaker_sim = Some(self.draw_speaker_sim(source));
-        cue.media = Some(self.draw_media(source));
-        cue.turn_complete = Some(self.draw_turn_complete(role));
+        let block_idx = usize::try_from(end / 180_000)
+            .unwrap_or(0)
+            .min(self.conditions.len().saturating_sub(1));
+        let cond = self.conditions.get(block_idx).copied().unwrap_or_default();
+        cue.speaker_sim = Some(self.draw_speaker_sim(source, cue.duration_ms, cond));
+        cue.media = Some(self.draw_media(source, cue.duration_ms, cond));
+        cue.turn_complete = Some(self.draw_turn_complete(role, cue.duration_ms, cond, pause_style));
         let id = SegmentId(self.next_segment);
         // All generator loops are protocol-bounded to fewer than MAX_EVENTS entries.
         self.next_segment += 1;
@@ -239,6 +353,7 @@ impl Builder {
                 segment: id,
                 episode: Some(episode),
                 source,
+                pause_style,
             },
         });
         id
@@ -273,7 +388,15 @@ impl Builder {
         } else {
             Stimulus::Request(id)
         };
-        let segment = self.segment(end, cue, episode, source, TurnRole::Complete);
+        let pause_style = self.condition_rng.normal(0.0, 2.7);
+        let segment = self.segment(
+            end,
+            cue,
+            episode,
+            source,
+            TurnRole::Complete,
+            Some(pause_style),
+        );
         self.turns.push(Turn {
             id,
             episode,
@@ -282,12 +405,14 @@ impl Builder {
             deadline: Millis(end + 10_000),
             kind,
             gap,
+            pause_style: Some(pause_style),
         });
         end
     }
-    fn split(&mut self, start: u64, episode: EpisodeId) -> u64 {
+    fn split(&mut self, start: u64, episode: EpisodeId, distractor: Option<EpisodeId>) -> u64 {
         let id = TurnId(self.next_turn);
         self.next_turn += 1;
+        let pause_style = self.condition_rng.normal(0.0, 2.7);
         let name_duration = self.rng.range(250, 650);
         let name_end = start + u64::from(name_duration);
         let name = self.user_cue(name_duration, true);
@@ -297,12 +422,29 @@ impl Builder {
             episode,
             Stimulus::Request(id),
             TurnRole::Incomplete,
+            Some(pause_style),
         );
+        let content_base = if let Some(distractor_episode) = distractor {
+            let delay = self.rng.range(50, 300);
+            let distractor_duration = self.rng.range(300, 600);
+            let distractor_end = name_end + u64::from(delay) + u64::from(distractor_duration);
+            self.other(distractor_end, distractor_episode, distractor_duration);
+            distractor_end
+        } else {
+            name_end
+        };
         let pause = self.rng.range(150, 700);
         let duration = self.rng.range(700, 1600);
-        let end = name_end + u64::from(pause) + u64::from(duration);
+        let end = content_base + u64::from(pause) + u64::from(duration);
         let cue = self.user_cue(duration, false);
-        let second = self.segment(end, cue, episode, Stimulus::Request(id), TurnRole::Complete);
+        let second = self.segment(
+            end,
+            cue,
+            episode,
+            Stimulus::Request(id),
+            TurnRole::Complete,
+            Some(pause_style),
+        );
         self.turns.push(Turn {
             id,
             episode,
@@ -311,6 +453,7 @@ impl Builder {
             deadline: Millis(end + 10_000),
             kind: crate::tape::TurnKind::Split,
             gap: None,
+            pause_style: Some(pause_style),
         });
         name_end
     }
@@ -353,7 +496,26 @@ impl Builder {
             media: None,
             turn_complete: None,
         };
-        self.segment(end, cue, episode, Stimulus::OtherSpeech, TurnRole::Other);
+        self.segment(
+            end,
+            cue,
+            episode,
+            Stimulus::OtherSpeech,
+            TurnRole::Other,
+            None,
+        );
+    }
+    fn aside(&mut self, end: u64, episode: EpisodeId, duration: u32) {
+        let pause_style = self.condition_rng.normal(0.0, 2.7);
+        let cue = self.user_cue(duration, false);
+        self.segment(
+            end,
+            cue,
+            episode,
+            Stimulus::Aside,
+            TurnRole::Complete,
+            Some(pause_style),
+        );
     }
     fn noise(&mut self, start: u64, episode: EpisodeId) {
         let duration_ms = self.rng.range(250, 1000);
@@ -372,7 +534,14 @@ impl Builder {
             episode,
             Stimulus::Noise,
             TurnRole::Other,
+            None,
         );
+    }
+    fn tv_on(&self, block: u32) -> bool {
+        usize::try_from(block)
+            .ok()
+            .and_then(|block| self.conditions.get(block))
+            .is_some_and(|condition| condition.tv != TvBackground::Off)
     }
     fn television(&mut self, start: u64, episode: EpisodeId) {
         let span = u64::from(self.rng.range(120_000, 165_000));
@@ -381,13 +550,17 @@ impl Builder {
         let mut now = start;
         while now + 2000 <= start + span {
             let duration_ms = self.rng.range(1000, 2000);
+            // The set's volume is fixed, but speech level moves from line to line and
+            // speaker to speaker. Drawn on the condition stream, so timing is untouched.
+            let level = (energy + self.condition_rng.normal(0.0, TV_ENERGY_JITTER)).clamp(0.0, 1.0);
+            let voicing = (vad + self.condition_rng.normal(0.0, TV_VAD_JITTER)).clamp(0.0, 1.0);
             self.segment(
                 now + u64::from(duration_ms),
                 SpeechCue {
                     duration_ms,
                     keyword: false,
-                    energy,
-                    vad_confidence: vad,
+                    energy: level,
+                    vad_confidence: voicing,
                     speaker_sim: None,
                     media: None,
                     turn_complete: None,
@@ -395,6 +568,7 @@ impl Builder {
                 episode,
                 Stimulus::Tv,
                 TurnRole::Other,
+                None,
             );
             now += u64::from(self.rng.range(3000, 6000));
         }
@@ -414,16 +588,25 @@ impl Builder {
         let mut records: Vec<_> = ticks.collect();
         records.append(&mut self.records);
         records.sort_by_key(|record| record.event.now());
-        Tape::new(kind, seed, Millis(duration), records, self.turns, noise)
+        Tape::new(
+            kind,
+            seed,
+            Millis(duration),
+            records,
+            self.turns,
+            noise,
+            self.conditions,
+        )
     }
 }
 
 /// Generate the declared E1a mixed population; no controller is run or consulted.
 pub fn e1a(seed: u64) -> Result<Tape, Error> {
-    let mut b = Builder::new(seed);
+    let mut b = Builder::new(seed, 3_600_000);
     for block in 0u32..20 {
         let origin = u64::from(block) * 180_000;
         let episode = block * 5;
+        let distractor = 100 + block * 7;
         let mut starts = [0u64; 5];
         for (value, offset) in starts
             .iter_mut()
@@ -441,10 +624,15 @@ pub fn e1a(seed: u64) -> Result<Tape, Error> {
             false,
             (crate::tape::TurnKind::Single, None),
         );
-        let name_end = b.split(split, EpisodeId(episode + 1));
+        let split_distractor = if block.is_multiple_of(2) {
+            None
+        } else {
+            Some(EpisodeId(distractor + 2))
+        };
+        let name_end = b.split(split, EpisodeId(episode + 1), split_distractor);
         b.conversation(conversation, EpisodeId(episode + 2), block);
         let duration = b.rng.range(250, 700);
-        b.request(
+        let short_end = b.request(
             short,
             EpisodeId(episode + 3),
             duration,
@@ -469,36 +657,48 @@ pub fn e1a(seed: u64) -> Result<Tape, Error> {
             true,
             (crate::tape::TurnKind::Interruption, None),
         );
-        let distractor = episode + 100;
-        b.television(origin, EpisodeId(distractor));
+        // The show plays only where the block's TV is on, the same TV that degrades
+        // the owner's sensors there.
+        if b.tv_on(block) {
+            b.television(origin, EpisodeId(distractor));
+        }
         b.other(first_end + 1000, EpisodeId(distractor + 1), 700);
-        b.segment(
-            name_end + 400,
-            SpeechCue {
-                energy: 0.8,
-                vad_confidence: 0.8,
-                duration_ms: 250,
-                keyword: true,
-                speaker_sim: None,
-                media: None,
-                turn_complete: None,
-            },
-            EpisodeId(distractor + 2),
-            Stimulus::FalseKeyword,
-            TurnRole::Other,
-        );
+        if block.is_multiple_of(2) {
+            b.segment(
+                name_end + 400,
+                SpeechCue {
+                    energy: 0.8,
+                    vad_confidence: 0.8,
+                    duration_ms: 250,
+                    keyword: true,
+                    speaker_sim: None,
+                    media: None,
+                    turn_complete: None,
+                },
+                EpisodeId(distractor + 2),
+                Stimulus::FalseKeyword,
+                TurnRole::Other,
+                None,
+            );
+        }
         for n in 0..5 {
             b.noise(origin + 60_000 + n * 3000, EpisodeId(distractor + 3));
         }
         let duration = b.rng.range(700, 1600);
         b.other(origin + 110_000, EpisodeId(distractor + 4), duration);
+        let aside_end = first_end + u64::from(b.rng.range(5000, 9000));
+        let aside_duration = b.rng.range(800, 1600);
+        b.aside(aside_end, EpisodeId(distractor + 5), aside_duration);
+        let in_window_end = short_end + u64::from(b.rng.range(3000, 6000));
+        let in_window_duration = b.rng.range(700, 1400);
+        b.other(in_window_end, EpisodeId(distractor + 6), in_window_duration);
     }
     b.finish(TapeKind::E1a, seed, 3_600_000, vec![])
 }
 
 /// Generate ten commands and fifty minutes of household noise cues over one hour.
 pub fn e1b(seed: u64) -> Result<Tape, Error> {
-    let mut b = Builder::new(seed);
+    let mut b = Builder::new(seed, 3_600_000);
     let mut intervals = Vec::with_capacity(10);
     for block in 0u32..10 {
         let origin = u64::from(block) * 360_000;
@@ -548,6 +748,7 @@ pub fn e1b(seed: u64) -> Result<Tape, Error> {
                 EpisodeId(100 + block),
                 source,
                 TurnRole::Other,
+                None,
             );
         }
         let start = origin + 300_000 + u64::from(b.rng.range(1000, 54_000));
@@ -643,7 +844,12 @@ mod tests {
                 })
                 .collect();
             assert_eq!(relevant.len(), 100);
-            assert_eq!(distractors.len(), 100);
+            let shows = a
+                .conditions()
+                .iter()
+                .filter(|condition| condition.tv != TvBackground::Off)
+                .count();
+            assert_eq!(distractors.len(), 120 + shows);
             assert_eq!(a.turns().len(), 200);
             assert_eq!(b.turns().len(), 10);
             assert_eq!(
@@ -673,416 +879,319 @@ mod tests {
         }
     }
     #[test]
-    fn speaker_sim_distribution_properties() {
-        let mut pooled_user = Vec::new();
-        let mut pooled_impostor = Vec::new();
+    fn normal_sampler_known_answer_and_distribution() {
+        let mut rng = SplitMix64::with_seed(42);
+        let sample0 = rng.normal(0.0, 1.0);
+        let sample1 = rng.normal(0.0, 1.0);
+        assert!((sample0 - 0.414_719_72).abs() < 1e-4);
+        assert!((sample1 - (-0.891_886_1)).abs() < 1e-4);
 
-        for seed in [0, 1, 7, 42] {
-            let a = e1a(seed).unwrap();
-            let b = e1b(seed).unwrap();
-            let mut user_sims = Vec::new();
-            let mut impostor_sims = Vec::new();
-
-            for tape in [&a, &b] {
-                for record in tape.records() {
-                    if let Event::Speech { cue, .. } = &record.event {
-                        let sim = cue.speaker_sim.expect(
-                            "every speech cue in a generated tape must have Some speaker_sim",
-                        );
-                        match record.annotation.source() {
-                            Some(Stimulus::Request(_) | Stimulus::BargeIn(_)) => {
-                                user_sims.push(sim);
-                                pooled_user.push(sim);
-                            }
-                            Some(Stimulus::Tv | Stimulus::OtherSpeech | Stimulus::FalseKeyword) => {
-                                impostor_sims.push(sim);
-                                pooled_impostor.push(sim);
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-
-            let user_mean = user_sims.iter().copied().sum::<f32>() / user_sims.len() as f32;
-            let impostor_mean =
-                impostor_sims.iter().copied().sum::<f32>() / impostor_sims.len() as f32;
-            let impostor_ge_06 = impostor_sims.iter().filter(|&&s| s >= 0.6).count() as f32
-                / impostor_sims.len() as f32;
-
-            assert!(
-                user_mean > 0.7,
-                "seed {seed}: user mean was {user_mean}, expected > 0.7"
-            );
-            assert!(
-                impostor_mean < 0.4,
-                "seed {seed}: impostor mean was {impostor_mean}, expected < 0.4"
-            );
-            assert!(
-                (0.01..=0.06).contains(&impostor_ge_06),
-                "seed {seed}: impostor share >= 0.6 was {impostor_ge_06}, expected in 0.01..=0.06"
-            );
+        let mut draws = Vec::with_capacity(20_000);
+        for _ in 0..20_000 {
+            draws.push(rng.normal(2.5, 0.75));
         }
-
-        let pooled_user_mean = pooled_user.iter().copied().sum::<f32>() / pooled_user.len() as f32;
-        let pooled_impostor_mean =
-            pooled_impostor.iter().copied().sum::<f32>() / pooled_impostor.len() as f32;
-        let pooled_impostor_ge_06 = pooled_impostor.iter().filter(|&&s| s >= 0.6).count() as f32
-            / pooled_impostor.len() as f32;
-
+        let mean = draws.iter().copied().sum::<f32>() / draws.len() as f32;
+        let var = draws.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / (draws.len() - 1) as f32;
+        let sd = var.sqrt();
         assert!(
-            pooled_user_mean > 0.7,
-            "pooled user mean was {pooled_user_mean}, expected > 0.7"
+            (mean - 2.5).abs() < 0.03,
+            "mean was {mean}, expected near 2.5"
         );
-        assert!(
-            pooled_impostor_mean < 0.4,
-            "pooled impostor mean was {pooled_impostor_mean}, expected < 0.4"
-        );
-        assert!(
-            (0.01..=0.06).contains(&pooled_impostor_ge_06),
-            "pooled impostor share >= 0.6 was {pooled_impostor_ge_06}, expected in 0.01..=0.06"
-        );
+        assert!((sd - 0.75).abs() < 0.03, "sd was {sd}, expected near 0.75");
     }
+
     #[test]
-    fn media_distribution_properties() {
-        let mut pooled_tv = Vec::new();
-        let mut pooled_live = Vec::new();
-
-        for seed in [0, 1, 7, 42] {
-            let a = e1a(seed).unwrap();
-            let b = e1b(seed).unwrap();
-            let mut tv_media = Vec::new();
-            let mut live_media = Vec::new();
-
-            for tape in [&a, &b] {
-                for record in tape.records() {
-                    if let Event::Speech { cue, .. } = &record.event {
-                        let media = cue
-                            .media
-                            .expect("every speech cue in a generated tape must have Some media");
-                        match record.annotation.source() {
-                            Some(Stimulus::Tv) => {
-                                tv_media.push(media);
-                                pooled_tv.push(media);
-                            }
-                            Some(
-                                Stimulus::Request(_)
-                                | Stimulus::BargeIn(_)
-                                | Stimulus::OtherSpeech
-                                | Stimulus::FalseKeyword,
-                            ) => {
-                                live_media.push(media);
-                                pooled_live.push(media);
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-
-            let tv_mean = tv_media.iter().copied().sum::<f32>() / tv_media.len() as f32;
-            let live_mean = live_media.iter().copied().sum::<f32>() / live_media.len() as f32;
-            let tv_lt_05 =
-                tv_media.iter().filter(|&&m| m < 0.5).count() as f32 / tv_media.len() as f32;
-            let live_ge_05 =
-                live_media.iter().filter(|&&m| m >= 0.5).count() as f32 / live_media.len() as f32;
-
-            assert!(
-                tv_mean > 0.7,
-                "seed {seed}: tv mean was {tv_mean}, expected > 0.7"
-            );
-            assert!(
-                live_mean < 0.25,
-                "seed {seed}: live mean was {live_mean}, expected < 0.25"
-            );
-            assert!(
-                (0.01..=0.08).contains(&tv_lt_05),
-                "seed {seed}: tv share < 0.5 was {tv_lt_05}, expected in 0.01..=0.08"
-            );
-            assert!(
-                (0.01..=0.08).contains(&live_ge_05),
-                "seed {seed}: live share >= 0.5 was {live_ge_05}, expected in 0.01..=0.08"
-            );
-        }
-
-        let pooled_tv_mean = pooled_tv.iter().copied().sum::<f32>() / pooled_tv.len() as f32;
-        let pooled_live_mean = pooled_live.iter().copied().sum::<f32>() / pooled_live.len() as f32;
-        let pooled_tv_lt_05 =
-            pooled_tv.iter().filter(|&&m| m < 0.5).count() as f32 / pooled_tv.len() as f32;
-        let pooled_live_ge_05 =
-            pooled_live.iter().filter(|&&m| m >= 0.5).count() as f32 / pooled_live.len() as f32;
-
-        assert!(
-            pooled_tv_mean > 0.7,
-            "pooled tv mean was {pooled_tv_mean}, expected > 0.7"
-        );
-        assert!(
-            pooled_live_mean < 0.25,
-            "pooled live mean was {pooled_live_mean}, expected < 0.25"
-        );
-        assert!(
-            (0.01..=0.08).contains(&pooled_tv_lt_05),
-            "pooled tv share < 0.5 was {pooled_tv_lt_05}, expected in 0.01..=0.08"
-        );
-        assert!(
-            (0.01..=0.08).contains(&pooled_live_ge_05),
-            "pooled live share >= 0.5 was {pooled_live_ge_05}, expected in 0.01..=0.08"
-        );
+    fn duration_interpolation_log2() {
+        let y = [0.10, 0.50, 0.90];
+        assert!((interpolate_log2(750, y) - 0.10).abs() < f32::EPSILON);
+        assert!((interpolate_log2(1500, y) - 0.50).abs() < f32::EPSILON);
+        assert!((interpolate_log2(3000, y) - 0.90).abs() < f32::EPSILON);
+        assert!((interpolate_log2(6000, y) - 0.90).abs() < f32::EPSILON);
+        assert!((interpolate_log2(500, y) - 0.10).abs() < f32::EPSILON);
+        let at_1060 = interpolate_log2(1060, y);
+        let expected_1060 = 0.10 + (1060.0_f32 / 750.0).log2() * (0.50 - 0.10);
+        assert!((at_1060 - expected_1060).abs() < 1e-5);
     }
+
     #[test]
-    fn speaker_sim_draws_are_independent_of_media_stream() {
-        let tape = e1a(42).unwrap();
-        let mut sim_rng = SplitMix64::with_seed(0x2a ^ SPEAKER_STREAM_SALT);
-        let mut speech_records: Vec<_> = tape
-            .records()
-            .iter()
-            .filter(|r| matches!(r.event, Event::Speech { .. }))
-            .collect();
-        speech_records.sort_by_key(|r| match r.annotation {
-            Annotation::Speech { segment, .. } => segment.0,
-            Annotation::Clock => 0,
-        });
-        for record in speech_records {
-            if let Event::Speech { cue, .. } = &record.event {
-                let source = record.annotation.source().unwrap();
-                let expected_sim = match source {
-                    Stimulus::Request(_) | Stimulus::BargeIn(_) => {
-                        if sim_rng.real(0.0, 1.0) < SPEAKER_SIM_CROSSOVER_RATE {
-                            sim_rng.real(IMPOSTOR_SPEAKER_SIM_MIN, IMPOSTOR_SPEAKER_SIM_MAX)
-                        } else {
-                            sim_rng.real(USER_SPEAKER_SIM_MIN, USER_SPEAKER_SIM_MAX)
-                        }
-                    }
-                    Stimulus::Tv | Stimulus::OtherSpeech | Stimulus::FalseKeyword => {
-                        if sim_rng.real(0.0, 1.0) < SPEAKER_SIM_CROSSOVER_RATE {
-                            sim_rng.real(USER_SPEAKER_SIM_MIN, USER_SPEAKER_SIM_MAX)
-                        } else {
-                            sim_rng.real(IMPOSTOR_SPEAKER_SIM_MIN, IMPOSTOR_SPEAKER_SIM_MAX)
-                        }
-                    }
-                    Stimulus::Noise
-                    | Stimulus::Motor
-                    | Stimulus::Ventilation
-                    | Stimulus::SelfEcho => {
-                        sim_rng.real(NON_SPEECH_SPEAKER_SIM_MIN, NON_SPEECH_SPEAKER_SIM_MAX)
-                    }
-                };
-                assert_eq!(
-                    cue.speaker_sim,
-                    Some(expected_sim),
-                    "speaker_sim must match independent stream unaffected by media"
-                );
-            }
-        }
-    }
-    #[test]
-    fn turn_complete_distribution_properties() {
-        let mut pooled_complete = Vec::new();
-        let mut pooled_incomplete = Vec::new();
+    fn conditions_per_block_and_frequencies_over_seeds() {
+        let mut total_blocks = 0;
+        let mut near_count = 0;
+        let mut tv_off = 0;
+        let mut tv_mod = 0;
+        let mut tv_loud = 0;
+        let mut tv_dialogue = 0;
+        let mut acoustics_sum = 0.0_f32;
+        let mut show_sum = 0.0_f32;
 
         for seed in 0..=31 {
-            let a = e1a(seed).unwrap();
-            let b = e1b(seed).unwrap();
+            let tape = e1a(seed).unwrap();
+            let conditions = tape.conditions();
+            assert_eq!(
+                conditions.len(),
+                20,
+                "each 1-hour tape must have 20 conditions"
+            );
+            for cond in conditions {
+                total_blocks += 1;
+                if cond.distance == Distance::Near {
+                    near_count += 1;
+                }
+                match cond.tv {
+                    TvBackground::Off => tv_off += 1,
+                    TvBackground::Moderate => tv_mod += 1,
+                    TvBackground::Loud => tv_loud += 1,
+                }
+                if cond.tv_content == TvContent::Dialogue {
+                    tv_dialogue += 1;
+                }
+                acoustics_sum += cond.acoustics;
+                show_sum += cond.show;
+            }
+        }
 
-            for tape in [&a, &b] {
-                let mut incomplete_segments = std::collections::BTreeSet::new();
-                let mut complete_segments = std::collections::BTreeSet::new();
+        assert_eq!(total_blocks, 640);
+        let near_frac = near_count as f32 / total_blocks as f32;
+        let off_frac = tv_off as f32 / total_blocks as f32;
+        let mod_frac = tv_mod as f32 / total_blocks as f32;
+        let loud_frac = tv_loud as f32 / total_blocks as f32;
+        let dia_frac = tv_dialogue as f32 / total_blocks as f32;
+        let acoustics_mean = acoustics_sum / total_blocks as f32;
+        let show_mean = show_sum / total_blocks as f32;
+
+        assert!(
+            (0.18..=0.32).contains(&near_frac),
+            "near_frac was {near_frac}, expected ~0.25"
+        );
+        assert!(
+            (0.44..=0.56).contains(&off_frac),
+            "off_frac was {off_frac}, expected ~0.50"
+        );
+        assert!(
+            (0.29..=0.41).contains(&mod_frac),
+            "mod_frac was {mod_frac}, expected ~0.35"
+        );
+        assert!(
+            (0.10..=0.20).contains(&loud_frac),
+            "loud_frac was {loud_frac}, expected ~0.15"
+        );
+        assert!(
+            (0.54..=0.66).contains(&dia_frac),
+            "dia_frac was {dia_frac}, expected ~0.60"
+        );
+        assert!(
+            acoustics_mean.abs() < 0.15,
+            "acoustics mean was {acoustics_mean}"
+        );
+        assert!(show_mean.abs() < 0.02, "show mean was {show_mean}");
+    }
+
+    #[test]
+    fn owner_far_tv_off_1500_ms_draws() {
+        let mut b = Builder::new(42, 3_600_000);
+        let mut draws = Vec::with_capacity(20_000);
+        let cond_base = RoomCondition {
+            distance: Distance::Far,
+            tv: TvBackground::Off,
+            tv_content: TvContent::Dialogue,
+            acoustics: 0.0,
+            show: 0.0,
+        };
+        for _ in 0..20_000 {
+            b.owner_offset = b.condition_rng.normal(0.0, 0.05);
+            let cond = RoomCondition {
+                acoustics: b.condition_rng.normal(0.0, 1.0),
+                ..cond_base
+            };
+            let sim = b.draw_speaker_sim(Stimulus::Request(TurnId(1)), 1500, cond);
+            draws.push(sim);
+        }
+        let mean = draws.iter().copied().sum::<f32>() / draws.len() as f32;
+        let var = draws.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / (draws.len() - 1) as f32;
+        let sd = var.sqrt();
+        let below_06 = draws.iter().filter(|&&s| s < 0.6).count() as f32 / draws.len() as f32;
+        assert!(
+            (mean - 0.57).abs() < 0.03,
+            "mean was {mean}, expected near 0.57"
+        );
+        assert!((sd - 0.13).abs() < 0.03, "sd was {sd}, expected near 0.13");
+        assert!(
+            (0.52..=0.68).contains(&below_06),
+            "below 0.6 was {below_06}, expected in 0.52..=0.68"
+        );
+    }
+
+    #[test]
+    fn relative_far_tv_off_3000_ms_draws() {
+        let mut b = Builder::new(43, 3_600_000);
+        let mut draws = Vec::with_capacity(20_000);
+        let cond_base = RoomCondition {
+            distance: Distance::Far,
+            tv: TvBackground::Off,
+            tv_content: TvContent::Dialogue,
+            acoustics: 0.0,
+            show: 0.0,
+        };
+        for _ in 0..20_000 {
+            let cond = RoomCondition {
+                acoustics: b.condition_rng.normal(0.0, 1.0),
+                ..cond_base
+            };
+            let sim = b.draw_speaker_sim(Stimulus::OtherSpeech, 3000, cond);
+            draws.push(sim);
+        }
+        let mean = draws.iter().copied().sum::<f32>() / draws.len() as f32;
+        let var = draws.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / (draws.len() - 1) as f32;
+        let sd = var.sqrt();
+        let ge_06 = draws.iter().filter(|&&s| s >= 0.6).count() as f32 / draws.len() as f32;
+        assert!(
+            (mean - 0.51).abs() < 0.03,
+            "mean was {mean}, expected near 0.51"
+        );
+        assert!((sd - 0.15).abs() < 0.03, "sd was {sd}, expected near 0.15");
+        assert!(
+            (0.18..=0.32).contains(&ge_06),
+            "ge 0.6 was {ge_06}, expected in 0.18..=0.32"
+        );
+    }
+
+    #[test]
+    fn tv_dialogue_1500_ms_media_draws() {
+        let mut b = Builder::new(44, 3_600_000);
+        let mut draws = Vec::with_capacity(20_000);
+        let cond_base = RoomCondition {
+            distance: Distance::Near,
+            tv: TvBackground::Loud,
+            tv_content: TvContent::Dialogue,
+            acoustics: 0.0,
+            show: 0.0,
+        };
+        for _ in 0..20_000 {
+            let cond = RoomCondition {
+                acoustics: b.condition_rng.normal(0.0, 1.0),
+                show: b.condition_rng.normal(0.0, 0.08),
+                ..cond_base
+            };
+            let media = b.draw_media(Stimulus::Tv, 1500, cond);
+            draws.push(media);
+        }
+        let mean = draws.iter().copied().sum::<f32>() / draws.len() as f32;
+        let var = draws.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / (draws.len() - 1) as f32;
+        let sd = var.sqrt();
+        let below_05 = draws.iter().filter(|&&m| m < 0.5).count() as f32 / draws.len() as f32;
+        assert!(
+            (mean - 0.56).abs() < 0.03,
+            "mean was {mean}, expected near 0.56"
+        );
+        assert!((sd - 0.20).abs() < 0.03, "sd was {sd}, expected near 0.20");
+        assert!(
+            (0.30..=0.46).contains(&below_05),
+            "below 0.5 was {below_05}, expected in 0.30..=0.46"
+        );
+    }
+
+    #[test]
+    fn incomplete_below_1000_ms_turn_complete_draws() {
+        let mut b = Builder::new(45, 3_600_000);
+        let mut draws = Vec::with_capacity(20_000);
+        let cond_base = RoomCondition {
+            distance: Distance::Near,
+            tv: TvBackground::Off,
+            tv_content: TvContent::Dialogue,
+            acoustics: 0.0,
+            show: 0.0,
+        };
+        for _ in 0..20_000 {
+            let cond = RoomCondition {
+                acoustics: b.condition_rng.normal(0.0, 1.0),
+                ..cond_base
+            };
+            let pause_style = b.condition_rng.normal(0.0, 2.7);
+            let score = b.draw_turn_complete(TurnRole::Incomplete, 500, cond, Some(pause_style));
+            draws.push(score);
+        }
+        let ge_05 = draws.iter().filter(|&&t| t >= 0.5).count() as f32 / draws.len() as f32;
+        assert!(
+            (0.15..=0.26).contains(&ge_05),
+            "ge 0.5 was {ge_05}, expected in 0.15..=0.26"
+        );
+    }
+
+    #[test]
+    fn complete_below_1000_ms_turn_complete_draws() {
+        let mut b = Builder::new(46, 3_600_000);
+        let mut draws = Vec::with_capacity(20_000);
+        let cond_base = RoomCondition {
+            distance: Distance::Near,
+            tv: TvBackground::Off,
+            tv_content: TvContent::Dialogue,
+            acoustics: 0.0,
+            show: 0.0,
+        };
+        for _ in 0..20_000 {
+            let cond = RoomCondition {
+                acoustics: b.condition_rng.normal(0.0, 1.0),
+                ..cond_base
+            };
+            let pause_style = b.condition_rng.normal(0.0, 2.7);
+            let score = b.draw_turn_complete(TurnRole::Complete, 500, cond, Some(pause_style));
+            draws.push(score);
+        }
+        let lt_05 = draws.iter().filter(|&&t| t < 0.5).count() as f32 / draws.len() as f32;
+        assert!(
+            (0.28..=0.42).contains(&lt_05),
+            "lt 0.5 was {lt_05}, expected in 0.28..=0.42"
+        );
+    }
+
+    #[test]
+    fn condition_draws_do_not_alter_other_streams() {
+        for seed in [0, 1, 7, 42] {
+            let mut b1 = Builder::new(seed, 3_600_000);
+            let mut b2 = Builder::new(seed, 3_600_000);
+            for _ in 0..100 {
+                b2.condition_rng.next_u64();
+                b2.condition_rng.normal(0.0, 1.0);
+            }
+            for _ in 0..100 {
+                assert_eq!(b1.rng.next_u64(), b2.rng.next_u64());
+                assert_eq!(b1.speaker_rng.next_u64(), b2.speaker_rng.next_u64());
+                assert_eq!(b1.media_rng.next_u64(), b2.media_rng.next_u64());
+                assert_eq!(b1.turn_rng.next_u64(), b2.turn_rng.next_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn turn_segments_share_identical_pause_style() {
+        for seed in [0, 1, 7, 42] {
+            let tape_a = e1a(seed).unwrap();
+            let tape_b = e1b(seed).unwrap();
+            for tape in [&tape_a, &tape_b] {
                 for turn in tape.turns() {
-                    if let Some((&last, prefix)) = turn.segments.split_last() {
-                        complete_segments.insert(last);
-                        for &seg in prefix {
-                            incomplete_segments.insert(seg);
-                        }
-                    }
-                }
-
-                for record in tape.records() {
-                    if let Event::Speech { cue, .. } = &record.event {
-                        let score = cue.turn_complete.expect(
-                            "every speech cue in a generated tape must have Some turn_complete",
+                    let expected_style = turn
+                        .pause_style
+                        .expect("every user turn must have a pause_style");
+                    assert!(
+                        !turn.segments.is_empty(),
+                        "turn must have at least one segment"
+                    );
+                    for &seg_id in &turn.segments {
+                        let record = tape
+                            .records()
+                            .iter()
+                            .find(|r| match r.annotation {
+                                Annotation::Speech { segment, .. } => segment == seg_id,
+                                Annotation::Clock => false,
+                            })
+                            .expect("matching record for turn segment must exist");
+                        assert_eq!(
+                            record.annotation.pause_style(),
+                            Some(expected_style),
+                            "segment pause_style must match turn pause_style exactly"
                         );
-                        if let Annotation::Speech { segment, .. } = record.annotation {
-                            if complete_segments.contains(&segment) {
-                                pooled_complete.push(score);
-                            } else if incomplete_segments.contains(&segment) {
-                                pooled_incomplete.push(score);
-                            }
-                        }
                     }
                 }
-            }
-        }
-
-        let pooled_complete_mean =
-            pooled_complete.iter().copied().sum::<f32>() / pooled_complete.len() as f32;
-        let pooled_incomplete_mean =
-            pooled_incomplete.iter().copied().sum::<f32>() / pooled_incomplete.len() as f32;
-        let pooled_complete_lt_05 = pooled_complete.iter().filter(|&&t| t < 0.5).count() as f32
-            / pooled_complete.len() as f32;
-        let pooled_incomplete_ge_05 = pooled_incomplete.iter().filter(|&&t| t >= 0.5).count()
-            as f32
-            / pooled_incomplete.len() as f32;
-
-        assert!(
-            pooled_complete_mean > 0.75,
-            "pooled complete mean was {pooled_complete_mean}, expected > 0.75"
-        );
-        assert!(
-            pooled_incomplete_mean < 0.25,
-            "pooled incomplete mean was {pooled_incomplete_mean}, expected < 0.25"
-        );
-        assert!(
-            pooled_complete_lt_05 < 0.05,
-            "pooled complete share < 0.5 was {pooled_complete_lt_05}, expected < 0.05"
-        );
-        assert!(
-            pooled_incomplete_ge_05 < 0.05,
-            "pooled incomplete share >= 0.5 was {pooled_incomplete_ge_05}, expected < 0.05"
-        );
-    }
-    #[test]
-    fn speaker_sim_and_media_draws_are_independent_of_turn_stream() {
-        let tape = e1a(42).unwrap();
-        let mut sim_rng = SplitMix64::with_seed(0x2a ^ SPEAKER_STREAM_SALT);
-        let mut media_rng = SplitMix64::with_seed(0x2a ^ MEDIA_STREAM_SALT);
-
-        let mut speech_records: Vec<_> = tape
-            .records()
-            .iter()
-            .filter(|r| matches!(r.event, Event::Speech { .. }))
-            .collect();
-        speech_records.sort_by_key(|r| match r.annotation {
-            Annotation::Speech { segment, .. } => segment.0,
-            Annotation::Clock => 0,
-        });
-        for record in speech_records {
-            if let Event::Speech { cue, .. } = &record.event {
-                let source = match record.annotation {
-                    Annotation::Speech { source, .. } => source,
-                    Annotation::Clock => continue,
-                };
-                let expected_sim = match source {
-                    Stimulus::Request(_) | Stimulus::BargeIn(_) => {
-                        if sim_rng.real(0.0, 1.0) < SPEAKER_SIM_CROSSOVER_RATE {
-                            sim_rng.real(IMPOSTOR_SPEAKER_SIM_MIN, IMPOSTOR_SPEAKER_SIM_MAX)
-                        } else {
-                            sim_rng.real(USER_SPEAKER_SIM_MIN, USER_SPEAKER_SIM_MAX)
-                        }
-                    }
-                    Stimulus::Tv | Stimulus::OtherSpeech | Stimulus::FalseKeyword => {
-                        if sim_rng.real(0.0, 1.0) < SPEAKER_SIM_CROSSOVER_RATE {
-                            sim_rng.real(USER_SPEAKER_SIM_MIN, USER_SPEAKER_SIM_MAX)
-                        } else {
-                            sim_rng.real(IMPOSTOR_SPEAKER_SIM_MIN, IMPOSTOR_SPEAKER_SIM_MAX)
-                        }
-                    }
-                    Stimulus::Noise
-                    | Stimulus::Motor
-                    | Stimulus::Ventilation
-                    | Stimulus::SelfEcho => {
-                        sim_rng.real(NON_SPEECH_SPEAKER_SIM_MIN, NON_SPEECH_SPEAKER_SIM_MAX)
-                    }
-                };
-                let expected_media = match source {
-                    Stimulus::Tv => {
-                        if media_rng.real(0.0, 1.0) < TV_MEDIA_MISS_RATE {
-                            media_rng.real(LIVE_VOICE_MEDIA_MIN, LIVE_VOICE_MEDIA_MAX)
-                        } else {
-                            media_rng.real(TV_MEDIA_MIN, TV_MEDIA_MAX)
-                        }
-                    }
-                    Stimulus::Request(_)
-                    | Stimulus::BargeIn(_)
-                    | Stimulus::OtherSpeech
-                    | Stimulus::FalseKeyword => {
-                        if media_rng.real(0.0, 1.0) < LIVE_VOICE_MEDIA_FALSE_ALARM_RATE {
-                            media_rng.real(TV_MEDIA_MIN, TV_MEDIA_MAX)
-                        } else {
-                            media_rng.real(LIVE_VOICE_MEDIA_MIN, LIVE_VOICE_MEDIA_MAX)
-                        }
-                    }
-                    Stimulus::Noise
-                    | Stimulus::Motor
-                    | Stimulus::Ventilation
-                    | Stimulus::SelfEcho => {
-                        media_rng.real(NON_SPEECH_MEDIA_MIN, NON_SPEECH_MEDIA_MAX)
-                    }
-                };
-
-                assert_eq!(
-                    cue.speaker_sim,
-                    Some(expected_sim),
-                    "speaker_sim must match independent stream unaffected by turn_complete"
-                );
-                assert_eq!(
-                    cue.media,
-                    Some(expected_media),
-                    "media must match independent stream unaffected by turn_complete"
-                );
-            }
-        }
-    }
-    #[test]
-    fn turn_complete_draws_match_independent_stream() {
-        let tape = e1a(42).unwrap();
-        let mut turn_rng = SplitMix64::with_seed(0x2a ^ TURN_STREAM_SALT);
-
-        let mut incomplete_segments = std::collections::BTreeSet::new();
-        let mut complete_segments = std::collections::BTreeSet::new();
-        for turn in tape.turns() {
-            if let Some((&last, prefix)) = turn.segments.split_last() {
-                complete_segments.insert(last);
-                for &seg in prefix {
-                    incomplete_segments.insert(seg);
-                }
-            }
-        }
-
-        let mut speech_records: Vec<_> = tape
-            .records()
-            .iter()
-            .filter(|r| matches!(r.event, Event::Speech { .. }))
-            .collect();
-        speech_records.sort_by_key(|r| match r.annotation {
-            Annotation::Speech { segment, .. } => segment.0,
-            Annotation::Clock => 0,
-        });
-        for record in speech_records {
-            if let Event::Speech { cue, .. } = &record.event {
-                let seg = match record.annotation {
-                    Annotation::Speech { segment, .. } => segment,
-                    Annotation::Clock => continue,
-                };
-                let role = if complete_segments.contains(&seg) {
-                    TurnRole::Complete
-                } else if incomplete_segments.contains(&seg) {
-                    TurnRole::Incomplete
-                } else {
-                    TurnRole::Other
-                };
-                let expected_turn = match role {
-                    TurnRole::Complete => {
-                        if turn_rng.real(0.0, 1.0) < COMPLETE_USER_TURN_MISS_RATE {
-                            turn_rng.real(INCOMPLETE_USER_TURN_MIN, INCOMPLETE_USER_TURN_MAX)
-                        } else {
-                            turn_rng.real(COMPLETE_USER_TURN_MIN, COMPLETE_USER_TURN_MAX)
-                        }
-                    }
-                    TurnRole::Incomplete => {
-                        if turn_rng.real(0.0, 1.0) < INCOMPLETE_USER_TURN_PREMATURE_RATE {
-                            turn_rng.real(COMPLETE_USER_TURN_MIN, COMPLETE_USER_TURN_MAX)
-                        } else {
-                            turn_rng.real(INCOMPLETE_USER_TURN_MIN, INCOMPLETE_USER_TURN_MAX)
-                        }
-                    }
-                    TurnRole::Other => turn_rng.real(NON_USER_TURN_MIN, NON_USER_TURN_MAX),
-                };
-
-                assert_eq!(
-                    cue.turn_complete,
-                    Some(expected_turn),
-                    "turn_complete must match independent stream"
-                );
             }
         }
     }
@@ -1107,7 +1216,13 @@ mod coverage_tests {
                 span.1 = time;
             }
         }
-        assert_eq!(tv.len(), 20);
+        let shows = tape
+            .conditions()
+            .iter()
+            .filter(|condition| condition.tv != TvBackground::Off)
+            .count();
+        assert!(shows > 0, "seed 7 has blocks with the TV on");
+        assert_eq!(tv.len(), shows);
         assert!(tv.values().all(|(start, end)| end - start > 110_000));
         let mut conversations = std::collections::BTreeMap::<EpisodeId, Vec<u64>>::new();
         for turn in tape.turns() {
@@ -1133,6 +1248,214 @@ mod coverage_tests {
             assert!(tape.records().iter().any(|record| record.event.now().0
                 == request.available_at.0 + 1000
                 && record.annotation.source() == Some(Stimulus::OtherSpeech)));
+        }
+    }
+    #[test]
+    fn the_tv_plays_only_in_blocks_where_it_is_on() {
+        for seed in [0, 1, 7, 42] {
+            let tape = e1a(seed).unwrap();
+            let mut blocks_with_tv = std::collections::BTreeSet::new();
+            for record in tape.records() {
+                if matches!(record.annotation.source(), Some(Stimulus::Tv)) {
+                    blocks_with_tv.insert(record.event.now().0 / 180_000);
+                }
+            }
+            for (block, condition) in (0u64..).zip(tape.conditions()) {
+                // A show that starts in a TV block may run into the next one.
+                if condition.tv == TvBackground::Off {
+                    let earlier_on = block > 0
+                        && tape
+                            .conditions()
+                            .get(usize::try_from(block - 1).unwrap())
+                            .is_some_and(|previous| previous.tv != TvBackground::Off);
+                    assert!(
+                        earlier_on || !blocks_with_tv.contains(&block),
+                        "seed {seed} block {block}"
+                    );
+                } else {
+                    assert!(blocks_with_tv.contains(&block), "seed {seed} block {block}");
+                }
+            }
+        }
+    }
+    #[test]
+    fn tv_lines_vary_in_level_around_their_show() {
+        let tape = e1a(3).unwrap();
+        let mut by_show: std::collections::BTreeMap<u32, Vec<f32>> =
+            std::collections::BTreeMap::new();
+        for record in tape.records() {
+            if let (
+                Event::Speech { cue, .. },
+                Annotation::Speech {
+                    episode: Some(episode),
+                    source: Stimulus::Tv,
+                    ..
+                },
+            ) = (&record.event, &record.annotation)
+            {
+                by_show.entry(episode.0).or_default().push(cue.energy);
+            }
+        }
+        let shows = tape
+            .conditions()
+            .iter()
+            .filter(|condition| condition.tv != TvBackground::Off)
+            .count();
+        assert_eq!(by_show.len(), shows);
+        for levels in by_show.values() {
+            let distinct: std::collections::BTreeSet<u32> =
+                levels.iter().map(|level| level.to_bits()).collect();
+            assert!(distinct.len() > levels.len() / 2, "{levels:?}");
+            let spread = levels.iter().copied().fold(f32::MIN, f32::max)
+                - levels.iter().copied().fold(f32::MAX, f32::min);
+            assert!(
+                spread < 0.6,
+                "one show keeps one volume setting: {levels:?}"
+            );
+        }
+    }
+    #[test]
+    fn e1a_contains_twenty_asides_and_twenty_in_window_other_speech() {
+        for seed in [0, 1, 7, 42] {
+            let tape = e1a(seed).unwrap();
+            let mut asides = Vec::new();
+            let mut in_window = Vec::new();
+            for r in tape.records() {
+                if let Annotation::Speech {
+                    episode: Some(ep),
+                    source,
+                    ..
+                } = r.annotation
+                {
+                    if source == Stimulus::Aside {
+                        assert!(
+                            r.annotation.turn().is_none(),
+                            "aside cannot belong to a turn"
+                        );
+                        asides.push((ep, r));
+                    }
+                    if ep.0 >= 100 && (ep.0 - 100) % 7 == 6 {
+                        assert_eq!(source, Stimulus::OtherSpeech);
+                        assert!(
+                            r.annotation.turn().is_none(),
+                            "in-window speech cannot belong to a turn"
+                        );
+                        in_window.push((ep, r));
+                    }
+                }
+            }
+            assert_eq!(asides.len(), 20, "seed {seed} must have exactly 20 asides");
+            assert_eq!(
+                in_window.len(),
+                20,
+                "seed {seed} must have exactly 20 in-window segments"
+            );
+        }
+    }
+    #[test]
+    fn asides_speaker_sim_follows_caller_distribution() {
+        let mut aside_sims = Vec::new();
+        for seed in 0..=31 {
+            let tape = e1a(seed).unwrap();
+            for r in tape.records() {
+                if r.annotation.source() == Some(Stimulus::Aside) {
+                    let Event::Speech { cue, .. } = &r.event else {
+                        continue;
+                    };
+                    let sim = cue.speaker_sim.expect("aside must have speaker_sim");
+                    aside_sims.push(sim);
+                }
+            }
+        }
+        assert_eq!(aside_sims.len(), 640);
+        let mean = aside_sims.iter().copied().sum::<f32>() / aside_sims.len() as f32;
+        assert!(
+            (0.45..=0.65).contains(&mean),
+            "asides mean speaker_sim was {mean}, expected in 0.45..=0.65"
+        );
+    }
+    fn verify_split_block(tape: &Tape, block: u32) {
+        let distractor_base = 100 + block * 7;
+        let split_episode = EpisodeId(block * 5 + 1);
+        let turn = tape
+            .turns()
+            .iter()
+            .find(|t| t.episode == split_episode)
+            .expect("split turn must exist");
+        assert_eq!(
+            turn.segments.len(),
+            2,
+            "split turn must have 2 user segments"
+        );
+
+        let first_seg = turn.segments[0];
+        let second_seg = turn.segments[1];
+        let mut first_rec = None;
+        let mut second_rec = None;
+        let mut distractor_rec = None;
+
+        for r in tape.records() {
+            if let Annotation::Speech {
+                segment, episode, ..
+            } = r.annotation
+            {
+                if segment == first_seg {
+                    first_rec = Some(r);
+                } else if segment == second_seg {
+                    second_rec = Some(r);
+                }
+                if episode == Some(EpisodeId(distractor_base + 2)) {
+                    distractor_rec = Some(r);
+                }
+            }
+        }
+
+        let first_rec = first_rec.unwrap();
+        let second_rec = second_rec.unwrap();
+        let distractor_rec = distractor_rec.unwrap();
+
+        let name_end = first_rec.event.now().0;
+        let content_end = second_rec.event.now().0;
+        let content_duration = match &second_rec.event {
+            Event::Speech { cue, .. } => u64::from(cue.duration_ms),
+            _ => unreachable!(),
+        };
+        let content_start = content_end - content_duration;
+        assert_eq!(turn.available_at.0, content_end);
+
+        if block.is_multiple_of(2) {
+            assert_eq!(
+                distractor_rec.annotation.source(),
+                Some(Stimulus::FalseKeyword)
+            );
+            assert_eq!(distractor_rec.event.now().0, name_end + 400);
+            let pause = content_start - name_end;
+            assert!((150..=700).contains(&pause));
+        } else {
+            assert_eq!(
+                distractor_rec.annotation.source(),
+                Some(Stimulus::OtherSpeech)
+            );
+            let distractor_end = distractor_rec.event.now().0;
+            let distractor_duration = match &distractor_rec.event {
+                Event::Speech { cue, .. } => u64::from(cue.duration_ms),
+                _ => unreachable!(),
+            };
+            let distractor_start = distractor_end - distractor_duration;
+            let delay = distractor_start - name_end;
+            assert!((50..=300).contains(&delay));
+            assert!((300..=600).contains(&distractor_duration));
+            let pause = content_start - distractor_end;
+            assert!((150..=700).contains(&pause));
+        }
+    }
+    #[test]
+    fn odd_blocks_have_adjacent_distractors_and_valid_split_turns() {
+        for seed in [0, 1, 7, 42] {
+            let tape = e1a(seed).unwrap();
+            for block in 0u32..20 {
+                verify_split_block(&tape, block);
+            }
         }
     }
 }

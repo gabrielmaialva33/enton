@@ -1,4 +1,5 @@
 //! Original RFC criteria first; synthetic proxies cannot establish a full E1 PASS.
+use crate::tape::{ConditionKey, Distance, TvBackground};
 use crate::{BENCHMARK_VERSION, ControllerResult, Error, ExperimentRun, TapeKind};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt};
@@ -130,6 +131,213 @@ impl NoiseBreakdown {
     }
 }
 
+/// Cognitive reason for a paid thought recorded as waste or duplicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum WasteReason {
+    /// Keyword detected (or attend timeout following a keyword).
+    Keyword,
+    /// Follow-up speech within an active attention window.
+    FollowUp,
+    /// Salient unaddressed speech.
+    Speech,
+    /// Internal drive pressure.
+    Drive,
+}
+
+impl fmt::Display for WasteReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Keyword => "keyword",
+            Self::FollowUp => "follow-up",
+            Self::Speech => "speech",
+            Self::Drive => "drive",
+        })
+    }
+}
+
+impl From<&enton_core::Reason> for WasteReason {
+    fn from(r: &enton_core::Reason) -> Self {
+        match r {
+            enton_core::Reason::Keyword => Self::Keyword,
+            enton_core::Reason::FollowUp => Self::FollowUp,
+            enton_core::Reason::Speech => Self::Speech,
+            enton_core::Reason::Drive(_) => Self::Drive,
+        }
+    }
+}
+
+/// Triggering stimulus for a paid thought recorded as waste or duplicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum WasteStimulus {
+    /// Request turn segment.
+    Request,
+    /// Barge-in request turn segment.
+    BargeIn,
+    /// Television broadcast audio.
+    Tv,
+    /// Speech from an unaddressed person.
+    OtherPerson,
+    /// Caller voice addressed to someone else.
+    Aside,
+    /// False positive keyword detection.
+    FalseKeyword,
+    /// Self-playback acoustic echo.
+    SelfEcho,
+    /// Household, motor or ventilation noise.
+    Noise,
+    /// Internal drive or clock event with no speech stimulus.
+    Internal,
+}
+
+impl fmt::Display for WasteStimulus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Request => "request",
+            Self::BargeIn => "barge-in",
+            Self::Tv => "tv",
+            Self::OtherPerson => "other person",
+            Self::Aside => "aside",
+            Self::FalseKeyword => "false keyword",
+            Self::SelfEcho => "self-echo",
+            Self::Noise => "noise",
+            Self::Internal => "internal",
+        })
+    }
+}
+
+/// Composite key indexing waste breakdown by reason and triggering stimulus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct WasteKey {
+    /// Ignition reason.
+    pub reason: WasteReason,
+    /// Triggering stimulus.
+    pub stimulus: WasteStimulus,
+}
+
+impl Serialize for WasteKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(&format_args!("{}:{}", self.reason, self.stimulus))
+    }
+}
+
+impl<'de> Deserialize<'de> for WasteKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let (reason_str, stimulus_str) = s
+            .split_once(':')
+            .ok_or_else(|| serde::de::Error::custom("expected reason:stimulus"))?;
+        let reason = match reason_str {
+            "keyword" => WasteReason::Keyword,
+            "follow-up" => WasteReason::FollowUp,
+            "speech" => WasteReason::Speech,
+            "drive" => WasteReason::Drive,
+            _ => return Err(serde::de::Error::custom("unknown reason")),
+        };
+        let stimulus = match stimulus_str {
+            "request" => WasteStimulus::Request,
+            "barge-in" => WasteStimulus::BargeIn,
+            "tv" => WasteStimulus::Tv,
+            "other person" => WasteStimulus::OtherPerson,
+            "aside" => WasteStimulus::Aside,
+            "false keyword" => WasteStimulus::FalseKeyword,
+            "self-echo" => WasteStimulus::SelfEcho,
+            "noise" => WasteStimulus::Noise,
+            "internal" => WasteStimulus::Internal,
+            _ => return Err(serde::de::Error::custom("unknown stimulus")),
+        };
+        Ok(Self { reason, stimulus })
+    }
+}
+
+/// Descriptive breakdown of wasted calls by reason and triggering stimulus.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WasteBreakdown {
+    /// Breakdown of wasted calls by ignition reason.
+    pub by_reason: BTreeMap<WasteReason, u64>,
+    /// Breakdown of wasted calls by triggering stimulus.
+    pub by_stimulus: BTreeMap<WasteStimulus, u64>,
+    /// Joint breakdown by reason and stimulus.
+    pub by_cell: BTreeMap<WasteKey, u64>,
+}
+
+impl Default for WasteBreakdown {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WasteBreakdown {
+    /// Construct a new empty breakdown with all reason and stimulus keys initialized to zero.
+    #[must_use]
+    pub fn new() -> Self {
+        let mut by_reason = BTreeMap::new();
+        by_reason.insert(WasteReason::Keyword, 0);
+        by_reason.insert(WasteReason::FollowUp, 0);
+        by_reason.insert(WasteReason::Speech, 0);
+        by_reason.insert(WasteReason::Drive, 0);
+
+        let mut by_stimulus = BTreeMap::new();
+        by_stimulus.insert(WasteStimulus::Request, 0);
+        by_stimulus.insert(WasteStimulus::BargeIn, 0);
+        by_stimulus.insert(WasteStimulus::Tv, 0);
+        by_stimulus.insert(WasteStimulus::OtherPerson, 0);
+        by_stimulus.insert(WasteStimulus::Aside, 0);
+        by_stimulus.insert(WasteStimulus::FalseKeyword, 0);
+        by_stimulus.insert(WasteStimulus::SelfEcho, 0);
+        by_stimulus.insert(WasteStimulus::Noise, 0);
+        by_stimulus.insert(WasteStimulus::Internal, 0);
+
+        Self {
+            by_reason,
+            by_stimulus,
+            by_cell: BTreeMap::new(),
+        }
+    }
+
+    /// Record one wasted or duplicate call with its reason and triggering stimulus.
+    pub fn record(&mut self, reason: WasteReason, stimulus: WasteStimulus) {
+        *self.by_reason.entry(reason).or_insert(0) += 1;
+        *self.by_stimulus.entry(stimulus).or_insert(0) += 1;
+        *self
+            .by_cell
+            .entry(WasteKey { reason, stimulus })
+            .or_insert(0) += 1;
+    }
+
+    /// Total wasted calls recorded in the breakdown.
+    #[must_use]
+    pub fn total(&self) -> u64 {
+        self.by_reason.values().sum()
+    }
+
+    /// Get count for a specific reason.
+    #[must_use]
+    pub fn reason_count(&self, reason: WasteReason) -> u64 {
+        self.by_reason.get(&reason).copied().unwrap_or(0)
+    }
+
+    /// Get count for a specific stimulus.
+    #[must_use]
+    pub fn stimulus_count(&self, stimulus: WasteStimulus) -> u64 {
+        self.by_stimulus.get(&stimulus).copied().unwrap_or(0)
+    }
+
+    /// Get count for a specific reason-stimulus cell.
+    #[must_use]
+    pub fn cell_count(&self, reason: WasteReason, stimulus: WasteStimulus) -> u64 {
+        self.by_cell
+            .get(&WasteKey { reason, stimulus })
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
 /// A criterion is explicitly unmeasured rather than implicitly successful.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Status {
@@ -218,6 +426,7 @@ impl Report {
                     || result.paid_calls != result.thoughts.len() as u64
                     || result.served_turns + result.wasted_calls != result.paid_calls
                     || result.noise_breakdown.total() != result.calls_in_noise
+                    || result.waste_breakdown.total() != result.wasted_calls
                 {
                     return Err(Error::Invalid(
                         "invalid report population, role or causal accounting".into(),
@@ -287,7 +496,7 @@ fn overall_status(criteria: &[Criterion]) -> Status {
         Status::Pass
     }
 }
-fn print_controller(f: &mut fmt::Formatter<'_>, r: &ControllerResult) -> fmt::Result {
+fn print_controller(f: &mut fmt::Formatter<'_>, r: &ControllerResult, is_e1a: bool) -> fmt::Result {
     writeln!(
         f,
         "  {}: paid={}, cost={:.3}, requests={}/{}, turns={}/{}, waste={}, duplicates={}",
@@ -336,6 +545,24 @@ fn print_controller(f: &mut fmt::Formatter<'_>, r: &ControllerResult) -> fmt::Re
             .collect();
         writeln!(f, "    noise by stimulus: {}", stimuli.join(", "))?;
     }
+    let non_zero_waste: Vec<_> = r
+        .waste_breakdown
+        .by_stimulus
+        .iter()
+        .filter(|(_, v)| **v > 0)
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    if !non_zero_waste.is_empty() {
+        writeln!(f, "    waste by stimulus: {}", non_zero_waste.join(", "))?;
+    }
+    if !r.turn_segment_decisions.is_empty() {
+        let decisions: Vec<_> = r
+            .turn_segment_decisions
+            .iter()
+            .map(|(decision, count)| format!("{decision}={count}"))
+            .collect();
+        writeln!(f, "    turn segments: {}", decisions.join(", "))?;
+    }
     let mut keys: Vec<_> = r.strata.keys().collect();
     keys.sort();
     for k in keys {
@@ -350,6 +577,34 @@ fn print_controller(f: &mut fmt::Formatter<'_>, r: &ControllerResult) -> fmt::Re
                 }
             }
         }
+    }
+    if is_e1a && !r.turns_by_condition.is_empty() {
+        print_conditions(f, r)?;
+    }
+    Ok(())
+}
+fn print_conditions(f: &mut fmt::Formatter<'_>, r: &ControllerResult) -> fmt::Result {
+    writeln!(
+        f,
+        "    turns served by condition (TV off | moderate | loud):"
+    )?;
+    for dist in [Distance::Near, Distance::Far] {
+        let [off, moderate, loud] = [
+            TvBackground::Off,
+            TvBackground::Moderate,
+            TvBackground::Loud,
+        ]
+        .map(|tv| {
+            r.turns_by_condition
+                .get(&ConditionKey::new(dist, tv))
+                .copied()
+                .unwrap_or_default()
+        });
+        writeln!(
+            f,
+            "      {dist:<4}: off {}/{}, moderate {}/{}, loud {}/{}",
+            off.served, off.total, moderate.served, moderate.total, loud.served, loud.total,
+        )?;
     }
     Ok(())
 }
@@ -380,13 +635,13 @@ impl fmt::Display for Report {
             self.e1a.economy.refill_per_hour,
             self.e1a.economy.thought_cost
         )?;
-        for (name, run) in [("E1a", &self.e1a), ("E1b", &self.e1b)] {
+        for (name, run, is_e1a) in [("E1a", &self.e1a, true), ("E1b", &self.e1b, false)] {
             writeln!(
                 f,
                 "Secondary {name} diagnostics (not replacement criteria):"
             )?;
             for result in [&run.organism, &run.simple, &run.fixed_window] {
-                print_controller(f, result)?;
+                print_controller(f, result, is_e1a)?;
             }
         }
         let comparator_qualified = self.e1a.fixed_window.served_requests >= 99

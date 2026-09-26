@@ -1,8 +1,8 @@
 //! One causal attribution per paid thought; no heuristic reconstruction of turns.
-use crate::tape::TurnKind;
+use crate::tape::{ConditionKey, Distance, TurnKind, TvBackground};
 use crate::{Annotation, Record, SegmentId, Tape, Turn, TurnId};
 use enton_core::{Action, Event, Millis, Reason};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -23,9 +23,12 @@ impl Serialize for Stratum {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+/// Served and total turns in a condition or stratum bucket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Tally {
+    /// Turns served in this bucket.
     pub served: u64,
+    /// Total count of opportunities in this bucket.
     pub total: u64,
 }
 
@@ -166,6 +169,48 @@ impl<'a> Scorer<'a> {
         }
         result
     }
+    pub(crate) fn turns_by_condition(&self, tape: &Tape) -> BTreeMap<ConditionKey, Tally> {
+        let mut result = BTreeMap::new();
+        for distance in [Distance::Near, Distance::Far] {
+            for tv in [
+                TvBackground::Off,
+                TvBackground::Moderate,
+                TvBackground::Loud,
+            ] {
+                result.insert(ConditionKey::new(distance, tv), Tally::default());
+            }
+        }
+        if tape.conditions().is_empty() {
+            return result;
+        }
+        let mut seg_ends = BTreeMap::new();
+        for record in tape.records() {
+            if let Annotation::Speech { segment, .. } = record.annotation {
+                seg_ends.insert(segment, record.event.now());
+            }
+        }
+        for turn in self.turns.values() {
+            let Some(&first_seg) = turn.segments.first() else {
+                continue;
+            };
+            let Some(&seg_end) = seg_ends.get(&first_seg) else {
+                continue;
+            };
+            let block_idx = usize::try_from(seg_end.0 / 180_000).unwrap_or(0);
+            let cond = tape
+                .conditions()
+                .get(block_idx)
+                .copied()
+                .unwrap_or_default();
+            let key = ConditionKey::new(cond.distance, cond.tv);
+            let entry = result.entry(key).or_default();
+            entry.total += 1;
+            if self.served.contains(&turn.id) {
+                entry.served += 1;
+            }
+        }
+        result
+    }
     pub(crate) fn observe_non_think(&mut self, record: &Record, action: &Action) {
         if let Action::Attend { until } = action {
             self.attend(record, *until);
@@ -188,6 +233,7 @@ mod tests {
                 deadline: Millis(5000),
                 kind: TurnKind::Single,
                 gap: None,
+                pause_style: None,
             },
             Turn {
                 id: TurnId(2),
@@ -197,6 +243,7 @@ mod tests {
                 deadline: Millis(6000),
                 kind: TurnKind::Conversation,
                 gap: Some(3000),
+                pause_style: None,
             },
             Turn {
                 id: TurnId(3),
@@ -206,6 +253,7 @@ mod tests {
                 deadline: Millis(7000),
                 kind: TurnKind::Conversation,
                 gap: Some(3000),
+                pause_style: None,
             },
         ];
 
@@ -253,6 +301,7 @@ mod tests {
                 segment: SegmentId(segment),
                 episode: Some(EpisodeId(if source.turn().is_some() { 1 } else { 2 })),
                 source,
+                pause_style: None,
             },
         }
     }
@@ -275,6 +324,7 @@ mod tests {
                     deadline: Millis(12_000),
                     kind: crate::tape::TurnKind::Single,
                     gap: None,
+                    pause_style: None,
                 },
                 Turn {
                     id: TurnId(2),
@@ -284,9 +334,11 @@ mod tests {
                     deadline: Millis(20_000),
                     kind: crate::tape::TurnKind::Single,
                     gap: None,
+                    pause_style: None,
                 },
             ],
             vec![],
+            vec![crate::tape::RoomCondition::default()],
         )
         .unwrap()
     }

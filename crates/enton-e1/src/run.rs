@@ -8,7 +8,9 @@ use crate::{
     baseline::Baseline,
     economy::Account,
     invariants::Watch,
-    report::{NoiseBreakdown, NoiseReason, NoiseStimulus},
+    report::{
+        NoiseBreakdown, NoiseReason, NoiseStimulus, WasteBreakdown, WasteReason, WasteStimulus,
+    },
     scoring::Scorer,
 };
 use enton_core::{
@@ -86,6 +88,9 @@ pub struct ControllerResult {
     pub total_turns: u64,
     /// Strata breakdown of turns (served / total).
     pub strata: std::collections::BTreeMap<crate::scoring::Stratum, crate::scoring::Tally>,
+    /// Turns served / total, grouped by the block condition of each turn's first segment.
+    pub turns_by_condition:
+        std::collections::BTreeMap<crate::tape::ConditionKey, crate::scoring::Tally>,
     /// Calls not earning new timely turn credit, including duplicates.
     pub wasted_calls: u64,
     /// Timely calls for an already served turn, included in waste.
@@ -94,6 +99,11 @@ pub struct ControllerResult {
     pub calls_in_noise: u64,
     /// Breakdown of noise-interval calls by reason and triggering stimulus.
     pub noise_breakdown: NoiseBreakdown,
+    /// Breakdown of wasted and duplicate calls by reason and triggering stimulus.
+    pub waste_breakdown: WasteBreakdown,
+    /// What the controller decided on each segment that belongs to a turn: `think`,
+    /// `attend`, or `abstain:` and the reason. Shows where requests are lost.
+    pub turn_segment_decisions: BTreeMap<String, u64>,
     /// Calls whose direct trigger was synthetic self-echo (including its timeout).
     pub synthetic_self_ignitions: u64,
     /// Barge-in segments in the identical exogenous tape.
@@ -124,10 +134,13 @@ impl ControllerResult {
             served_turns: 0,
             total_turns: tape.turns().len() as u64,
             strata: std::collections::BTreeMap::new(),
+            turns_by_condition: std::collections::BTreeMap::new(),
             wasted_calls: 0,
             duplicate_calls: 0,
             calls_in_noise: 0,
             noise_breakdown: NoiseBreakdown::new(),
+            waste_breakdown: WasteBreakdown::new(),
+            turn_segment_decisions: BTreeMap::new(),
             synthetic_self_ignitions: 0,
             barge_in_segments: 0,
             overlapping_barge_in_segments: 0,
@@ -160,6 +173,17 @@ pub struct ExperimentRun {
 /// Run all three policies on the same validated tape without audio, network or models.
 /// Returns errors on resource overflow or a violated shared-budget invariant.
 pub fn run_tape(tape: &Tape) -> Result<ExperimentRun, Error> {
+    run_tape_with(tape, &Profile::t1_ref())
+}
+
+/// Run one tape with a candidate organism profile, for calibration sweeps on
+/// calibration seeds. The comparators and the shared account keep the reference
+/// profile, so only the organism differs between candidates.
+///
+/// # Errors
+///
+/// Returns an error if the tape is invalid or a limit is exceeded.
+pub fn run_tape_with(tape: &Tape, organism_profile: &Profile) -> Result<ExperimentRun, Error> {
     let profile = Profile::t1_ref();
     let economy = Economy::from_profile(&profile)?;
     Ok(ExperimentRun {
@@ -167,7 +191,7 @@ pub fn run_tape(tape: &Tape) -> Result<ExperimentRun, Error> {
         kind: tape.kind(),
         seed: tape.seed(),
         economy,
-        organism: run_controller(tape, Controller::Organism, &profile, economy)?,
+        organism: run_controller(tape, Controller::Organism, organism_profile, economy)?,
         simple: run_controller(tape, Controller::Simple, &profile, economy)?,
         fixed_window: run_controller(tape, Controller::FixedWindow, &profile, economy)?,
     })
@@ -220,7 +244,7 @@ struct Feedback {
     next_order: u64,
     next_segment: u32,
     echo_segments: BTreeSet<SegmentId>,
-    playbacks: Vec<Interval>,
+    playbacks: BTreeMap<UtteranceId, Interval>,
     horizon: Millis,
     censored: u64,
 }
@@ -231,7 +255,7 @@ impl Feedback {
             next_order: 0,
             next_segment: 50_000,
             echo_segments: BTreeSet::new(),
-            playbacks: vec![],
+            playbacks: BTreeMap::new(),
             horizon,
             censored: 0,
         }
@@ -253,10 +277,13 @@ impl Feedback {
         if self.playbacks.len() >= MAX_PROCESSED {
             return Err(Error::Limit("playback audit"));
         }
-        self.playbacks.push(Interval {
-            start: Millis(now.0 + 400),
-            end: Millis(now.0 + 2000),
-        });
+        self.playbacks.insert(
+            UtteranceId(thought.0),
+            Interval {
+                start: Millis(now.0 + 400),
+                end: Millis(now.0 + 2000),
+            },
+        );
         self.schedule(Record {
             event: Event::PlaybackStarted {
                 now: Millis(now.0 + 400),
@@ -285,6 +312,7 @@ impl Feedback {
                     segment,
                     episode: None,
                     source: Stimulus::SelfEcho,
+                    pause_style: None,
                 },
             })?;
         }
@@ -304,6 +332,43 @@ impl Feedback {
             annotation: Annotation::Clock,
         })
     }
+    /// Mirror the runtime when a new thought starts or speech is accepted: the thought in
+    /// flight is abandoned and the player is cancelled. Its reply never arrives, the echoes
+    /// it had not produced yet never happen, and a playback already under way ends now,
+    /// as the runtime reports a cancelled utterance.
+    fn supersede(&mut self, now: Millis) -> Result<(), Error> {
+        let mut unstarted = BTreeSet::new();
+        let mut unfinished = BTreeSet::new();
+        for record in self.pending.values() {
+            match record.event {
+                Event::PlaybackStarted { utterance, .. } => {
+                    unstarted.insert(utterance);
+                }
+                Event::PlaybackFinished { utterance, .. } => {
+                    unfinished.insert(utterance);
+                }
+                _ => {}
+            }
+        }
+        // Everything still pending belongs to earlier thoughts.
+        self.pending.clear();
+        for utterance in &unstarted {
+            self.playbacks.remove(utterance);
+        }
+        for utterance in unfinished.difference(&unstarted) {
+            if let Some(interval) = self.playbacks.get_mut(utterance) {
+                interval.end = now;
+            }
+            self.schedule(Record {
+                event: Event::PlaybackFinished {
+                    now,
+                    utterance: *utterance,
+                },
+                annotation: Annotation::Clock,
+            })?;
+        }
+        Ok(())
+    }
     fn caused_by_echo(&self, trigger: Trigger) -> bool {
         match trigger {
             Trigger::Segment(id) | Trigger::AttendTimeout(id) => self.echo_segments.contains(&id),
@@ -317,7 +382,7 @@ impl Feedback {
                 let start = Millis(now.0 - u64::from(cue.duration_ms));
                 if self
                     .playbacks
-                    .iter()
+                    .values()
                     .any(|interval| start < interval.end && *now_ref(&now) > interval.start)
                 {
                     result.overlapping_barge_in_segments += 1;
@@ -394,6 +459,30 @@ impl<'a> Execution<'a> {
             .map_or(NoiseStimulus::NoneInternal, stimulus_to_noise_stimulus)
     }
 
+    fn resolve_waste_stimulus(&self, trigger: Trigger, record: &Record) -> WasteStimulus {
+        if self.feedback.caused_by_echo(trigger) {
+            return WasteStimulus::SelfEcho;
+        }
+        match trigger {
+            Trigger::Segment(seg_id) => {
+                if let Some(source) = record.annotation.source() {
+                    stimulus_to_waste_stimulus(source)
+                } else {
+                    self.lookup_segment_waste_stimulus(seg_id)
+                }
+            }
+            Trigger::AttendTimeout(seg_id) => self.lookup_segment_waste_stimulus(seg_id),
+            Trigger::Internal => WasteStimulus::Internal,
+        }
+    }
+
+    fn lookup_segment_waste_stimulus(&self, seg_id: SegmentId) -> WasteStimulus {
+        self.segment_sources
+            .get(&seg_id)
+            .copied()
+            .map_or(WasteStimulus::Internal, stimulus_to_waste_stimulus)
+    }
+
     fn process(&mut self, record: &Record) -> Result<(), Error> {
         let now = record.event.now();
         self.account.advance(now);
@@ -401,6 +490,15 @@ impl<'a> Execution<'a> {
         // Only Event crosses the policy boundary. No labels, segment IDs or turns.
         let actions = self.machine.step(&record.event, self.account.can_pay())?;
         let attending = self.machine.attending();
+        if record.annotation.turn().is_some() {
+            self.count_turn_segment_decision(&actions);
+        }
+        if actions
+            .iter()
+            .any(|action| matches!(action, Action::Think { .. } | Action::Attend { .. }))
+        {
+            self.feedback.supersede(now)?;
+        }
         for action in actions {
             match action {
                 Action::Think {
@@ -418,6 +516,21 @@ impl<'a> Execution<'a> {
         }
         self.scorer.finish_event(now, attending);
         Ok(())
+    }
+    fn count_turn_segment_decision(&mut self, actions: &[Action]) {
+        let decision = actions.iter().find_map(|action| match action {
+            Action::Think { .. } => Some("think".to_owned()),
+            Action::Attend { .. } => Some("attend".to_owned()),
+            Action::Abstain { why, .. } => Some(format!("abstain:{why:?}")),
+            Action::Speak { .. } => None,
+        });
+        if let Some(decision) = decision {
+            *self
+                .result
+                .turn_segment_decisions
+                .entry(decision)
+                .or_default() += 1;
+        }
     }
     fn paid_thought(
         &mut self,
@@ -441,6 +554,13 @@ impl<'a> Execution<'a> {
                 self.result.wasted_calls += 1;
             }
             Credit::Waste => self.result.wasted_calls += 1,
+        }
+        if matches!(credit, Credit::Waste | Credit::Duplicate(_)) {
+            let waste_reason = WasteReason::from(&reason);
+            let waste_stimulus = self.resolve_waste_stimulus(trigger, record);
+            self.result
+                .waste_breakdown
+                .record(waste_reason, waste_stimulus);
         }
         if self
             .tape
@@ -475,10 +595,25 @@ fn stimulus_to_noise_stimulus(source: Stimulus) -> NoiseStimulus {
         Stimulus::OtherSpeech
         | Stimulus::Request(_)
         | Stimulus::BargeIn(_)
-        | Stimulus::FalseKeyword => NoiseStimulus::OtherPerson,
+        | Stimulus::FalseKeyword
+        // Asides are live speech from the caller addressed to another person in the room.
+        | Stimulus::Aside => NoiseStimulus::OtherPerson,
         Stimulus::Motor | Stimulus::Noise => NoiseStimulus::Motor,
         Stimulus::Ventilation => NoiseStimulus::Ventilation,
         Stimulus::SelfEcho => NoiseStimulus::SelfEcho,
+    }
+}
+
+fn stimulus_to_waste_stimulus(source: Stimulus) -> WasteStimulus {
+    match source {
+        Stimulus::Request(_) => WasteStimulus::Request,
+        Stimulus::BargeIn(_) => WasteStimulus::BargeIn,
+        Stimulus::Tv => WasteStimulus::Tv,
+        Stimulus::OtherSpeech => WasteStimulus::OtherPerson,
+        Stimulus::Aside => WasteStimulus::Aside,
+        Stimulus::FalseKeyword => WasteStimulus::FalseKeyword,
+        Stimulus::SelfEcho => WasteStimulus::SelfEcho,
+        Stimulus::Noise | Stimulus::Motor | Stimulus::Ventilation => WasteStimulus::Noise,
     }
 }
 
@@ -526,6 +661,7 @@ fn run_controller(
     execution.result.served_turns = execution.scorer.served.len() as u64;
     execution.result.served_requests = execution.scorer.served_requests() as u64;
     execution.result.strata = execution.scorer.strata();
+    execution.result.turns_by_condition = execution.scorer.turns_by_condition(tape);
     execution.result.final_balance = execution.account.balance;
     execution.result.credited_refill = execution.account.credited_refill;
     execution.result.rounding_credit = execution.account.rounding_credit;
@@ -559,6 +695,7 @@ mod tests {
                 } else {
                     Stimulus::FalseKeyword
                 },
+                pause_style: None,
             },
         };
         let turns = if relevant {
@@ -570,6 +707,7 @@ mod tests {
                 deadline: Millis(11_000),
                 kind: crate::tape::TurnKind::Single,
                 gap: None,
+                pause_style: None,
             }]
         } else {
             vec![]
@@ -581,6 +719,7 @@ mod tests {
             vec![record],
             turns,
             vec![],
+            vec![crate::tape::RoomCondition::default()],
         )
         .unwrap()
     }
@@ -723,6 +862,15 @@ mod tests {
         for run in [&a, &b] {
             for result in [&run.organism, &run.simple, &run.fixed_window] {
                 assert_eq!(result.paid_calls, result.served_turns + result.wasted_calls);
+                assert_eq!(result.waste_breakdown.total(), result.wasted_calls);
+                assert_eq!(
+                    result.waste_breakdown.by_reason.values().sum::<u64>(),
+                    result.wasted_calls
+                );
+                assert_eq!(
+                    result.waste_breakdown.by_stimulus.values().sum::<u64>(),
+                    result.wasted_calls
+                );
                 assert_eq!(result.noise_breakdown.total(), result.calls_in_noise);
                 assert_eq!(
                     result.noise_breakdown.by_reason.values().sum::<u64>(),
@@ -749,6 +897,8 @@ mod tests {
         assert!(text.contains("not evaluated"));
         assert!(text.contains("noise by reason:"));
         assert!(text.contains("noise by stimulus:"));
+        assert!(text.contains("waste by stimulus:"));
+        assert!(text.contains("turn segments:"));
         assert!(!text.contains("Overall: PASS"));
         assert_eq!(
             report
@@ -758,6 +908,28 @@ mod tests {
                 .count(),
             3
         );
+    }
+    #[test]
+    fn waste_breakdown_sums_to_wasted_calls() {
+        let a = run_tape(&crate::e1a(42).unwrap()).unwrap();
+        let b = run_tape(&crate::e1b(42).unwrap()).unwrap();
+        for run in [&a, &b] {
+            for result in [&run.organism, &run.simple, &run.fixed_window] {
+                assert_eq!(result.waste_breakdown.total(), result.wasted_calls);
+                assert_eq!(
+                    result.waste_breakdown.by_reason.values().sum::<u64>(),
+                    result.wasted_calls
+                );
+                assert_eq!(
+                    result.waste_breakdown.by_stimulus.values().sum::<u64>(),
+                    result.wasted_calls
+                );
+                assert_eq!(
+                    result.waste_breakdown.by_cell.values().sum::<u64>(),
+                    result.wasted_calls
+                );
+            }
+        }
     }
     // Bounded regression test asserts accounting breakdown across multiple stimuli.
     #[allow(clippy::too_many_lines)]
@@ -785,6 +957,7 @@ mod tests {
                     segment: SegmentId(1),
                     episode: Some(EpisodeId(10)),
                     source: Stimulus::Motor,
+                    pause_style: None,
                 },
             },
             Record {
@@ -804,6 +977,7 @@ mod tests {
                     segment: SegmentId(2),
                     episode: Some(EpisodeId(10)),
                     source: Stimulus::Ventilation,
+                    pause_style: None,
                 },
             },
             Record {
@@ -823,6 +997,7 @@ mod tests {
                     segment: SegmentId(3),
                     episode: Some(EpisodeId(10)),
                     source: Stimulus::Tv,
+                    pause_style: None,
                 },
             },
         ];
@@ -833,6 +1008,7 @@ mod tests {
             records,
             vec![],
             vec![noise_interval],
+            vec![crate::tape::RoomCondition::default()],
         )
         .unwrap();
 
@@ -899,6 +1075,7 @@ mod admission_tests {
                     segment: SegmentId(u32::try_from(index).unwrap()),
                     episode: Some(EpisodeId(0)),
                     source: Stimulus::Request(TurnId(0)),
+                    pause_style: None,
                 },
             })
             .collect();
@@ -915,8 +1092,10 @@ mod admission_tests {
                 deadline: Millis(12_000),
                 kind: crate::tape::TurnKind::Single,
                 gap: None,
+                pause_style: None,
             }],
             vec![],
+            vec![crate::tape::RoomCondition::default()],
         )
         .unwrap();
         let run = run_tape(&tape).unwrap();
@@ -946,6 +1125,7 @@ mod admission_tests {
                     segment: SegmentId(u32::try_from(index).unwrap()),
                     episode: Some(EpisodeId(0)),
                     source: Stimulus::FalseKeyword,
+                    pause_style: None,
                 },
             })
             .collect();
@@ -956,6 +1136,7 @@ mod admission_tests {
             records,
             vec![],
             vec![],
+            vec![crate::tape::RoomCondition::default()],
         )
         .unwrap();
         let economy = Economy {
@@ -970,8 +1151,44 @@ mod admission_tests {
         assert!(result.final_balance < 1.0);
     }
     #[test]
+    fn a_new_thought_cuts_the_playback_in_flight_like_the_runtime() {
+        let mut feedback = Feedback::new(Millis(10_000));
+        // Playback 1400..3000, echoes at 1900 and 2700, reply at 3000.
+        feedback.reply(Millis(1000), ThoughtId(1)).unwrap();
+        feedback.pending.pop_first().unwrap();
+        feedback.supersede(Millis(2000)).unwrap();
+        let left: Vec<_> = feedback.pending.values().map(|r| r.event.clone()).collect();
+        assert_eq!(
+            left,
+            vec![Event::PlaybackFinished {
+                now: Millis(2000),
+                utterance: UtteranceId(1),
+            }]
+        );
+        assert_eq!(
+            feedback.playbacks.get(&UtteranceId(1)).map(|i| i.end),
+            Some(Millis(2000))
+        );
+
+        // A thought superseded before its playback starts is never heard at all.
+        feedback.pending.clear();
+        feedback.reply(Millis(5000), ThoughtId(2)).unwrap();
+        feedback.supersede(Millis(5100)).unwrap();
+        assert!(feedback.pending.is_empty());
+        assert!(!feedback.playbacks.contains_key(&UtteranceId(2)));
+    }
+    #[test]
     fn barge_in_overlap_uses_real_playback_intervals_not_its_label_alone() {
-        let tape = Tape::new(TapeKind::Fixture, 0, Millis(4000), vec![], vec![], vec![]).unwrap();
+        let tape = Tape::new(
+            TapeKind::Fixture,
+            0,
+            Millis(4000),
+            vec![],
+            vec![],
+            vec![],
+            vec![crate::tape::RoomCondition::default()],
+        )
+        .unwrap();
         let mut result = ControllerResult::new(Controller::Simple, &tape);
         let mut feedback = Feedback::new(Millis(10_000));
         feedback.reply(Millis(1000), ThoughtId(1)).unwrap();
@@ -989,6 +1206,7 @@ mod admission_tests {
                         segment: SegmentId(0),
                         episode: Some(EpisodeId(0)),
                         source: Stimulus::BargeIn(TurnId(0)),
+                        pause_style: None,
                     },
                 },
                 &mut result,

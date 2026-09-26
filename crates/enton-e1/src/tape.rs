@@ -28,7 +28,8 @@ pub struct EpisodeId(pub u32);
 /// Which independently specified population this tape represents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TapeKind {
-    /// One hundred request/conversation and one hundred distractor episodes.
+    /// One hundred request/conversation and 120 distractor episodes, plus a TV show
+    /// in every block whose TV is on.
     E1a,
     /// Ten commands across an hour, with fifty minutes of noise intervals.
     E1b,
@@ -55,6 +56,8 @@ pub enum Stimulus {
     Ventilation,
     /// A detector's false positive on the wake word.
     FalseKeyword,
+    /// The caller's own voice, addressed to someone else in the room: not a request.
+    Aside,
     /// A controller's own synthetic playback leaking into its microphone.
     SelfEcho,
 }
@@ -68,8 +71,152 @@ impl Stimulus {
     }
 }
 
+/// Talker distance from the microphone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum Distance {
+    /// Talker is positioned near the microphone.
+    Near,
+    /// Talker is positioned far from the microphone across the room.
+    Far,
+}
+
+impl fmt::Display for Distance {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Near => write!(f, "Near"),
+            Self::Far => write!(f, "Far"),
+        }
+    }
+}
+
+/// Television background state in the room.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum TvBackground {
+    /// Background television is powered off.
+    Off,
+    /// Background television is playing at moderate volume.
+    Moderate,
+    /// Background television is playing at loud volume.
+    Loud,
+}
+
+impl fmt::Display for TvBackground {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Off => write!(f, "Off"),
+            Self::Moderate => write!(f, "Moderate"),
+            Self::Loud => write!(f, "Loud"),
+        }
+    }
+}
+
+/// Television broadcast content type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum TvContent {
+    /// Broadcast content primarily consists of spoken dialogue.
+    Dialogue,
+    /// Broadcast content consists of music, sports, or sound effects.
+    Music,
+}
+
+impl fmt::Display for TvContent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Dialogue => write!(f, "Dialogue"),
+            Self::Music => write!(f, "Music"),
+        }
+    }
+}
+
+/// Environmental condition for a 180-second tape block.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RoomCondition {
+    /// Distance between speaker and device during this block.
+    pub distance: Distance,
+    /// Background television volume level during this block.
+    pub tv: TvBackground,
+    /// Broadcast programming format if the television is active.
+    pub tv_content: TvContent,
+    /// Room reverberation and acoustic distortion latent.
+    pub acoustics: f32,
+    /// Specific broadcast program variation latent.
+    pub show: f32,
+}
+
+impl Default for RoomCondition {
+    fn default() -> Self {
+        Self {
+            distance: Distance::Near,
+            tv: TvBackground::Off,
+            tv_content: TvContent::Dialogue,
+            acoustics: 0.0,
+            show: 0.0,
+        }
+    }
+}
+
+/// Composite key indexing request performance by talker distance and TV background condition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConditionKey {
+    /// Distance of talker from microphone.
+    pub distance: Distance,
+    /// Television background level in the room.
+    pub tv: TvBackground,
+}
+
+impl ConditionKey {
+    /// Create a new composite key from distance and TV condition.
+    #[must_use]
+    pub const fn new(distance: Distance, tv: TvBackground) -> Self {
+        Self { distance, tv }
+    }
+}
+
+impl fmt::Display for ConditionKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.distance, self.tv)
+    }
+}
+
+impl Serialize for ConditionKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(&format_args!("{}:{}", self.distance, self.tv))
+    }
+}
+
+impl<'de> Deserialize<'de> for ConditionKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let (dist_s, tv_s) = s
+            .split_once(':')
+            .ok_or_else(|| serde::de::Error::custom("expected distance:tv"))?;
+        let distance = match dist_s {
+            "Near" => Distance::Near,
+            "Far" => Distance::Far,
+            other => {
+                return Err(serde::de::Error::custom(format!(
+                    "unknown distance: {other}"
+                )));
+            }
+        };
+        let tv = match tv_s {
+            "Off" => TvBackground::Off,
+            "Moderate" => TvBackground::Moderate,
+            "Loud" => TvBackground::Loud,
+            other => return Err(serde::de::Error::custom(format!("unknown tv: {other}"))),
+        };
+        Ok(Self { distance, tv })
+    }
+}
+
 /// Annotation attached to an exogenous event or a generated feedback cue.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Annotation {
     /// A tick or synthetic completion, with no request attribution.
     Clock,
@@ -81,6 +228,9 @@ pub enum Annotation {
         episode: Option<EpisodeId>,
         /// Semantic source.
         source: Stimulus,
+        /// End-of-turn pause style latent if this segment belongs to a user turn or aside.
+        #[serde(default)]
+        pause_style: Option<f32>,
     },
 }
 
@@ -93,6 +243,14 @@ impl Annotation {
     }
     pub(crate) fn turn(&self) -> Option<TurnId> {
         self.source().and_then(Stimulus::turn)
+    }
+    /// End-of-turn pause style latent associated with this speech segment, if any.
+    #[must_use]
+    pub fn pause_style(&self) -> Option<f32> {
+        match self {
+            Self::Speech { pause_style, .. } => *pause_style,
+            Self::Clock => None,
+        }
     }
 }
 
@@ -137,7 +295,7 @@ impl fmt::Display for TurnKind {
 }
 
 /// A response-required turn. Segment membership and completion are explicit.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Turn {
     /// Unique turn identity.
     pub id: TurnId,
@@ -154,6 +312,9 @@ pub struct Turn {
     /// Preceding gap in milliseconds, if applicable.
     #[serde(default)]
     pub gap: Option<u32>,
+    /// Shared end-of-turn pause style latent across all segments of this turn.
+    #[serde(default)]
+    pub pause_style: Option<f32>,
 }
 
 /// A half-open interval of monotonic milliseconds.
@@ -179,6 +340,8 @@ struct TapeData {
     records: Vec<Record>,
     turns: Vec<Turn>,
     noise: Vec<Interval>,
+    #[serde(default)]
+    conditions: Vec<RoomCondition>,
 }
 
 type SegmentIndex<'a> = BTreeMap<SegmentId, (&'a Record, Option<EpisodeId>, Stimulus)>;
@@ -198,6 +361,7 @@ impl Tape {
         records: Vec<Record>,
         turns: Vec<Turn>,
         noise: Vec<Interval>,
+        conditions: Vec<RoomCondition>,
     ) -> Result<Self, Error> {
         let tape = Self(TapeData {
             version: BENCHMARK_VERSION.into(),
@@ -207,6 +371,7 @@ impl Tape {
             records,
             turns,
             noise,
+            conditions,
         });
         tape.validate()?;
         Ok(tape)
@@ -240,6 +405,11 @@ impl Tape {
     #[must_use]
     pub fn noise_intervals(&self) -> &[Interval] {
         &self.0.noise
+    }
+    /// Per-block latent conditions covering the tape duration.
+    #[must_use]
+    pub fn conditions(&self) -> &[RoomCondition] {
+        &self.0.conditions
     }
 
     /// Save a versioned JSON tape and propagate write/flush failures.
@@ -276,6 +446,15 @@ impl Tape {
         if self.0.duration.0 == 0 || self.0.duration.0 > 7_200_000 {
             return Err(Error::Invalid("duration must be within two hours".into()));
         }
+        let expected_blocks = usize::try_from(self.0.duration.0.div_ceil(180_000))
+            .map_err(|_| Error::Limit("tape block count exceeds usize"))?;
+        if self.0.conditions.len() != expected_blocks {
+            return Err(Error::Invalid(format!(
+                "tape conditions count mismatch: expected {expected_blocks} for duration {}ms, got {}",
+                self.0.duration.0,
+                self.0.conditions.len()
+            )));
+        }
         let segments = self.validate_records()?;
         self.validate_turns(&segments)?;
         self.validate_population()
@@ -300,6 +479,7 @@ impl Tape {
                         segment,
                         episode,
                         source,
+                        ..
                     },
                 ) => {
                     if cue.duration_ms == 0
@@ -399,11 +579,19 @@ impl Tape {
                 "episode mixes request and distractor identities".into(),
             ));
         }
+        let shows = self
+            .0
+            .conditions
+            .iter()
+            .filter(|condition| condition.tv != TvBackground::Off)
+            .count();
         if self.0.kind == TapeKind::E1a
-            && (relevant.len() != 100 || distractors.len() != 100 || self.0.duration.0 != 3_600_000)
+            && (relevant.len() != 100
+                || distractors.len() != 120 + shows
+                || self.0.duration.0 != 3_600_000)
         {
             return Err(Error::Invalid(
-                "E1a requires 100 request and 100 distractor episodes over one hour".into(),
+                "E1a requires 100 request and 120 distractor episodes, plus one TV show per block with the TV on, over one hour".into(),
             ));
         }
         if self.0.kind == TapeKind::E1b
@@ -489,7 +677,7 @@ mod tests {
                 panic!("request segment must be speech");
             };
             let silence = now.0 - u64::from(cue.duration_ms) - first.event.now().0;
-            assert!((150..=700).contains(&silence));
+            assert!((150..=1600).contains(&silence));
             assert_eq!(turn.available_at, now);
         }
     }

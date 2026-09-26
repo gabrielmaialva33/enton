@@ -112,9 +112,10 @@ impl Watch {
             organism.habituation(),
             organism.slow_habituation(),
             organism.echo_energy_expectation(),
+            organism.tv_presence(),
         ];
         if unit.iter().any(|level| !(0.0..=1.0).contains(level)) {
-            return Err(self.violation(event, "habituation and echo levels stay within [0, 1]"));
+            return Err(self.violation(event, "habituation, echo and TV levels stay within [0, 1]"));
         }
         let profile = organism.profile();
         let hangover = profile.echo.echo_hangover_ms;

@@ -12,17 +12,20 @@ pub mod tape;
 pub use economy::Economy;
 pub use report::{
     Criterion, CriterionSummary, NoiseBreakdown, NoiseReason, NoiseStimulus, Report, Status,
-    Summary, clopper_pearson_upper_bound,
+    Summary, WasteBreakdown, WasteKey, WasteReason, WasteStimulus, clopper_pearson_upper_bound,
 };
-pub use run::{Controller, ControllerResult, ExperimentRun, run_tape};
+pub use run::{Controller, ControllerResult, ExperimentRun, run_tape, run_tape_with};
+pub use scoring::Tally;
 pub use synth::{SplitMix64, TurnRole, e1a, e1b};
 pub use tape::{
-    Annotation, EpisodeId, Interval, Record, SegmentId, Stimulus, Tape, TapeKind, Turn, TurnId,
+    Annotation, ConditionKey, Distance, EpisodeId, Interval, Record, RoomCondition, SegmentId,
+    Stimulus, Tape, TapeKind, Turn, TurnId, TvBackground, TvContent,
 };
 
 /// Version of distributions, feedback, attribution and the report contract.
-/// Version 2.5.0 adds a simulated turn-completion dimension; all other draws unchanged.
-pub const BENCHMARK_VERSION: &str = "2.5.0";
+/// Version 3.0.0 adds asides, in-window and adjacent distractors; populations differ from 2.x;
+/// sensor readings follow measured models with per-tape, per-block and per-turn correlated errors.
+pub const BENCHMARK_VERSION: &str = "3.0.0";
 
 /// Invalid experiments fail explicitly rather than dropping stimuli or granting free calls.
 #[derive(Debug, thiserror::Error)]

@@ -31,7 +31,7 @@ jobs:
         with:
           version: 0.16.0
 
-      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2
         with:
           tool: cargo-zigbuild,cargo-cyclonedx
 

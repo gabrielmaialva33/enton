@@ -45,7 +45,7 @@ jobs:
       - name: Install ALSA headers
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Clippy (default features)
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -65,7 +65,7 @@ jobs:
       - name: Install ALSA headers
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Check (default features)
         run: cargo check --workspace --all-targets
@@ -88,7 +88,7 @@ jobs:
       # which the cache prunes as "not a dependency" while keeping the build
       # script's fingerprint, so a restored target dir fails to link. Cache only
       # the registry here; this job takes about two minutes cold.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           cache-targets: false
 
@@ -140,7 +140,7 @@ jobs:
       - name: Install qemu-user
         run: sudo apt-get update && sudo apt-get install -y qemu-user
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Build lean binaries
         run: cargo zigbuild --release -p enton -p enton-e1 --target aarch64-unknown-linux-musl

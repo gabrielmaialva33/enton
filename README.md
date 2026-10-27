@@ -152,6 +152,17 @@ it was made in. It prints only what the soul stores, so never a transcript:
 A thought whose cortex call failed says so too (`Thought #1 (Keyword): Enton was called by name,
 but the thought failed: cortex unavailable.`).
 
+**Develop without a microphone:** the [offline laboratory](docs/offline-lab.md) adds
+read-only operational checks and deterministic E1 episode traces, without loading a model:
+
+```bash
+cargo run --locked -p enton -- doctor --profile desktop --json
+cargo run --locked -p enton-e1 --bin e1-sim -- --seed 100 --diagnose e1a --episode 1
+```
+
+The doctor never repairs or migrates files. Episode diagnosis reuses the actual E1 executor,
+including prehistory and feedback; it does not change scoring or establish physical E1 success.
+
 <details>
 <summary><strong>Prerequisites</strong></summary>
 

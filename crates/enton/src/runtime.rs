@@ -112,6 +112,10 @@ pub(crate) struct RuntimeState {
     checklist: Option<String>,
 }
 
+#[cfg(test)]
+#[path = "runtime/offline_tests.rs"]
+mod offline_tests;
+
 impl RuntimeState {
     /// A runtime around a (possibly restored) organism, with no turn in flight.
     pub(crate) fn new(
@@ -158,7 +162,26 @@ impl RuntimeState {
         event: &Event,
         tx: &mpsc::Sender<LoopMessage>,
     ) -> Result<(), JournalError> {
+        let was_attending = self.organism.is_attending();
         let actions = self.record_and_step(event).await?;
+        if was_attending
+            && !self.organism.is_attending()
+            && !actions.iter().any(|action| {
+                matches!(
+                    action,
+                    Action::Think {
+                        reason: Reason::Keyword,
+                        ..
+                    }
+                )
+            })
+        {
+            // A quiet command (or an unfunded timeout) abandoned the partial request.
+            // Keep it only when this very event dispatches the request's thought.
+            self.attended_transcript = None;
+            self.last_transcript = None;
+            self.pending_first_audio_timer = None;
+        }
         self.dispatch(actions, tx).await?;
         self.maybe_snapshot().await
     }

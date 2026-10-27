@@ -112,9 +112,10 @@ confidence-threshold = 0.8
 # Allow 1 or more licenses on a per-crate basis, so that particular licenses
 # aren't accepted for every possible crate as with the normal allow list
 exceptions = [
-    # Each entry is the crate and version constraint, and its specific allow
-    # list
-    #{ allow = ["Zlib"], crate = "adler32" },
+    # ZIP's build-only decompressor. Reviewed LICENSE and SPDX bzip2-1.0.6:
+    # retain source notices, identify modifications, do not misrepresent origin
+    # or endorsement. Limit approval to this release; see the dependency audit.
+    { allow = ["bzip2-1.0.6"], crate = "libbz2-rs-sys@0.2.5" },
 ]
 
 # Some crates don't have (easily) machine readable licensing information,
@@ -238,8 +239,9 @@ unknown-git = "warn"
 # List of URLs for allowed crate registries. Defaults to the crates.io index
 # if not specified. If it is specified but empty, no registries are allowed.
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# List of URLs for allowed Git repositories
-allow-git = []
+# Official, revision-pinned sherpa-onnx-sys build-dependency fix (upstream #4059).
+# This allows its source, not its advisories; the advisory ignore list stays empty.
+allow-git = ["https://github.com/k2-fsa/sherpa-onnx"]
 
 [sources.allow-org]
 # github.com organizations to allow git sources for

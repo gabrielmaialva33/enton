@@ -9,7 +9,8 @@ use enton_core::Profile;
 
 /// Printed on `--help` and after a flag error.
 pub(crate) const USAGE: &str = "Usage: enton [--profile t1-ref|desktop] [--cortex-url <URL>] [--model <MODEL>] [--persona <PATH>] [--soul <PATH> | --no-soul] [--voice] [--voice-model kokoro|piper] [--speaker <ID>] [--no-chime]
-       enton why [--soul <PATH>] [--profile t1-ref|desktop] [--last <N>] [--since <DURATION>] [--json]";
+       enton why [--soul <PATH>] [--profile t1-ref|desktop] [--last <N>] [--since <DURATION>] [--json]
+       enton doctor [--profile t1-ref|desktop] [--soul <PATH>] [--persona <PATH>] [--json]";
 
 /// How many speech cues `enton why` explains when `--last` is not given.
 const DEFAULT_LAST: usize = 10;
@@ -21,6 +22,8 @@ pub(crate) enum Command {
     Run(CliConfig),
     /// Audit the soul: replay it and explain the latest speech decisions.
     Why(WhyConfig),
+    /// Local-only, read-only operational diagnostics.
+    Doctor(DoctorConfig),
 }
 
 #[derive(Debug)]
@@ -61,6 +64,16 @@ pub(crate) struct WhyConfig {
     pub(crate) json: bool,
 }
 
+/// Local-only checks; explicit paths fail rather than silently creating fresh data.
+#[derive(Debug)]
+pub(crate) struct DoctorConfig {
+    pub(crate) profile: Profile,
+    pub(crate) soul: Option<PathBuf>,
+    pub(crate) explicit_soul: bool,
+    pub(crate) persona: Option<PathBuf>,
+    pub(crate) json: bool,
+}
+
 pub(crate) fn parse_cli_args() -> Result<Command, String> {
     parse_command(std::env::args().skip(1))
 }
@@ -70,6 +83,9 @@ pub(crate) fn parse_command(args: impl IntoIterator<Item = String>) -> Result<Co
     let mut args = args.into_iter().peekable();
     if args.next_if(|arg| arg == "why").is_some() {
         return parse_why_args(args).map(Command::Why);
+    }
+    if args.next_if(|arg| arg == "doctor").is_some() {
+        return parse_doctor_args(args).map(Command::Doctor);
     }
     parse_args(args).map(Command::Run)
 }
@@ -88,6 +104,42 @@ fn parse_profile(name: &str) -> Result<Profile, String> {
         "desktop" => Ok(Profile::desktop()),
         other => Err(format!("unknown profile: {other}")),
     }
+}
+
+fn parse_doctor_args(args: impl IntoIterator<Item = String>) -> Result<DoctorConfig, String> {
+    let mut args = args.into_iter();
+    let mut profile = Profile::t1_ref();
+    let mut soul = None;
+    let mut persona = None;
+    let mut json = false;
+    while let Some(arg) = args.next() {
+        let (flag, inline) = split_flag(&arg);
+        let mut value = || {
+            inline
+                .clone()
+                .or_else(|| args.next())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| format!("missing value for {flag}"))
+        };
+        match flag.as_str() {
+            "--profile" => profile = parse_profile(&value()?)?,
+            "--soul" => soul = Some(PathBuf::from(value()?)),
+            "--persona" => persona = Some(PathBuf::from(value()?)),
+            "--json" if inline.is_none() => json = true,
+            "--help" | "-h" if inline.is_none() => {
+                println!("{USAGE}");
+                std::process::exit(0);
+            }
+            _ => return Err(format!("unknown argument for doctor: {arg}")),
+        }
+    }
+    Ok(DoctorConfig {
+        explicit_soul: soul.is_some(),
+        soul: soul.or_else(|| default_soul_path(&profile.name)),
+        profile,
+        persona,
+        json,
+    })
 }
 
 /// Parse flags given either as `--flag value` or as `--flag=value`.

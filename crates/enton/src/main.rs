@@ -5,6 +5,7 @@
 
 mod cli;
 mod conversation;
+mod doctor;
 mod journal;
 mod runtime;
 mod tasks;
@@ -44,6 +45,7 @@ fn main() -> std::process::ExitCode {
             }
         },
         Ok(Command::Why(config)) => explain(&config),
+        Ok(Command::Doctor(config)) => doctor::run(&config),
         Err(err) => {
             eprintln!("Error: {err}");
             eprintln!("{USAGE}");

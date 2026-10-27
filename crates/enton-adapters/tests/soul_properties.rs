@@ -374,8 +374,9 @@ fn numbers(value: &Value, at: &str, out: &mut Vec<String>) {
 fn replace_number(mut json: Value, at: Index, replacement: &Value) -> Value {
     let mut pointers = Vec::new();
     numbers(&json, "", &mut pointers);
+    // Rust 1.88 needs the sampled type before coercing its reference to `str`.
     if !pointers.is_empty()
-        && let Some(slot) = json.pointer_mut(at.get(&pointers))
+        && let Some(slot) = json.pointer_mut(at.get::<String>(&pointers))
     {
         *slot = replacement.clone();
     }

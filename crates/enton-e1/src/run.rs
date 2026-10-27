@@ -554,6 +554,8 @@ struct Execution<'a> {
     /// Every decision with its propensity and each candidate's choice, when the run is a
     /// logging policy for off-policy evaluation.
     log: Option<DecisionLog<'a>>,
+    /// Opt-in observation only; never consulted by a policy or scorer.
+    trace: Option<crate::diagnostics::Trace>,
 }
 impl<'a> Execution<'a> {
     fn new(
@@ -584,6 +586,7 @@ impl<'a> Execution<'a> {
             segment_sources,
             sensors,
             log: None,
+            trace: None,
         })
     }
 
@@ -642,6 +645,12 @@ impl<'a> Execution<'a> {
         // Only Event crosses the policy boundary. No labels, segment IDs or turns, and
         // no reading of a sensor that is off.
         let event = self.sensors.perceive(&record.event);
+        let context = match (&self.trace, &self.machine) {
+            (Some(trace), Machine::Core(organism, _)) if trace.contains(now) => {
+                Some(crate::diagnostics::Context::capture(organism, &event))
+            }
+            _ => None,
+        };
         // Each candidate's choice is asked of the state the cue found, before it moves.
         let asked = match (&self.log, &self.machine) {
             (Some(log), Machine::Core(organism, _)) => log.ask(organism, &event)?,
@@ -682,6 +691,10 @@ impl<'a> Execution<'a> {
         if let Some(log) = self.log.as_mut() {
             let paid = self.result.thoughts.get(paid_before..).unwrap_or(&[]);
             log.record(record, &actions, asked.as_ref(), paid)?;
+        }
+        if let (Some(trace), Some(context)) = (&mut self.trace, context) {
+            let paid = self.result.thoughts.get(paid_before..).unwrap_or(&[]);
+            trace.record(&event, &record.annotation, context, &actions, paid);
         }
         self.scorer.finish_event(now, attending);
         Ok(())
@@ -833,6 +846,30 @@ pub(crate) fn run_logged(
     let execution = drive(execution, tape)?;
     let decisions = execution.log.map(DecisionLog::finish).unwrap_or_default();
     Ok((execution.result, decisions))
+}
+
+/// Observe the existing execution, keeping all prehistory and feedback intact.
+pub(crate) fn run_diagnosed(
+    tape: &Tape,
+    profile: &Profile,
+    sensors: Sensors,
+    trace: crate::diagnostics::Trace,
+) -> Result<(ControllerResult, crate::diagnostics::Trace), Error> {
+    let economy = Economy::from_profile(&Profile::t1_ref())?;
+    let mut execution = Execution::new(
+        Controller::Organism,
+        profile,
+        economy,
+        tape,
+        horizon(tape),
+        sensors,
+    )?;
+    execution.trace = Some(trace);
+    let execution = drive(execution, tape)?;
+    let trace = execution
+        .trace
+        .ok_or_else(|| Error::Invariant("diagnostic trace missing".into()))?;
+    Ok((execution.result, trace))
 }
 
 /// Feedback is observed for 12 s past the tape's end.

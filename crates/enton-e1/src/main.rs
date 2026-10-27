@@ -2,8 +2,12 @@
 // A binary owns its terminal output; only libraries must not print.
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 use enton_core::Profile;
+use enton_e1::diagnostics::diagnose_episode;
 use enton_e1::offpolicy::{Exploration, evaluate};
-use enton_e1::{BENCHMARK_VERSION, Error, Report, Sensors, Summary, e1a, e1b, run_tape_with};
+use enton_e1::{
+    BENCHMARK_VERSION, EpisodeId, Error, Report, Sensors, Summary, TapeKind, e1a, e1b,
+    run_tape_with,
+};
 
 #[derive(Debug, PartialEq)]
 struct Cli {
@@ -13,6 +17,7 @@ struct Cli {
     summary: bool,
     /// Exploration settings of the logging policy, when estimating candidates off policy.
     off_policy: Option<Exploration>,
+    diagnostic: Option<(TapeKind, EpisodeId)>,
     help: bool,
 }
 fn parse_seeds(value: &str) -> Result<Vec<u64>, Error> {
@@ -55,8 +60,27 @@ fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, Error> {
     let mut off_policy = false;
     let mut exploration = Exploration::CALIBRATED;
     let mut help = false;
+    let mut diagnostic_kind = None;
+    let mut episode = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--diagnose" => {
+                diagnostic_kind = Some(match args.next().as_deref() {
+                    Some("e1a") => TapeKind::E1a,
+                    Some("e1b") => TapeKind::E1b,
+                    _ => return Err(Error::Invalid("--diagnose requires e1a or e1b".into())),
+                });
+            }
+            "--episode" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| Error::Invalid("missing episode".into()))?;
+                episode = Some(EpisodeId(
+                    value
+                        .parse()
+                        .map_err(|_| Error::Invalid("invalid episode ID".into()))?,
+                ));
+            }
             "--off-policy" => off_policy = true,
             "--explore-probability" => {
                 exploration.probability = parse_fraction(args.next(), "exploration probability")?;
@@ -91,12 +115,18 @@ fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, Error> {
     if !held_out && seeds.iter().any(|seed| *seed >= 1000) {
         return Err(Error::Invalid("seeds >=1000 require --held-out and the freeze owner's completed manifest; not calibration".into()));
     }
+    let diagnostic = match (diagnostic_kind, episode) {
+        (None, None) => None,
+        (Some(kind), Some(episode)) if seeds.len() == 1 && !summary && !off_policy => Some((kind, episode)),
+        _ => return Err(Error::Invalid("diagnosis requires --diagnose e1a|e1b, --episode N, one seed and no --summary or --off-policy".into())),
+    };
     Ok(Cli {
         seeds,
         sensors,
         json,
         summary,
         off_policy: off_policy.then_some(exploration),
+        diagnostic,
         help,
     })
 }
@@ -108,9 +138,32 @@ fn execute() -> Result<(), Error> {
             Exploration::CALIBRATED.probability,
             Exploration::CALIBRATED.margin_nats,
         );
+        println!(
+            "       e1-sim --diagnose e1a|e1b --episode N --seed N [--json] [--with-directed] [--with-direction]\nDiagnosis replays the entire tape, then shows a bounded episode trace; no audio or model calls."
+        );
         return Ok(());
     }
     let profile = Profile::t1_ref();
+    if let Some((kind, episode)) = cli.diagnostic {
+        let seed = *cli
+            .seeds
+            .first()
+            .ok_or_else(|| Error::Invalid("missing seed".into()))?;
+        let tape = match kind {
+            TapeKind::E1a => e1a(seed)?,
+            TapeKind::E1b => e1b(seed)?,
+            TapeKind::Fixture => {
+                return Err(Error::Invalid("CLI diagnosis requires e1a or e1b".into()));
+            }
+        };
+        let diagnosis = diagnose_episode(&tape, &profile, cli.sensors, episode)?;
+        if cli.json {
+            println!("{}", serde_json::to_string(&diagnosis)?);
+        } else {
+            print!("{diagnosis}");
+        }
+        return Ok(());
+    }
     if let Some(exploration) = cli.off_policy {
         let report = evaluate(&cli.seeds, &profile, exploration, cli.sensors)?;
         if cli.json {

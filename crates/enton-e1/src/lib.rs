@@ -1,6 +1,7 @@
 //! Versioned, causal E1 cue benchmark (RFC 0001 §7).
 
 pub mod baseline;
+pub mod diagnostics;
 mod economy;
 mod invariants;
 pub mod offpolicy;
